@@ -185,20 +185,30 @@ function writeConcatList(files) {
 }
 
 // GIF 两遍编码（palettegen/paletteuse）通用计划
-function gifPlan({ input, output, vf, colors = 128, seg = [], totalDuration = 0, statsMode = 'diff' }) {
+function gifPlan({ input, output, vf, fc, extraInputs = [], colors = 128, seg = [], totalDuration = 0, statsMode = 'diff', dither = 'bayer:bayer_scale=5' }) {
   const palette = path.join(os.tmpdir(), `vgt_palette_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.png`);
+  const ditherOpt = dither === 'none' ? 'dither=none' : `dither=${dither}`;
+  const baseInputs = [...seg, '-i', input, ...extraInputs];
+  const palIdx = 1 + extraInputs.filter((a) => a === '-i').length;
+  const genStep = fc
+    ? {
+        args: [...baseInputs, '-filter_complex', `${fc};[x]palettegen=max_colors=${colors}:stats_mode=${statsMode}`, palette],
+        totalDuration, from: 0, to: 0.3,
+      }
+    : {
+        args: [...baseInputs, '-vf', `${vf},palettegen=max_colors=${colors}:stats_mode=${statsMode}`, palette],
+        totalDuration, from: 0, to: 0.3,
+      };
+  const useGraph = fc
+    ? `${fc};[x][${palIdx}:v]paletteuse=${ditherOpt}:diff_mode=rectangle`
+    : `[0:v]${vf}[x];[x][${palIdx}:v]paletteuse=${ditherOpt}:diff_mode=rectangle`;
   return {
     output,
     cleanup: [palette],
     steps: [
+      genStep,
       {
-        args: [...seg, '-i', input, '-vf', `${vf},palettegen=max_colors=${colors}:stats_mode=${statsMode}`, palette],
-        totalDuration, from: 0, to: 0.3,
-      },
-      {
-        args: [...seg, '-i', input, '-i', palette,
-          '-filter_complex', `[0:v]${vf}[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle`,
-          output],
+        args: [...baseInputs, '-i', palette, '-filter_complex', useGraph, output],
         totalDuration, from: 0.3, to: 1,
       },
     ],
@@ -299,14 +309,27 @@ const builders = {
 
   // ============================ GIF 编辑 ============================
 
-  // 3. GIF 压缩（降宽/降帧 + 重新调色板）
+  // 3. GIF 压缩（降宽/降帧 + 重新调色板 + 抖动策略，只缩不放）
   compressGif(p) {
     const output = defaultOutput(p.input, 'compressed', 'gif');
-    const fps = Math.min(Math.max(num(p.fps, 12), 5), 30);
-    const width = Math.min(Math.max(num(p.width, 480), 64), 1920);
+    let fps = Math.min(Math.max(num(p.fps, 12), 1), 30);
+    const srcFps = num(p.srcFps, 0);
+    if (srcFps > 0) fps = Math.min(fps, srcFps);
+
+    let width = Math.min(Math.max(num(p.width, 480), 48), 1920);
+    const srcW = num(p.srcW, 0);
+    if (srcW > 0) width = Math.min(width, srcW);
+    width = even(width);
+
     const colors = Math.min(Math.max(num(p.colors, 128), 16), 256);
+    const ditherMap = {
+      small: 'none',
+      balanced: 'bayer:bayer_scale=5',
+      quality: 'bayer:bayer_scale=2',
+    };
+    const dither = ditherMap[p.dither] || 'bayer:bayer_scale=5';
     return gifPlan({
-      input: p.input, output, colors, totalDuration: num(p.totalDuration, 0),
+      input: p.input, output, colors, dither, totalDuration: num(p.totalDuration, 0),
       vf: `fps=${fps},${scaleFilter(width)}`,
     });
   },
@@ -337,7 +360,7 @@ const builders = {
     return plan;
   },
 
-  // 压缩到目标大小（视频按码率精确控制；GIF 迭代降参）
+  // 压缩到目标大小（视频按码率精确控制；GIF 迭代降参并保留最优结果）
   compressTarget(p) {
     const targetMB = Math.min(Math.max(num(p.targetMB, 25), 0.2), 500);
     const isGif = path.extname(p.input).slice(1).toLowerCase() === 'gif';
@@ -362,17 +385,20 @@ const builders = {
       };
     }
 
-    // ---- GIF：迭代尝试，参数逐级收紧 ----
+    // ---- GIF：迭代尝试，参数逐级收紧（后期关闭抖动以大幅压体积） ----
     const output = defaultOutput(p.input, 'min', 'gif');
-    const origW = Math.max(num(p.width, 480), 64);
-    const origFps = Math.max(num(p.fps, 12), 5);
+    const origW = Math.max(num(p.width, 480), 48);
+    const origFps = Math.max(num(p.fps, 12), 1);
+    const capFps = (target) => Math.min(origFps, Math.max(1, target));
+    const capW = (wk, maxW = origW) => even(Math.max(48, Math.min(origW, maxW, origW * wk)));
     const attempts = [
-      { colors: 256, fps: origFps, wk: 1.0 },
-      { colors: 128, fps: Math.max(8, origFps * 0.8), wk: 0.85 },
-      { colors: 64, fps: Math.max(6, origFps * 0.6), wk: 0.7 },
-      { colors: 32, fps: Math.max(5, origFps * 0.5), wk: 0.55 },
-      { colors: 16, fps: Math.max(5, origFps * 0.4), wk: 0.4 },
-      { colors: 16, fps: 5, wk: 0.3 },
+      { colors: 256, fps: origFps, w: even(origW), dither: 'bayer:bayer_scale=5' },
+      { colors: 128, fps: capFps(Math.max(4, origFps * 0.8)), w: capW(0.85), dither: 'bayer:bayer_scale=5' },
+      { colors: 64, fps: capFps(Math.max(4, origFps * 0.65)), w: capW(0.7), dither: 'bayer:bayer_scale=5' },
+      { colors: 64, fps: capFps(Math.max(3, origFps * 0.5)), w: capW(0.55), dither: 'none' },
+      { colors: 32, fps: capFps(Math.max(3, origFps * 0.45)), w: capW(0.42), dither: 'none' },
+      { colors: 16, fps: capFps(5), w: capW(0.32), dither: 'none' },
+      { colors: 16, fps: capFps(4), w: capW(0.25, 240), dither: 'none' },
     ];
     const targetBytes = targetMB * 1024 * 1024;
     const totalDuration = num(p.totalDuration, 0);
@@ -380,32 +406,49 @@ const builders = {
     return {
       output,
       async run(taskId, onProgress) {
-        for (let i = 0; i < attempts.length; i++) {
-          const a = attempts[i];
-          const plan = gifPlan({
-            input: p.input, output, colors: a.colors,
-            totalDuration,
-            vf: `fps=${a.fps.toFixed(1)},${scaleFilter(even(origW * a.wk))}`,
-          });
-          // 每轮迭代占整体进度的等分
-          const lo = i / attempts.length, hi = (i + 1) / attempts.length;
-          for (const step of plan.steps) {
-            await runFfmpeg(taskId, step.args, {
-              totalDuration: step.totalDuration,
-              from: lo + (hi - lo) * (step.from || 0),
-              to: lo + (hi - lo) * (step.to || 1),
-              onProgress,
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vgt_cgif_'));
+        let bestFile = null;
+        let bestSize = Infinity;
+        try {
+          for (let i = 0; i < attempts.length; i++) {
+            const a = attempts[i];
+            const tmpOut = path.join(tmpDir, `try_${i}.gif`);
+            const plan = gifPlan({
+              input: p.input, output: tmpOut, colors: a.colors, dither: a.dither,
+              totalDuration,
+              vf: `fps=${a.fps.toFixed(1)},${scaleFilter(a.w)}`,
             });
+            // 每轮迭代占整体进度的等分
+            const lo = i / attempts.length, hi = (i + 1) / attempts.length;
+            try {
+              for (const step of plan.steps) {
+                await runFfmpeg(taskId, step.args, {
+                  totalDuration: step.totalDuration,
+                  from: lo + (hi - lo) * (step.from || 0),
+                  to: lo + (hi - lo) * (step.to || 1),
+                  onProgress,
+                });
+              }
+            } finally {
+              for (const f of plan.cleanup) fs.unlink(f, () => {});
+            }
+            const size = fs.existsSync(tmpOut) ? fs.statSync(tmpOut).size : 0;
+            if (size > 0 && size < bestSize) {
+              bestSize = size;
+              bestFile = tmpOut;
+            }
+            if (size > 0 && size <= targetBytes) {
+              fs.copyFileSync(tmpOut, output);
+              onProgress?.(1);
+              return { output, targetReached: true, targetMB };
+            }
           }
-          for (const f of plan.cleanup) fs.unlink(f, () => {});
-          const size = fs.existsSync(output) ? fs.statSync(output).size : 0;
-          if (size > 0 && size <= targetBytes) {
-            onProgress?.(1);
-            return { output };
-          }
+          if (bestFile) fs.copyFileSync(bestFile, output);
+          onProgress?.(1);
+          return { output, targetReached: bestSize <= targetBytes, targetMB };
+        } finally {
+          fs.rmSync(tmpDir, { recursive: true, force: true });
         }
-        onProgress?.(1);
-        return { output }; // 尽力而为，最后一轮结果即最终输出
       },
     };
   },
@@ -432,10 +475,53 @@ const builders = {
     };
   },
 
-  // 无损合并（concat demuxer，要求同规格文件）
+  // 视频合并（无损 concat demuxer / 兼容模式自动统一分辨率与音轨）
   mergeVideos(p) {
     const files = p.files || [];
     if (files.length < 2) throw new Error('请至少选择 2 个文件');
+
+    if (p.mode === 'compat') {
+      const output = stampOutput(files[0], '合并', 'mp4');
+      const infos = p.infos || [];
+      const W = even(Math.max(num(infos[0]?.width, 1280), 320));
+      const H = even(Math.max(num(infos[0]?.height, 720), 240));
+      const anyAudio = infos.some((i) => i?.hasAudio);
+      const totalDuration = infos.reduce((s, i) => s + num(i?.duration, 0), 0);
+
+      const inputArgs = [];
+      const fcParts = [];
+      const concatInputs = [];
+      files.forEach((f, idx) => {
+        inputArgs.push('-i', f);
+        fcParts.push(`[${idx}:v]scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=30,format=yuv420p[v${idx}]`);
+        if (anyAudio) {
+          if (infos[idx]?.hasAudio) {
+            fcParts.push(`[${idx}:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[a${idx}]`);
+          } else {
+            const d = Math.max(0.1, num(infos[idx]?.duration, 1));
+            fcParts.push(`anullsrc=r=44100:cl=stereo:d=${d.toFixed(2)}[a${idx}]`);
+          }
+          concatInputs.push(`[v${idx}][a${idx}]`);
+        } else {
+          concatInputs.push(`[v${idx}]`);
+        }
+      });
+
+      if (anyAudio) {
+        fcParts.push(`${concatInputs.join('')}concat=n=${files.length}:v=1:a=1[v][a]`);
+      } else {
+        fcParts.push(`${concatInputs.join('')}concat=n=${files.length}:v=1:a=0[v]`);
+      }
+
+      const args = [...inputArgs, '-filter_complex', fcParts.join(';'), '-map', '[v]'];
+      if (anyAudio) args.push('-map', '[a]', '-c:a', 'aac', '-b:a', '128k');
+      args.push(...X264, '-movflags', '+faststart', output);
+      return {
+        output,
+        steps: [{ args, totalDuration }],
+      };
+    }
+
     const fmt = videoExt(files[0]);
     const output = stampOutput(files[0], '合并', fmt);
     const list = writeConcatList(files);
@@ -463,12 +549,168 @@ const builders = {
         colors: 256, totalDuration: num(p.totalDuration, 0), vf: crop,
       });
     }
+    const output = defaultOutput(p.input, 'crop', videoExt(p.input));
     return {
-      output: defaultOutput(p.input, 'crop', videoExt(p.input)),
+      output,
       steps: [{
-        args: ['-i', p.input, '-vf', crop, ...X264, '-c:a', 'copy',
-          defaultOutput(p.input, 'crop', videoExt(p.input))],
+        args: ['-i', p.input, '-vf', crop, ...X264, '-c:a', 'copy', output],
         totalDuration: num(p.totalDuration, 0),
+      }],
+    };
+  },
+
+  // 局部打码 / 模糊（遮水印、人脸、隐私区域，视频与 GIF 通用）
+  videoBlur(p) {
+    const { w, h, x, y } = p.crop || {};
+    if (!w || !h || w < 16 || h < 16) throw new Error('请先在画面上拖出要打码的区域');
+    const srcW = Math.max(num(p.srcW, w), 16);
+    const srcH = Math.max(num(p.srcH, h), 16);
+    const cw = even(Math.min(Math.max(16, w), srcW));
+    const ch = even(Math.min(Math.max(16, h), srcH));
+    const cx = even(Math.max(0, Math.min(x, srcW - cw)));
+    const cy = even(Math.max(0, Math.min(y, srcH - ch)));
+
+    const strong = p.strength === 'strong';
+    let effect;
+    if (p.mode === 'mosaic') {
+      const block = strong ? 24 : 14;
+      const mw = Math.max(2, even(Math.round(cw / block)));
+      const mh = Math.max(2, even(Math.round(ch / block)));
+      effect = `scale=${mw}:${mh}:flags=area,scale=${cw}:${ch}:flags=neighbor`;
+    } else {
+      const maxR = Math.max(2, Math.floor(Math.min(cw, ch) / 4));
+      const r = Math.min(strong ? 24 : 12, maxR);
+      const cr = Math.max(1, Math.min(Math.floor(r / 2), maxR));
+      effect = `boxblur=lr=${r}:lp=2:cr=${cr}:cp=2`;
+    }
+
+    const ext = path.extname(p.input).slice(1).toLowerCase();
+    const total = num(p.totalDuration, 0);
+    if (ext === 'gif') {
+      const fc = `[0:v]format=rgba,split[base][roi];[roi]crop=${cw}:${ch}:${cx}:${cy},${effect}[b];[base][b]overlay=${cx}:${cy}[x]`;
+      return gifPlan({
+        input: p.input, output: defaultOutput(p.input, 'blur', 'gif'),
+        colors: 256, totalDuration: total, fc,
+      });
+    }
+    const output = defaultOutput(p.input, 'blur', videoExt(p.input));
+    const fc = `[0:v]split[base][roi];[roi]crop=${cw}:${ch}:${cx}:${cy},${effect}[b];[base][b]overlay=${cx}:${cy}[v]`;
+    return {
+      output,
+      steps: [{
+        args: ['-i', p.input, '-filter_complex', fc, '-map', '[v]', '-map', '0:a?', ...X264, '-c:a', 'copy', output],
+        totalDuration: total,
+      }],
+    };
+  },
+
+  // 横竖屏比例适配（9:16 / 16:9 / 1:1 / 4:3 / 3:4，支持模糊背景或纯色填充）
+  aspectPad(p) {
+    const ext = path.extname(p.input).slice(1).toLowerCase();
+    const isGif = ext === 'gif';
+    const sizes = isGif
+      ? { '9:16': [480, 854], '16:9': [640, 360], '1:1': [480, 480], '4:3': [640, 480], '3:4': [480, 640] }
+      : { '9:16': [1080, 1920], '16:9': [1920, 1080], '1:1': [1080, 1080], '4:3': [1440, 1080], '3:4': [1080, 1440] };
+    const [W, H] = sizes[p.ratio] || sizes['9:16'];
+    const bg = ['blur', 'black', 'white'].includes(p.bg) ? p.bg : 'blur';
+    const total = num(p.totalDuration, 0);
+
+    if (bg !== 'blur') {
+      const vf = `scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=${bg},setsar=1`;
+      if (isGif) {
+        return gifPlan({ input: p.input, output: defaultOutput(p.input, 'ratio', 'gif'), colors: 256, totalDuration: total, vf });
+      }
+      const output = defaultOutput(p.input, 'ratio', videoExt(p.input));
+      return {
+        output,
+        steps: [{ args: ['-i', p.input, '-vf', vf, ...X264, '-c:a', 'copy', output], totalDuration: total }],
+      };
+    }
+
+    if (isGif) {
+      const fc = `[0:v]format=rgba,split[bg][fg];[bg]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},boxblur=20:3[bg2];[fg]scale=${W}:${H}:force_original_aspect_ratio=decrease[fg2];[bg2][fg2]overlay=(W-w)/2:(H-h)/2,setsar=1[x]`;
+      return gifPlan({ input: p.input, output: defaultOutput(p.input, 'ratio', 'gif'), colors: 256, totalDuration: total, fc });
+    }
+    const output = defaultOutput(p.input, 'ratio', videoExt(p.input));
+    const fc = `[0:v]format=yuv420p,split[bg][fg];[bg]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},boxblur=25:3[bg2];[fg]scale=${W}:${H}:force_original_aspect_ratio=decrease[fg2];[bg2][fg2]overlay=(W-w)/2:(H-h)/2,setsar=1[v]`;
+    return {
+      output,
+      steps: [{
+        args: ['-i', p.input, '-filter_complex', fc, '-map', '[v]', '-map', '0:a?', ...X264, '-c:a', 'copy', output],
+        totalDuration: total,
+      }],
+    };
+  },
+
+  // 添加水印（文字水印 / 图片水印）
+  watermark(p) {
+    const ext = path.extname(p.input).slice(1).toLowerCase();
+    const isGif = ext === 'gif';
+    const total = num(p.totalDuration, 0);
+    const opacity = Math.min(Math.max(num(p.opacity, 0.7), 0.1), 1);
+    const size = p.size || 'medium';
+    const pos = p.pos || 'br';
+
+    if (p.mode === 'image') {
+      const wmImg = p.image;
+      if (!wmImg) throw new Error('请先选择水印图片');
+      const srcW = Math.max(num(p.srcW, 720), 64);
+      const wmRatio = { small: 0.12, medium: 0.18, large: 0.26 }[size] || 0.18;
+      const wmW = even(Math.max(32, srcW * wmRatio));
+      const overlayPos = {
+        br: 'W-w-24:H-h-24', bl: '24:H-h-24', tr: 'W-w-24:24', tl: '24:24', center: '(W-w)/2:(H-h)/2',
+      }[pos] || 'W-w-24:H-h-24';
+
+      if (isGif) {
+        const fc = `[1:v]scale=${wmW}:-2,format=rgba,colorchannelmixer=aa=${opacity}[wm];[0:v][wm]overlay=${overlayPos}[x]`;
+        return gifPlan({
+          input: p.input, output: defaultOutput(p.input, 'wm', 'gif'),
+          extraInputs: ['-i', wmImg], fc, colors: 256, totalDuration: total,
+        });
+      }
+      const output = defaultOutput(p.input, 'wm', videoExt(p.input));
+      const fc = `[1:v]scale=${wmW}:-2,format=rgba,colorchannelmixer=aa=${opacity}[wm];[0:v][wm]overlay=${overlayPos}[v]`;
+      return {
+        output,
+        steps: [{
+          args: ['-i', p.input, '-i', wmImg, '-filter_complex', fc, '-map', '[v]', '-map', '0:a?', ...X264, '-c:a', 'copy', output],
+          totalDuration: total,
+        }],
+      };
+    }
+
+    const text = String(p.text || '').trim();
+    if (!text) throw new Error('请输入水印文字');
+    const srcH = Math.max(num(p.srcH, 720), 64);
+    const fontsize = Math.max(16, even(srcH / ({ small: 28, medium: 18, large: 12 }[size] || 18)));
+    const textPos = {
+      br: 'x=w-text_w-24:y=h-text_h-24',
+      bl: 'x=24:y=h-text_h-24',
+      tr: 'x=w-text_w-24:y=24',
+      tl: 'x=24:y=24',
+      center: 'x=(w-text_w)/2:y=(h-text_h)/2',
+    }[pos] || 'x=w-text_w-24:y=h-text_h-24';
+
+    const textFile = path.join(os.tmpdir(), `vgt_wm_${Date.now()}.txt`);
+    fs.writeFileSync(textFile, text, 'utf8');
+    const textFileArg = textFile.replace(/\\/g, '/').replace(/:/g, '\\:');
+    const drawtext = `drawtext=fontfile='${FONT}':textfile='${textFileArg}':fontsize=${fontsize}:fontcolor=white@${opacity}:shadowcolor=black@${(opacity * 0.7).toFixed(2)}:shadowx=2:shadowy=2:${textPos}:expansion=none`;
+
+    if (isGif) {
+      const plan = gifPlan({
+        input: p.input, output: defaultOutput(p.input, 'wm', 'gif'),
+        colors: 256, totalDuration: total, vf: drawtext,
+      });
+      plan.cleanup = [...(plan.cleanup || []), textFile];
+      return plan;
+    }
+    const output = defaultOutput(p.input, 'wm', videoExt(p.input));
+    return {
+      output,
+      cleanup: [textFile],
+      steps: [{
+        args: ['-i', p.input, '-vf', drawtext, ...X264, '-c:a', 'copy', output],
+        totalDuration: total,
       }],
     };
   },
@@ -722,14 +964,17 @@ async function executeTask(taskId, feature, params, onProgress) {
     return result || { output: plan.output };
   }
 
-  for (const step of plan.steps) {
-    await runFfmpeg(taskId, step.args, step);
-  }
-  for (const f of plan.cleanup || []) {
-    fs.unlink(f, () => {});
-  }
-  for (const d of plan.cleanupDirs || []) {
-    fs.rmSync(d, { recursive: true, force: true });
+  try {
+    for (const step of plan.steps) {
+      await runFfmpeg(taskId, step.args, step);
+    }
+  } finally {
+    for (const f of plan.cleanup || []) {
+      fs.unlink(f, () => {});
+    }
+    for (const d of plan.cleanupDirs || []) {
+      fs.rmSync(d, { recursive: true, force: true });
+    }
   }
   return { output: plan.output, outputType: plan.outputType };
 }

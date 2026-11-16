@@ -77,22 +77,26 @@ const FEATURES = [
 
   // ================= GIF 编辑 =================
   {
-    id: 'compressGif', group: 'GIF 编辑', icon: '🗜️', name: 'GIF 压缩', desc: '降宽降帧重新调色，显著减小体积',
+    id: 'compressGif', group: 'GIF 编辑', icon: '🗜️', name: 'GIF 压缩', desc: '降宽降帧重新调色，只缩不放，可选极限压缩',
     accept: ['gif'],
     fields: [
-      { key: 'width', label: '宽度', type: 'select', def: '480',
-        options: [['320', '320 px（最小）'], ['480', '480 px（推荐）'], ['0', '保持原宽']] },
-      { key: 'fps', label: '帧率', type: 'select', def: '12',
-        options: [['8', '8 fps'], ['10', '10 fps'], ['12', '12 fps（推荐）'], ['0', '保持原帧率']] },
+      { key: 'width', label: '最大宽度', type: 'select', def: '480',
+        options: [['240', '240 px（表情包）'], ['320', '320 px（较小）'], ['480', '480 px（推荐）'], ['640', '640 px'], ['0', '保持原宽']] },
+      { key: 'fps', label: '最大帧率', type: 'select', def: '12',
+        options: [['6', '6 fps（极小）'], ['8', '8 fps'], ['10', '10 fps'], ['12', '12 fps（推荐）'], ['0', '保持原帧率']] },
       { key: 'colors', label: '颜色数', type: 'select', def: '128',
-        options: [['32', '32 色（极小）'], ['64', '64 色'], ['128', '128 色（推荐）'], ['256', '256 色']] },
+        options: [['16', '16 色（极小）'], ['32', '32 色'], ['64', '64 色'], ['128', '128 色（推荐）'], ['256', '256 色']] },
+      { key: 'dither', label: '压缩策略', type: 'chips', def: 'balanced',
+        options: [['small', '极限体积（无抖动）'], ['balanced', '均衡（推荐）'], ['quality', '画质优先']] },
     ],
     collect(v, ctx) {
       return {
         input: ctx.file.path,
         width: v.width === '0' ? ctx.file.info.width : v.width,
         fps: v.fps === '0' ? (ctx.file.info.fps || 12) : v.fps,
-        colors: v.colors, totalDuration: ctx.file.info.duration,
+        colors: v.colors, dither: v.dither,
+        srcW: ctx.file.info.width, srcFps: ctx.file.info.fps,
+        totalDuration: ctx.file.info.duration,
       };
     },
   },
@@ -114,11 +118,11 @@ const FEATURES = [
     },
   },
   {
-    id: 'compressTarget', group: 'GIF 编辑', icon: '🎯', name: '压缩到目标大小', desc: '自动压到指定体积以内（微信 25MB / 邮件附件等）',
+    id: 'compressTarget', group: 'GIF 编辑', icon: '🎯', name: '压缩到目标大小', desc: '自动压到指定体积以内（支持自定义 0.2~500 MB）',
     accept: [...VIDEO_EXTS, 'gif'],
     fields: [
-      { key: 'targetMB', label: '目标大小 (MB)', type: 'chips', def: '25',
-        options: [['8', '8 MB'], ['25', '25 MB（微信）'], ['50', '50 MB'], ['100', '100 MB']] },
+      { key: 'targetMB', label: '目标大小 (MB)', type: 'number', def: '5', min: 0.2, max: 500, step: 0.1,
+        presets: [['1', '1 MB'], ['2', '2 MB'], ['5', '5 MB'], ['8', '8 MB'], ['25', '25 MB（微信）'], ['50', '50 MB']] },
     ],
     collect(v, ctx) {
       return {
@@ -144,17 +148,24 @@ const FEATURES = [
     },
   },
   {
-    id: 'mergeVideos', group: '剪辑', icon: '🔗', name: '视频合并', desc: '多个视频无损拼接（需同分辨率/编码）',
+    id: 'mergeVideos', group: '剪辑', icon: '🔗', name: '视频合并', desc: '多个视频拼接：支持同规格无损或跨格式兼容合并',
     accept: VIDEO_EXTS, multi: true,
-    fields: [],
+    fields: [
+      { key: 'mode', label: '合并模式', type: 'chips', def: 'fast',
+        options: [['fast', '无损极速（需同规格）'], ['compat', '兼容模式（自动统一分辨率）']] },
+    ],
     collect(v, ctx) {
-      return { files: ctx.files.map((f) => f.path) };
+      return {
+        files: ctx.files.map((f) => f.path),
+        mode: v.mode,
+        infos: ctx.files.map((f) => f.info),
+      };
     },
   },
   {
     id: 'videoCrop', group: '剪辑', icon: '🔲', name: '画面裁剪', desc: '在画面上拉框，裁掉多余区域',
     accept: [...VIDEO_EXTS, 'gif'],
-    fields: [{ type: 'cropCanvas' }],
+    fields: [{ type: 'cropCanvas', label: '拖动鼠标框出要保留的区域' }],
     collect(v, ctx) {
       const c = window.__crop;
       if (!c) throw new Error('请先在预览图上拖出裁剪区域');
@@ -167,6 +178,42 @@ const FEATURES = [
         srcW: ctx.file.info.width, srcH: ctx.file.info.height,
         totalDuration: ctx.file.info.duration,
       };
+    },
+  },
+  {
+    id: 'videoBlur', group: '剪辑', icon: '🫥', name: '局部打码 / 模糊', desc: '在画面上拉框遮挡水印、人脸或隐私区域',
+    accept: [...VIDEO_EXTS, 'gif'],
+    fields: [
+      { type: 'cropCanvas', label: '拖动鼠标框出要打码的区域' },
+      { key: 'mode', label: '打码方式', type: 'chips', def: 'blur', options: [['blur', '高斯模糊'], ['mosaic', '像素马赛克']] },
+      { key: 'strength', label: '强度', type: 'chips', def: 'medium', options: [['medium', '适中'], ['strong', '强力']] },
+    ],
+    collect(v, ctx) {
+      const c = window.__crop;
+      if (!c) throw new Error('请先在预览图上拖出打码区域');
+      return {
+        input: ctx.file.path,
+        crop: {
+          w: Math.round(c.w * ctx.file.info.width), h: Math.round(c.h * ctx.file.info.height),
+          x: Math.round(c.x * ctx.file.info.width), y: Math.round(c.y * ctx.file.info.height),
+        },
+        srcW: ctx.file.info.width, srcH: ctx.file.info.height,
+        mode: v.mode, strength: v.strength,
+        totalDuration: ctx.file.info.duration,
+      };
+    },
+  },
+  {
+    id: 'aspectPad', group: '剪辑', icon: '📐', name: '横竖屏比例适配', desc: '一键转 9:16 / 16:9 / 1:1，支持模糊背景填充',
+    accept: [...VIDEO_EXTS, 'gif'],
+    fields: [
+      { key: 'ratio', label: '目标比例', type: 'chips', def: '9:16',
+        options: [['9:16', '9:16 竖屏'], ['16:9', '16:9 横屏'], ['1:1', '1:1 方形'], ['4:3', '4:3'], ['3:4', '3:4']] },
+      { key: 'bg', label: '空白填充', type: 'chips', def: 'blur',
+        options: [['blur', '模糊背景（推荐）'], ['black', '纯黑底'], ['white', '纯白底']] },
+    ],
+    collect(v, ctx) {
+      return { input: ctx.file.path, ratio: v.ratio, bg: v.bg, totalDuration: ctx.file.info.duration };
     },
   },
   {
@@ -262,12 +309,33 @@ const FEATURES = [
 
   // ================= 工具 =================
   {
+    id: 'watermark', group: '工具', icon: '🏷️', name: '添加水印', desc: '加文字或图片 Logo 水印（视频与 GIF 通用）',
+    accept: [...VIDEO_EXTS, 'gif'],
+    fields: [
+      { key: 'mode', label: '水印类型', type: 'chips', def: 'text', options: [['text', '文字水印'], ['image', '图片 Logo']] },
+      { key: 'text', label: '水印文字', type: 'text', def: '', placeholder: '输入水印文字…', showIf: (v) => v.mode === 'text' },
+      { type: 'secondFile', key: 'image', kind: 'imageFile', label: '水印图片', placeholder: '选择 PNG / JPG 透明图标…', showIf: (v) => v.mode === 'image' },
+      { key: 'pos', label: '位置', type: 'chips', def: 'br', options: [['br', '右下角'], ['bl', '左下角'], ['tr', '右上角'], ['tl', '左上角'], ['center', '居中']] },
+      { key: 'size', label: '大小', type: 'chips', def: 'medium', options: [['small', '小'], ['medium', '中'], ['large', '大']] },
+      { key: 'opacity', label: '透明度', type: 'chips', def: '0.7', options: [['0.4', '浅 (40%)'], ['0.7', '适中 (70%)'], ['1', '不透明']] },
+    ],
+    collect(v, ctx) {
+      if (v.mode === 'image' && !window.__secondFile) throw new Error('请先选择水印图片');
+      return {
+        input: ctx.file.path, mode: v.mode, text: v.text, image: window.__secondFile,
+        pos: v.pos, size: v.size, opacity: v.opacity,
+        srcW: ctx.file.info.width, srcH: ctx.file.info.height,
+        totalDuration: ctx.file.info.duration,
+      };
+    },
+  },
+  {
     id: 'snapshot', group: '工具', icon: '📸', name: '视频截图', desc: '截取某一帧为图片，或按间隔导出帧序列',
     accept: [...VIDEO_EXTS, 'gif'],
     fields: [
       { key: 'mode', label: '模式', type: 'chips', def: 'single',
         options: [['single', '单张截图'], ['seq', '帧序列导出']] },
-      { key: 'at', label: '时间点（秒）', type: 'number', def: '1', min: 0, step: 0.1,
+      { key: 'at', label: '时间点（秒）', type: 'number', def: '1', min: 0, step: 0.1, withVideoTime: true,
         showIf: (v) => v.mode === 'single' },
       { key: 'format', label: '图片格式', type: 'chips', def: 'png',
         options: [['png', 'PNG（无损）'], ['jpg', 'JPG（小）']],
@@ -371,13 +439,18 @@ function renderParams() {
   box.innerHTML = '';
   const grid = document.createElement('div');
   grid.className = 'param-grid';
+  const hasVideo = !!document.querySelector('#preview-box video');
 
   for (const field of currentFeature.fields) {
     const wrap = document.createElement('div');
     wrap.className = 'field';
+    if (field.key) wrap.dataset.fieldKey = field.key;
     if (field.showIf) wrap.dataset.showIf = '1';
 
     if (field.type === 'times') {
+      const pickHtml = hasVideo
+        ? `<div class="chip-row"><button class="chip" id="pick-t-start">⏮ 设为起点</button><button class="chip" id="pick-t-end">⏭ 设为终点</button></div>`
+        : '';
       wrap.innerHTML = `
         <label>时间段（秒）</label>
         <div class="times-row">
@@ -385,7 +458,7 @@ function renderParams() {
           <span class="times-sep">→</span>
           <input type="number" id="t-end" value="0" min="0" step="0.1" />
         </div>
-        <div class="chip-row" id="times-chips"></div>`;
+        <div class="chip-row" id="times-chips"></div>${pickHtml}`;
     } else if (field.type === 'select') {
       wrap.innerHTML = `<label>${field.label}</label>
         <select data-key="${field.key}">${field.options.map(([v, l]) => `<option value="${v}" ${v === field.def ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
@@ -404,16 +477,23 @@ function renderParams() {
       wrap.innerHTML = `<label>${field.label}</label>
         <input type="text" data-key="${field.key}" placeholder="${field.placeholder || ''}" value="${field.def || ''}" />`;
     } else if (field.type === 'number') {
+      const maxAttr = field.max !== undefined ? ` max="${field.max}"` : '';
+      const presetsHtml = field.presets
+        ? `<div class="chip-row">${field.presets.map(([v, l]) => `<button class="chip preset ${v === field.def ? 'on' : ''}" data-val="${v}">${l}</button>`).join('')}</div>`
+        : '';
+      const videoPickHtml = field.withVideoTime && hasVideo
+        ? `<div class="chip-row"><button class="chip" id="pick-video-time">📍 取当前播放时间</button></div>`
+        : '';
       wrap.innerHTML = `<label>${field.label}</label>
-        <input type="number" data-key="${field.key}" value="${field.def}" min="${field.min ?? 0}" step="${field.step || 1}" />`;
+        <input type="number" data-key="${field.key}" value="${field.def}" min="${field.min ?? 0}"${maxAttr} step="${field.step || 1}" />${presetsHtml}${videoPickHtml}`;
     } else if (field.type === 'secondFile') {
       wrap.innerHTML = `<label>${field.label}</label>
         <div class="second-file">
-          <button class="btn btn-ghost btn-sm" id="pick-second">📁 选择${field.label}</button>
+          <button class="btn btn-ghost btn-sm" id="pick-second" data-kind="${field.kind || 'audioFile'}">📁 选择${field.label}</button>
           <span class="muted second-name" id="second-name">${field.placeholder || '未选择'}</span>
         </div>`;
     } else if (field.type === 'cropCanvas') {
-      wrap.innerHTML = `<label>拖动鼠标框出要保留的区域</label>
+      wrap.innerHTML = `<label>${field.label || '拖动鼠标框出要保留的区域'}</label>
         <div class="crop-wrap"><canvas id="crop-canvas"></canvas></div>
         <div class="chip-row"><button class="chip" id="crop-reset">重置选区</button></div>
         <div class="muted crop-status" id="crop-status">尚未选择区域</div>`;
@@ -439,7 +519,7 @@ function renderParams() {
   const range = box.querySelector('#speed-range');
   if (range) {
     range.oninput = () => { $('speed-val').textContent = `${range.value}x`; };
-    box.querySelectorAll('.chip.preset').forEach((chip) => {
+    range.closest('.field').querySelectorAll('.chip.preset').forEach((chip) => {
       chip.onclick = () => {
         range.value = chip.dataset.val;
         $('speed-val').textContent = `${chip.dataset.val}x`;
@@ -447,11 +527,56 @@ function renderParams() {
     });
   }
 
+  // 数字输入框预设联动
+  box.querySelectorAll('input[type="number"][data-key]').forEach((input) => {
+    const fieldWrap = input.closest('.field');
+    const chips = fieldWrap?.querySelectorAll('.chip.preset');
+    if (!chips?.length) return;
+    const syncChips = () => {
+      chips.forEach((c) => c.classList.toggle('on', parseFloat(c.dataset.val) === parseFloat(input.value)));
+    };
+    input.addEventListener('input', syncChips);
+    chips.forEach((chip) => {
+      chip.onclick = () => {
+        input.value = chip.dataset.val;
+        syncChips();
+      };
+    });
+  });
+
+  // 播放器选点按钮
+  const getVidTime = () => {
+    const v = document.querySelector('#preview-box video');
+    return v ? round1(v.currentTime || 0) : 0;
+  };
+  const pickStart = box.querySelector('#pick-t-start');
+  const pickEnd = box.querySelector('#pick-t-end');
+  if (pickStart) {
+    pickStart.onclick = () => {
+      const t = getVidTime();
+      $('t-start').value = t;
+      if (parseFloat($('t-end').value) <= t && file?.info.duration) $('t-end').value = round1(file.info.duration);
+    };
+  }
+  if (pickEnd) {
+    pickEnd.onclick = () => {
+      const t = getVidTime();
+      $('t-end').value = t;
+    };
+  }
+  const pickVideoTime = box.querySelector('#pick-video-time');
+  if (pickVideoTime) {
+    pickVideoTime.onclick = () => {
+      const input = pickVideoTime.closest('.field')?.querySelector('input[type="number"]');
+      if (input) input.value = getVidTime();
+    };
+  }
+
   // 第二文件选择
   const pickSecond = box.querySelector('#pick-second');
   if (pickSecond) {
     pickSecond.onclick = async () => {
-      const p = await window.api.pickFile(currentFeature.id, 'audioFile');
+      const p = await window.api.pickFile(currentFeature.id, pickSecond.dataset.kind || 'audioFile');
       if (p) {
         window.__secondFile = p;
         const name = $('second-name');
@@ -475,7 +600,7 @@ function syncVisibility() {
     if (!field.showIf) continue;
     let target = null;
     if (field.key) {
-      target = document.querySelector(`#params [data-key="${field.key}"]`)?.closest('.field');
+      target = document.querySelector(`#params .field[data-field-key="${field.key}"]`);
     } else if (field.type === 'times') {
       target = document.querySelector('#t-start')?.closest('.field');
     }
@@ -656,7 +781,7 @@ function renderFileCard(ext) {
   if (ext === 'gif' || ext === 'webp' || IMG_EXTS.includes(ext)) {
     box.innerHTML = `<img src="${url}" alt="预览" />`;
   } else if (['mp4', 'webm', 'mkv', 'mov', 'm4v'].includes(ext)) {
-    box.innerHTML = `<video src="${url}" muted preload="metadata"></video>`;
+    box.innerHTML = `<video src="${url}" controls preload="metadata"></video>`;
   } else {
     box.innerHTML = `<div class="no-preview">🎧</div>`;
   }
@@ -726,13 +851,20 @@ async function showSuccess(res) {
     const outSize = await window.api.statFile(res.output);
     line = `✅ 完成：${name}（${fmtSize(outSize)}）`;
     if (currentFeature.id === 'compressGif' && file?.info.size) {
-      const pct = Math.max(0, Math.round((1 - outSize / file.info.size) * 100));
-      line = `✅ 压缩完成：${fmtSize(file.info.size)} → ${fmtSize(outSize)}，节省 ${pct}%`;
+      if (outSize < file.info.size) {
+        const pct = Math.round((1 - outSize / file.info.size) * 100);
+        line = `✅ 压缩完成：${fmtSize(file.info.size)} → ${fmtSize(outSize)}，节省 ${pct}%`;
+      } else {
+        line = `✅ 处理完成：${fmtSize(file.info.size)} → ${fmtSize(outSize)}（未比原图更小，可尝试降低宽度/帧率或选“极限体积”）`;
+      }
     }
     if (currentFeature.id === 'compressTarget') {
       const srcSize = file?.info.size || 0;
       const pct = srcSize ? Math.max(0, Math.round((1 - outSize / srcSize) * 100)) : 0;
       line += srcSize ? `（原 ${fmtSize(srcSize)}，减小 ${pct}%）` : '';
+      if (res.targetReached === false) {
+        line += `<br />⚠️ 已尽力压至最小 ${fmtSize(outSize)}，仍略高于 ${res.targetMB} MB 目标`;
+      }
     }
   }
   showResult('ok', `${line}<div class="result-path">${res.output}</div><div class="result-actions">

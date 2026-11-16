@@ -57,6 +57,9 @@ const FILE_FILTERS = {
   trimVideo: { exts: VIDEO_EXT },
   mergeVideos: { exts: VIDEO_EXT, multi: true },
   videoCrop: { exts: [...VIDEO_EXT, 'gif'] },
+  videoBlur: { exts: [...VIDEO_EXT, 'gif'] },
+  aspectPad: { exts: [...VIDEO_EXT, 'gif'] },
+  watermark: { exts: [...VIDEO_EXT, 'gif'] },
   rotateFlip: { exts: [...VIDEO_EXT, 'gif'] },
   reverse: { exts: [...VIDEO_EXT, 'gif'] },
   changeSpeed: { exts: [...VIDEO_EXT, 'gif'] },
@@ -65,8 +68,9 @@ const FILE_FILTERS = {
   addMusic: { exts: VIDEO_EXT },
   snapshot: { exts: [...VIDEO_EXT, 'gif'] },
   imagesTo: { exts: ['jpg', 'jpeg', 'png', 'webp', 'bmp'], multi: true },
-  // 第二文件（背景音乐）
+  // 第二文件（背景音乐 / 水印图片）
   audioFile: { exts: ['mp3', 'wav', 'm4a', 'flac', 'aac', 'ogg'] },
+  imageFile: { exts: ['png', 'jpg', 'jpeg', 'webp', 'bmp'] },
 };
 
 ipcMain.handle('pick-file', async (_e, feature, kind) => {
@@ -127,11 +131,14 @@ ipcMain.handle('task:start', async (_e, { feature, params }) => {
     const result = await ffmpeg.executeTask(taskId, feature, params, (ratio) => {
       send('task:progress', { ratio });
     });
-    send('task:done', {
+    const payload = {
       output: result.output,
       outputType: result.outputType || 'file',
-    });
-    return { ok: true, taskId, output: result.output, outputType: result.outputType || 'file' };
+      targetReached: result.targetReached,
+      targetMB: result.targetMB,
+    };
+    send('task:done', payload);
+    return { ok: true, taskId, ...payload };
   } catch (err) {
     const cancelled = err.message === '任务已取消';
     send(cancelled ? 'task:cancelled' : 'task:error', { error: err.message });

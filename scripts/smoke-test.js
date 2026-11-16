@@ -218,6 +218,46 @@ async function test(name, feature, params, check) {
     if (mb > 0.33) throw new Error(`压到 ${mb.toFixed(3)}MB，超过 0.3MB 目标`);
   });
 
+  await test('33. GIF 压缩-极限体积且不放大', 'compressGif', {
+    input: testGif, width: 800, srcW: 480, fps: 24, srcFps: 15, colors: 64, dither: 'small', totalDuration: 4,
+  }, (i) => { if (i.width !== 480) throw new Error(`不应放大，期望 480 实际 ${i.width}`); });
+
+  await test('34. 局部高斯模糊 MP4', 'videoBlur', {
+    input: testVideo, crop: { w: 300, h: 180, x: 100, y: 80 }, srcW: 1280, srcH: 720, mode: 'blur', strength: 'strong', totalDuration: 10,
+  }, (i) => { if (i.width !== 1280 || i.height !== 720) throw new Error('分辨率不应改变'); });
+
+  await test('35. 局部像素马赛克 GIF', 'videoBlur', {
+    input: testGif, crop: { w: 160, h: 100, x: 40, y: 40 }, srcW: 480, srcH: 270, mode: 'mosaic', strength: 'medium', totalDuration: 4,
+  }, (i) => { if (i.width !== 480) throw new Error('GIF 宽度不应改变'); });
+
+  await test('36. 横竖屏适配 9:16 模糊背景 MP4', 'aspectPad', {
+    input: testVideo, ratio: '9:16', bg: 'blur', totalDuration: 10,
+  }, (i) => { if (i.width !== 1080 || i.height !== 1920) throw new Error(`应为 1080x1920，实际 ${i.width}x${i.height}`); });
+
+  await test('37. 横竖屏适配 1:1 模糊背景 GIF', 'aspectPad', {
+    input: testGif, ratio: '1:1', bg: 'blur', totalDuration: 4,
+  }, (i) => { if (i.width !== 480 || i.height !== 480) throw new Error(`应为 480x480，实际 ${i.width}x${i.height}`); });
+
+  await test('38. 添加文字水印 MP4', 'watermark', {
+    input: testVideo, mode: 'text', text: '水印Test:100%', pos: 'br', size: 'medium', opacity: '0.7', srcW: 1280, srcH: 720, totalDuration: 10,
+  }, (i) => { if (!i.hasAudio) throw new Error('应保留音轨'); });
+
+  await test('39. 添加图片水印 MP4', 'watermark', {
+    input: testVideo, mode: 'image', image: img1, pos: 'tl', size: 'small', opacity: '0.6', srcW: 1280, srcH: 720, totalDuration: 10,
+  }, (i) => { if (i.width !== 1280) throw new Error('分辨率应保持 1280'); });
+
+  const testDiffRes = path.join(TMP, 'test_diff.mp4');
+  run(['-f', 'lavfi', '-i', 'testsrc2=size=640x480:rate=24:duration=3',
+    '-c:v', 'libx264', '-pix_fmt', 'yuv420p', testDiffRes]);
+  await test('40. 兼容合并 (跨分辨率+无音轨混拼)', 'mergeVideos', {
+    files: [testVideo, testDiffRes],
+    mode: 'compat',
+    infos: [
+      { width: 1280, height: 720, hasAudio: true, duration: 10 },
+      { width: 640, height: 480, hasAudio: false, duration: 3 },
+    ],
+  }, (i) => { if (i.width !== 1280 || Math.abs(i.duration - 13) > 1.5) throw new Error(`合并结果异常: ${i.width}x${i.height}, ${i.duration}s`); });
+
   console.log(failed ? `\n❌ ${failed} 个用例失败` : '\n🎉 全部通过');
   process.exit(failed ? 1 : 0);
 })();
