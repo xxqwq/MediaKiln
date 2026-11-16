@@ -1,0 +1,50 @@
+{
+  "name": "video-gif-toolbox",
+  "version": "2.0.0",
+  "description": "视频/GIF 工具箱：18 个功能——转换、GIF 编辑、剪辑、音频、工具，全部本地处理",
+  "main": "main.js",
+  "author": "user",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --win portable --dir",
+    "dist": "electron-builder --win portable nsis"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.local.video-gif-toolbox",
+    "productName": "视频GIF工具箱",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.js",
+      "ffmpeg.js",
+      "preload.js",
+      "renderer/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "bin",
+        "to": "bin"
+      }
+    ],
+    "win": {
+      "target": [
+        "portable",
+        "nsis"
+      ],
+      "icon": "build/icon.ico"
+    },
+    "portable": {
+      "artifactName": "视频GIF工具箱-${version}-便携版.exe"
+    },
+    "nsis": {
+      "oneClick": true,
+      "artifactName": "视频GIF工具箱-${version}-安装版.exe"
+    }
+  }
+}

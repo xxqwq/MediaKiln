@@ -1,0 +1,22 @@
+# Dependencies & build outputs
+node_modules/
+release/
+out/
+logs/
+*.log
+
+# Large local FFmpeg binaries (>100MB GitHub limit)
+bin/*.exe
+
+# Smoke test generated media
+scripts/smoke/
+
+# Local AI / editor / tool metadata
+.mimosa/
+.v2c/
+.video_agent/
+.zcode/
+
+# OS files
+Thumbs.db
+.DS_Store

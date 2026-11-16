@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self' file:; img-src 'self' file: data:" />
+  <title>视频 · GIF 工具箱</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="logo">
+      <div class="logo-badge">VG</div>
+      <div>
+        <div class="logo-title">视频 · GIF 工具箱</div>
+        <div class="logo-sub">本地转换 · 无需联网</div>
+      </div>
+    </div>
+    <nav id="nav"></nav>
+    <div class="sidebar-foot">本地 FFmpeg 9.0 · v2.0</div>
+  </aside>
+
+  <main class="main">
+    <header class="header">
+      <h1 id="feature-title">视频转 GIF</h1>
+      <p id="feature-desc" class="muted"></p>
+    </header>
+
+    <section id="dropzone" class="dropzone">
+      <div class="dz-icon">📁</div>
+      <div class="dz-text">拖入文件到这里，或 <span class="link">点击选择文件</span></div>
+      <div id="dz-hint" class="dz-hint muted"></div>
+    </section>
+
+    <section id="file-card" class="file-card hidden">
+      <div id="preview-box" class="preview-box"></div>
+      <div class="file-meta">
+        <div id="file-name" class="file-name"></div>
+        <div id="file-info" class="file-info"></div>
+        <button id="btn-replace" class="btn btn-ghost btn-sm">换一个文件</button>
+      </div>
+    </section>
+
+    <section id="params" class="params hidden"></section>
+
+    <section class="action-bar hidden" id="action-bar">
+      <button id="btn-run" class="btn btn-primary">开始转换</button>
+      <button id="btn-cancel" class="btn btn-danger hidden">取消</button>
+    </section>
+
+    <section id="progress-area" class="progress-area hidden">
+      <div class="progress-track"><div id="progress-fill" class="progress-fill"></div></div>
+      <div id="progress-text" class="muted progress-text">准备中…</div>
+    </section>
+
+    <section id="result-card" class="result-card hidden"></section>
+  </main>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="app.js"></script>
+</body>
+</html>
