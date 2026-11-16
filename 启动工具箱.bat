@@ -1,15 +1,12 @@
 @echo off
-chcp 65001 >nul
+set ELECTRON_RUN_AS_NODE=
 cd /d "%~dp0"
-if exist "node_modules\electron\dist\electron.exe" (
-  start "" "%~dp0node_modules\electron\dist\electron.exe" "%~dp0."
-) else (
-  echo 未检测到 Electron，正在尝试安装依赖...
-  call npm install
-  if exist "node_modules\electron\dist\electron.exe" (
-    start "" "%~dp0node_modules\electron\dist\electron.exe" "%~dp0."
-  ) else (
-    echo 启动失败，请检查 Node.js 与 npm 环境。
-    pause
-  )
-)
+if exist "node_modules\electron\dist\electron.exe" goto launch
+call npm install
+if exist "node_modules\electron\dist\electron.exe" goto launch
+echo Failed to find Electron. Please run npm install manually.
+pause
+exit /b 1
+
+:launch
+start "" "node_modules\electron\dist\electron.exe" .
