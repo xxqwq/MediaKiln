@@ -258,6 +258,141 @@ async function test(name, feature, params, check) {
     ],
   }, (i) => { if (i.width !== 1280 || Math.abs(i.duration - 13) > 1.5) throw new Error(`合并结果异常: ${i.width}x${i.height}, ${i.duration}s`); });
 
+  await test('41. GIF 压缩-进阶选项(50%缩放/逐帧调色/降噪/倍速/截段)', 'compressGif', {
+    input: testGif, width: 'p50', fps: 'p50', colors: 64, dither: 'floyd',
+    statsMode: 'single', denoise: 'light', diffMode: 'none', speed: 1.5, loop: -1,
+    start: 0.5, duration: 2, srcW: 480, srcFps: 15, totalDuration: 4,
+  }, (i) => { if (i.width !== 240) throw new Error(`50% 缩放应为 240，实际 ${i.width}`); });
+
+  // ============ 第三批：开源工具箱全套拓展功能 ============
+
+  await test('42. 无损换容器 MP4→MOV', 'convertVideo', {
+    input: testVideo, mode: 'copy', format: 'mov', totalDuration: 10,
+  }, (i) => { if (i.width !== 1280 || !i.hasAudio) throw new Error('无损换容器参数异常'); });
+
+  await test('43. GIF 去重复帧压缩 (mpdecimate)', 'compressGif', {
+    input: testGif, width: 480, fps: 12, colors: 64, dedup: 'yes', totalDuration: 4,
+  });
+
+  await test('44. 绿幕抠像透明 GIF', 'chromaGif', {
+    input: (() => {
+      const green = path.join(TMP, 'green.mp4');
+      run(['-f', 'lavfi', '-i', 'color=c=0x00ff00:size=320x240:rate=15:duration=2',
+        '-f', 'lavfi', '-i', 'color=c=0xff0000:size=80x80:rate=15:duration=2',
+        '-filter_complex', '[0:v][1:v]overlay=(W-w)/2:(H-h)/2',
+        '-c:v', 'libx264', '-pix_fmt', 'yuv420p', green]);
+      return green;
+    })(),
+    color: '#00ff00', similarity: 0.2, blend: 0.08, width: 320, fps: 12, totalDuration: 2,
+  }, (i) => { if (i.width !== 320) throw new Error(`抠像 GIF 宽应为 320，实际 ${i.width}`); });
+
+  await test('45. 进度条 + 圆角透明 GIF 装饰', 'decorateMedia', {
+    input: testGif, progressBar: 'bottom', barColor: '#22d3ee', barHeight: 6,
+    rounded: 24, srcW: 480, srcH: 270, totalDuration: 4,
+  });
+
+  await test('46. 进度条 + 圆角边框 MP4 装饰', 'decorateMedia', {
+    input: testVideo2, progressBar: 'top', barColor: '#f43f5e', barHeight: 8,
+    rounded: 32, bgColor: '#000000', srcW: 1280, srcH: 720, totalDuration: 6,
+  }, (i) => { if (i.width !== 1280 || !i.hasAudio) throw new Error('MP4 装饰异常'); });
+
+  await test('47. 智能切分长视频-均分3段(精确)', 'splitVideo', {
+    input: testVideo2, mode: 'count', count: 3, precise: true, hasAudio: true, totalDuration: 6,
+  }, () => {
+    const dir = path.join(TMP, 'test2_切片');
+    const parts = fs.readdirSync(dir).filter((f) => f.endsWith('.mp4'));
+    if (parts.length !== 3) throw new Error(`应切出 3 段，实际 ${parts.length} 段`);
+  });
+
+  await test('48. 智能切分长视频-固定时长(无损)', 'splitVideo', {
+    input: testVideo, mode: 'duration', every: 4, precise: false, hasAudio: true, totalDuration: 10,
+  }, () => {
+    const dir = path.join(TMP, 'test_切片');
+    const parts = fs.readdirSync(dir).filter((f) => f.endsWith('.mp4'));
+    if (parts.length < 2) throw new Error(`切片数量过少: ${parts.length}`);
+  });
+
+  await test('49. 多段剪辑-删掉中间片段 (精确)', 'multiCut', {
+    input: testVideo, mode: 'remove', precise: true,
+    segments: [{ start: 2, end: 5 }, { start: 7, end: 8 }],
+    hasAudio: true, totalDuration: 10,
+  }, (i) => { if (Math.abs(i.duration - 6) > 0.8) throw new Error(`删掉4s后应剩约6s，实际 ${i.duration}s`); });
+
+  await test('50. 多段剪辑-保留多段拼接 (无损)', 'multiCut', {
+    input: testVideo, mode: 'keep', precise: false,
+    segments: [{ start: 0, end: 2 }, { start: 6, end: 8 }],
+    hasAudio: true, totalDuration: 10,
+  }, (i) => { if (i.duration < 2.5) throw new Error(`多段拼接时长异常: ${i.duration}s`); });
+
+  const letterbox = path.join(TMP, 'letterbox.mp4');
+  run(['-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=25:duration=4',
+    '-vf', 'pad=640:480:0:60:black', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', letterbox]);
+  await test('51. 自动去黑边 (640x480 上下黑边 → 640x360)', 'autoCrop', {
+    input: letterbox, srcW: 640, srcH: 480, totalDuration: 4,
+  }, (i) => { if (i.height >= 460) throw new Error(`黑边未被裁除，高度仍为 ${i.height}`); });
+
+  await test('52. 分屏对比 (左右 hstack)', 'pipSplit', {
+    input: testVideo, second: testVideo2, mode: 'hstack', audioMode: 'first',
+    srcW: 1280, srcH: 720, hasAudio: true, secondHasAudio: true, totalDuration: 10,
+  }, (i) => { if (i.width !== 2560 || i.height !== 720) throw new Error(`左右分屏应为 2560x720，实际 ${i.width}x${i.height}`); });
+
+  await test('53. 画中画 (右下角小窗 + 混合声音)', 'pipSplit', {
+    input: testVideo, second: testGif, mode: 'pip', pipPos: 'br', pipScale: '0.25', audioMode: 'mix',
+    srcW: 1280, srcH: 720, hasAudio: true, secondHasAudio: false, totalDuration: 10,
+  }, (i) => { if (i.width !== 1280) throw new Error('画中画尺寸异常'); });
+
+  await test('54. 调色微调与防抖 (MP4)', 'colorStab', {
+    input: testVideo2, brightness: 0.1, contrast: 1.2, saturation: 1.3,
+    sharpen: 'light', stabilize: 'deshake', totalDuration: 6,
+  }, (i) => { if (i.width !== 1280) throw new Error('调色尺寸异常'); });
+
+  await test('55. 音频-人声降噪 & 响度标准化', 'audioAdjust', {
+    input: testVideo2, mode: 'denoise', hasAudio: true, totalDuration: 6,
+  }, (i) => { if (!i.hasAudio) throw new Error('降噪后应有音轨'); });
+
+  await test('56. 音频-响度标准化 (loudnorm)', 'audioAdjust', {
+    input: testVideo, mode: 'loudnorm', hasAudio: true, totalDuration: 10,
+  }, (i) => { if (!i.hasAudio) throw new Error('标准化后应有音轨'); });
+
+  const srtFile = path.join(TMP, 'sub.srt');
+  fs.writeFileSync(srtFile, '1\n00:00:00,200 --> 00:00:03,500\n测试字幕 Hello Subtitle\n', 'utf8');
+  await test('57. 硬字幕压制 (SRT 烧录)', 'subtitleTool', {
+    input: testVideo2, mode: 'burn', subtitle: srtFile, fontSize: 24, marginV: 24, totalDuration: 6,
+  }, (i) => { if (i.width !== 1280) throw new Error('字幕烧录输出异常'); });
+
+  const mkvWithSub = path.join(TMP, 'with_sub.mkv');
+  run(['-i', testVideo2, '-i', srtFile, '-c:v', 'copy', '-c:a', 'copy', '-c:s', 'srt', mkvWithSub]);
+  await test('58. 提取内嵌字幕 (.srt)', 'subtitleTool', {
+    input: mkvWithSub, mode: 'extract', subIndex: 0, hasSubtitles: true, totalDuration: 6,
+  }, () => {
+    const out = path.join(TMP, 'with_sub_字幕.srt');
+    const txt = fs.readFileSync(out, 'utf8');
+    if (!txt.includes('Hello Subtitle')) throw new Error('提取的字幕内容不匹配');
+  });
+
+  await test('59. GIF 逐帧全部拆解', 'snapshot', {
+    input: testGif, mode: 'all', totalDuration: 4,
+  }, () => {
+    const dir = path.join(TMP, 'test_全部帧');
+    const n = fs.readdirSync(dir).filter((f) => f.endsWith('.png')).length;
+    if (n < 30) throw new Error(`4s@15fps 应拆出约60帧，实际 ${n}`);
+  });
+
+  await test('60. 九宫格预览墙 (3x3 + 时间戳)', 'contactSheet', {
+    input: testVideo, layout: '3x3', cellWidth: 320, timestamps: 'yes', format: 'jpg', totalDuration: 10,
+  }, (i) => { if (i.width < 960) throw new Error(`3x3 宽度应 >= 960，实际 ${i.width}`); });
+
+  const metaVid = path.join(TMP, 'with_meta.mp4');
+  run(['-i', testVideo2, '-c', 'copy', '-metadata', 'title=SecretCamera', '-metadata', 'comment=GPS_LOC', metaVid]);
+  await test('61. 清除隐私元数据 + 自定义 output 子目录', 'stripMeta', {
+    input: metaVid, totalDuration: 6, __outputMode: 'subdir',
+  }, () => {
+    const out = path.join(TMP, 'output', 'with_meta_去元数据.mp4');
+    if (!fs.existsSync(out)) throw new Error('output 子目录未生效');
+    const pr = spawnSync(path.join(path.dirname(FFMPEG), 'ffprobe.exe'), ['-v', 'quiet', '-show_format', out]);
+    if (pr.stdout.toString().includes('SecretCamera')) throw new Error('元数据未被清除');
+  });
+
   console.log(failed ? `\n❌ ${failed} 个用例失败` : '\n🎉 全部通过');
   process.exit(failed ? 1 : 0);
 })();

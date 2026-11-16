@@ -1,7 +1,7 @@
 {
   "name": "video-gif-toolbox",
   "version": "2.0.0",
-  "description": "视频/GIF 工具箱：18 个功能——转换、GIF 编辑、剪辑、音频、工具，全部本地处理",
+  "description": "视频/GIF 工具箱：31 个功能——转换、GIF 编辑、剪辑、音频、工具，全部本地处理",
   "main": "main.js",
   "author": "user",
   "license": "MIT",

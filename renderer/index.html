@@ -21,8 +21,33 @@
 
   <main class="main">
     <header class="header">
-      <h1 id="feature-title">视频转 GIF</h1>
-      <p id="feature-desc" class="muted"></p>
+      <div class="header-top">
+        <div>
+          <h1 id="feature-title">视频转 GIF</h1>
+          <p id="feature-desc" class="muted"></p>
+        </div>
+        <div class="global-prefs">
+          <label class="pref-item">
+            <span>输出位置</span>
+            <select id="pref-out-mode">
+              <option value="same">源文件同目录</option>
+              <option value="subdir">output 子目录</option>
+              <option value="custom">自定义文件夹…</option>
+            </select>
+          </label>
+          <button id="pref-out-dir-btn" class="btn btn-ghost btn-sm hidden" title="点击更改输出文件夹"></button>
+          <label class="pref-item">
+            <span>硬件加速</span>
+            <select id="pref-hw">
+              <option value="cpu">CPU（最稳）</option>
+              <option value="auto">自动检测 GPU</option>
+              <option value="h264_nvenc">NVIDIA NVENC</option>
+              <option value="h264_qsv">Intel QSV</option>
+              <option value="h264_amf">AMD AMF</option>
+            </select>
+          </label>
+        </div>
+      </div>
     </header>
 
     <section id="dropzone" class="dropzone">
@@ -36,9 +61,14 @@
       <div class="file-meta">
         <div id="file-name" class="file-name"></div>
         <div id="file-info" class="file-info"></div>
-        <button id="btn-replace" class="btn btn-ghost btn-sm">换一个文件</button>
+        <div class="file-actions">
+          <button id="btn-replace" class="btn btn-ghost btn-sm">换一个文件</button>
+          <button id="btn-add-more" class="btn btn-ghost btn-sm hidden">+ 添加文件</button>
+        </div>
       </div>
     </section>
+
+    <section id="batch-list" class="batch-list hidden"></section>
 
     <section id="params" class="params hidden"></section>
 

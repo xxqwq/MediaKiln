@@ -51,6 +51,7 @@ function probe(filePath) {
           const [n, d] = fr.split('/').map(Number);
           if (n > 0 && d > 0) fps = n / d;
         }
+        const subCount = (info.streams || []).filter((s) => s.codec_type === 'subtitle').length;
         resolve({
           duration: parseFloat(info.format?.duration) || parseFloat(video?.duration) || 0,
           size: parseInt(info.format?.size, 10) || 0,
@@ -58,6 +59,8 @@ function probe(filePath) {
           height: video?.height || 0,
           fps: Math.round(fps * 100) / 100,
           hasAudio: (info.streams || []).some((s) => s.codec_type === 'audio'),
+          hasSubtitles: subCount > 0,
+          subCount,
         });
       } catch (e) {
         reject(new Error('无法读取该文件的媒体信息'));
@@ -154,22 +157,80 @@ function scaleFilter(width) {
   return `scale=${width}:-2:flags=lanczos`;
 }
 
+// 输出目录上下文（由 executeTask 在调用 builder 时设置：same / subdir / custom）
+let _outCtx = null;
+function resolveOutDir(inputPath) {
+  const baseDir = path.dirname(inputPath);
+  if (!_outCtx) return baseDir;
+  if (_outCtx.mode === 'custom' && _outCtx.dir) {
+    fs.mkdirSync(_outCtx.dir, { recursive: true });
+    return _outCtx.dir;
+  }
+  if (_outCtx.mode === 'subdir') {
+    const sub = path.join(baseDir, 'output');
+    fs.mkdirSync(sub, { recursive: true });
+    return sub;
+  }
+  return baseDir;
+}
+
 // 输出文件默认与输入同目录，加后缀避免覆盖
 function defaultOutput(inputPath, suffix, ext) {
-  const dir = path.dirname(inputPath);
+  const dir = resolveOutDir(inputPath);
   const base = path.basename(inputPath, path.extname(inputPath));
   return path.join(dir, `${base}_${suffix}.${ext}`);
 }
 
 function stampOutput(inputPath, prefix, ext) {
-  const dir = path.dirname(inputPath);
+  const dir = resolveOutDir(inputPath);
   const ts = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
   return path.join(dir, `${prefix}_${ts}.${ext}`);
 }
 
-// 视频常用编码参数（x264）
+// 硬件编码器探测（缓存结果，避免每次重复拉起进程）
+let _hwCache = null;
+function testHwEncoder(enc) {
+  return new Promise((resolve) => {
+    const child = spawn(FFMPEG, [
+      '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=black:s=64x64:d=0.1',
+      '-frames:v', '1', '-c:v', enc, '-pix_fmt', 'yuv420p', '-f', 'null', '-',
+    ], { windowsHide: true });
+    const timer = setTimeout(() => { try { child.kill(); } catch {} resolve(false); }, 3000);
+    child.on('error', () => { clearTimeout(timer); resolve(false); });
+    child.on('close', (code) => { clearTimeout(timer); resolve(code === 0); });
+  });
+}
+
+async function detectHwEncoders() {
+  if (_hwCache) return _hwCache;
+  assertBinaries();
+  const candidates = ['h264_nvenc', 'h264_qsv', 'h264_amf'];
+  const available = [];
+  for (const enc of candidates) {
+    if (await testHwEncoder(enc)) available.push(enc);
+  }
+  _hwCache = { available, primary: available[0] || null };
+  return _hwCache;
+}
+
+// 视频常用编码参数（根据 __hwAccel 优先走 GPU，回退 libx264）
 const X264 = ['-c:v', 'libx264', '-crf', '20', '-preset', 'medium', '-pix_fmt', 'yuv420p'];
 const X264_FAST = ['-c:v', 'libx264', '-crf', '20', '-preset', 'fast', '-pix_fmt', 'yuv420p'];
+
+function videoCodecArgs(p, { crf = 20, preset = 'medium' } = {}) {
+  let hw = p?.__hwAccel || 'cpu';
+  if (hw === 'auto') hw = _hwCache?.primary || 'cpu';
+  if (hw === 'h264_nvenc') {
+    return ['-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', String(crf), '-pix_fmt', 'yuv420p'];
+  }
+  if (hw === 'h264_qsv') {
+    return ['-c:v', 'h264_qsv', '-preset', preset === 'fast' ? 'veryfast' : 'medium', '-global_quality', String(crf), '-pix_fmt', 'yuv420p'];
+  }
+  if (hw === 'h264_amf') {
+    return ['-c:v', 'h264_amf', '-quality', preset === 'fast' ? 'speed' : 'balanced', '-rc', 'cqp', '-qp_i', String(crf), '-qp_p', String(crf), '-pix_fmt', 'yuv420p'];
+  }
+  return ['-c:v', 'libx264', '-crf', String(crf), '-preset', preset, '-pix_fmt', 'yuv420p'];
+}
 
 // 输入文件扩展名 → 安全输出容器
 function videoExt(inputPath) {
@@ -179,36 +240,40 @@ function videoExt(inputPath) {
 
 // concat demuxer 的 list 文件（路径中的单引号需转义）
 function writeConcatList(files) {
-  const list = path.join(os.tmpdir(), `vgt_concat_${Date.now()}.txt`);
+  const list = path.join(os.tmpdir(), `vgt_concat_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.txt`);
   fs.writeFileSync(list, files.map((f) => `file '${f.replaceAll("'", "'\\''")}'`).join('\n'), 'utf8');
   return list;
 }
 
 // GIF 两遍编码（palettegen/paletteuse）通用计划
-function gifPlan({ input, output, vf, fc, extraInputs = [], colors = 128, seg = [], totalDuration = 0, statsMode = 'diff', dither = 'bayer:bayer_scale=5' }) {
+function gifPlan({ input, output, vf, fc, extraInputs = [], colors = 128, seg = [], totalDuration = 0, statsMode = 'diff', dither = 'bayer:bayer_scale=5', diffMode = 'rectangle', loop = 0, reserveTransparent = false }) {
   const palette = path.join(os.tmpdir(), `vgt_palette_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.png`);
   const ditherOpt = dither === 'none' ? 'dither=none' : `dither=${dither}`;
+  const diffOpt = diffMode === 'none' ? '' : `:diff_mode=${diffMode}`;
+  const transGen = reserveTransparent ? ':reserve_transparent=1' : '';
+  const transUse = reserveTransparent ? ':alpha_threshold=128' : '';
+  const loopArgs = loop !== undefined && loop !== null ? ['-loop', String(loop)] : [];
   const baseInputs = [...seg, '-i', input, ...extraInputs];
   const palIdx = 1 + extraInputs.filter((a) => a === '-i').length;
   const genStep = fc
     ? {
-        args: [...baseInputs, '-filter_complex', `${fc};[x]palettegen=max_colors=${colors}:stats_mode=${statsMode}`, palette],
+        args: [...baseInputs, '-filter_complex', `${fc};[x]palettegen=max_colors=${colors}:stats_mode=${statsMode}${transGen}`, palette],
         totalDuration, from: 0, to: 0.3,
       }
     : {
-        args: [...baseInputs, '-vf', `${vf},palettegen=max_colors=${colors}:stats_mode=${statsMode}`, palette],
+        args: [...baseInputs, '-vf', `${vf},palettegen=max_colors=${colors}:stats_mode=${statsMode}${transGen}`, palette],
         totalDuration, from: 0, to: 0.3,
       };
   const useGraph = fc
-    ? `${fc};[x][${palIdx}:v]paletteuse=${ditherOpt}:diff_mode=rectangle`
-    : `[0:v]${vf}[x];[x][${palIdx}:v]paletteuse=${ditherOpt}:diff_mode=rectangle`;
+    ? `${fc};[x][${palIdx}:v]paletteuse=${ditherOpt}${diffOpt}${transUse}`
+    : `[0:v]${vf}[x];[x][${palIdx}:v]paletteuse=${ditherOpt}${diffOpt}${transUse}`;
   return {
     output,
     cleanup: [palette],
     steps: [
       genStep,
       {
-        args: [...baseInputs, '-i', palette, '-filter_complex', useGraph, output],
+        args: [...baseInputs, '-i', palette, '-filter_complex', useGraph, ...loopArgs, output],
         totalDuration, from: 0.3, to: 1,
       },
     ],
@@ -249,8 +314,8 @@ const builders = {
     if (format === 'mp4') {
       args.push(
         '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1',
-        '-c:v', 'libx264', '-crf', '20', '-preset', 'medium',
-        '-pix_fmt', 'yuv420p', '-movflags', '+faststart'
+        ...videoCodecArgs(p, { crf: 20, preset: 'medium' }),
+        '-movflags', '+faststart'
       );
     } else {
       // GIF 解码为 bgra/rgb24，vp9 不接受，需先转 yuv420p
@@ -284,9 +349,21 @@ const builders = {
     };
   },
 
-  // 4. 视频格式转换
+  // 4. 视频格式转换（支持重编码 & 无损秒转封装）
   convertVideo(p) {
-    const format = ['mp4', 'mkv', 'webm'].includes(p.format) ? p.format : 'mp4';
+    const isCopy = p.mode === 'copy';
+    const format = ['mp4', 'mkv', 'mov', 'webm'].includes(p.format) ? p.format : 'mp4';
+    if (isCopy) {
+      if (format === 'webm') throw new Error('无损换容器仅支持 MP4 / MKV / MOV，WebM 请选“重编码”');
+      const output = defaultOutput(p.input, 'remux', format);
+      const args = ['-i', p.input, '-c', 'copy'];
+      if (format === 'mp4' || format === 'mov') args.push('-movflags', '+faststart');
+      return {
+        output,
+        steps: [{ args: [...args, output], totalDuration: num(p.totalDuration, 0) }],
+      };
+    }
+
     const output = defaultOutput(p.input, format, format);
     const res = num(p.height, 0); // 0 = 保持原始
     const crf = { high: 18, medium: 23, low: 28 }[p.quality] || 23;
@@ -297,9 +374,8 @@ const builders = {
       args.push('-c:v', 'libvpx-vp9', '-crf', String(crf + 8), '-b:v', '0', '-row-mt', '1',
         '-c:a', 'libopus', '-b:a', '128k');
     } else {
-      args.push('-c:v', 'libx264', '-crf', String(crf), '-preset', 'medium',
-        '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '128k');
-      if (format === 'mp4') args.push('-movflags', '+faststart');
+      args.push(...videoCodecArgs(p, { crf, preset: 'medium' }), '-c:a', 'aac', '-b:a', '128k');
+      if (format === 'mp4' || format === 'mov') args.push('-movflags', '+faststart');
     }
     return {
       output,
@@ -309,28 +385,87 @@ const builders = {
 
   // ============================ GIF 编辑 ============================
 
-  // 3. GIF 压缩（降宽/降帧 + 重新调色板 + 抖动策略，只缩不放）
+  // 3. GIF 压缩（尺寸/比例/帧率/颜色/抖动/统计模式/去噪/去重复帧/倍速/循环/片段裁剪）
   compressGif(p) {
     const output = defaultOutput(p.input, 'compressed', 'gif');
-    let fps = Math.min(Math.max(num(p.fps, 12), 1), 30);
     const srcFps = num(p.srcFps, 0);
-    if (srcFps > 0) fps = Math.min(fps, srcFps);
-
-    let width = Math.min(Math.max(num(p.width, 480), 48), 1920);
     const srcW = num(p.srcW, 0);
-    if (srcW > 0) width = Math.min(width, srcW);
-    width = even(width);
 
-    const colors = Math.min(Math.max(num(p.colors, 128), 16), 256);
+    // 帧率：支持百分比减半、固定值、自定义
+    let fps;
+    if (p.fps === 'p50') {
+      fps = Math.max(1, Math.round(((srcFps > 0 ? srcFps : 12) * 0.5) * 10) / 10);
+    } else if (p.fps === 'custom') {
+      fps = Math.min(Math.max(num(p.customFps, 10), 1), 30);
+    } else {
+      fps = Math.min(Math.max(num(p.fps, 12), 1), 30);
+      if (srcFps > 0) fps = Math.min(fps, srcFps);
+    }
+
+    // 宽度：支持百分比缩放、固定宽度、自定义宽度
+    let width;
+    if (p.width === 'p75' || p.width === 'p50' || p.width === 'p30') {
+      const ratio = { p75: 0.75, p50: 0.5, p30: 0.3 }[p.width];
+      width = (srcW > 0 ? srcW : 480) * ratio;
+    } else if (p.width === 'custom') {
+      width = num(p.customWidth, 400);
+    } else {
+      width = num(p.width, 480);
+      if (srcW > 0) width = Math.min(width, srcW);
+    }
+    width = even(Math.min(Math.max(width, 32), 1920));
+
+    const colors = Math.min(Math.max(num(p.colors, 128), 4), 256);
     const ditherMap = {
+      none: 'none',
       small: 'none',
+      bayer5: 'bayer:bayer_scale=5',
       balanced: 'bayer:bayer_scale=5',
+      bayer3: 'bayer:bayer_scale=3',
       quality: 'bayer:bayer_scale=2',
+      bayer1: 'bayer:bayer_scale=1',
+      floyd: 'floyd_steinberg',
+      sierra: 'sierra2_4a',
     };
     const dither = ditherMap[p.dither] || 'bayer:bayer_scale=5';
+    const statsMode = ['diff', 'full', 'single'].includes(p.statsMode) ? p.statsMode : 'diff';
+    const diffMode = p.diffMode === 'none' ? 'none' : 'rectangle';
+    const speed = Math.min(Math.max(num(p.speed, 1), 0.5), 2.5);
+    const loop = p.loop !== undefined ? parseInt(p.loop, 10) : 0;
+
+    // 片段裁剪（可选）
+    const start = Math.max(num(p.start, 0), 0);
+    const dur = num(p.duration, 0);
+    const seg = dur > 0 ? ['-ss', String(start), '-t', String(dur)] : (start > 0 ? ['-ss', String(start)] : []);
+    const baseDur = dur > 0 ? dur : num(p.totalDuration, 0);
+    const totalDuration = baseDur / speed;
+
+    // 滤镜链：可选变速 -> 帧率 -> 缩放 -> 可选降噪 -> 可选去重复帧
+    const vfParts = [];
+    if (speed !== 1) vfParts.push(`setpts=PTS/${speed}`);
+    vfParts.push(`fps=${fps}`, scaleFilter(width));
+    if (p.denoise === 'light') vfParts.push('hqdn3d=2:1.5:3:2');
+    else if (p.denoise === 'strong') vfParts.push('hqdn3d=4:3:6:4');
+    if (p.dedup === 'yes') vfParts.push('mpdecimate');
+    const vf = vfParts.join(',');
+
+    // single 模式为逐帧调色板，需单遍 split + paletteuse=new=1
+    if (statsMode === 'single') {
+      const ditherOpt = dither === 'none' ? 'dither=none' : `dither=${dither}`;
+      const diffOpt = diffMode === 'none' ? '' : `:diff_mode=${diffMode}`;
+      const fc = `[0:v]${vf},split[s1][s2];[s1]palettegen=max_colors=${colors}:stats_mode=single[p];[s2][p]paletteuse=${ditherOpt}:new=1${diffOpt}`;
+      return {
+        output,
+        steps: [{
+          args: [...seg, '-i', p.input, '-filter_complex', fc, '-loop', String(Number.isFinite(loop) ? loop : 0), output],
+          totalDuration,
+        }],
+      };
+    }
+
     return gifPlan({
-      input: p.input, output, colors, dither, totalDuration: num(p.totalDuration, 0),
-      vf: `fps=${fps},${scaleFilter(width)}`,
+      input: p.input, output, colors, dither, statsMode, diffMode,
+      loop: Number.isFinite(loop) ? loop : 0, seg, totalDuration, vf,
     });
   },
 
@@ -347,7 +482,7 @@ const builders = {
     const yExpr = { top: '20', center: '(h-text_h)/2', bottom: 'h-text_h-30' }[p.pos] || 'h-text_h-30';
 
     // 文字内容写临时文件；filter 内路径需正斜杠 + 盘符冒号转义
-    const textFile = path.join(os.tmpdir(), `vgt_text_${Date.now()}.txt`);
+    const textFile = path.join(os.tmpdir(), `vgt_text_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.txt`);
     fs.writeFileSync(textFile, text, 'utf8');
     const textFileArg = textFile.replace(/\\/g, '/').replace(/:/g, '\\:');
 
@@ -465,7 +600,7 @@ const builders = {
     if (dur <= 0) throw new Error('截取时长必须大于 0');
     const args = ['-i', p.input, '-ss', String(start), '-t', String(dur)];
     if (p.precise) {
-      args.push(...X264_FAST, '-c:a', 'aac');
+      args.push(...videoCodecArgs(p, { crf: 20, preset: 'fast' }), '-c:a', 'aac');
     } else {
       args.push('-c', 'copy', '-avoid_negative_ts', 'make_zero');
     }
@@ -515,7 +650,7 @@ const builders = {
 
       const args = [...inputArgs, '-filter_complex', fcParts.join(';'), '-map', '[v]'];
       if (anyAudio) args.push('-map', '[a]', '-c:a', 'aac', '-b:a', '128k');
-      args.push(...X264, '-movflags', '+faststart', output);
+      args.push(...videoCodecArgs(p), '-movflags', '+faststart', output);
       return {
         output,
         steps: [{ args, totalDuration }],
@@ -553,7 +688,7 @@ const builders = {
     return {
       output,
       steps: [{
-        args: ['-i', p.input, '-vf', crop, ...X264, '-c:a', 'copy', output],
+        args: ['-i', p.input, '-vf', crop, ...videoCodecArgs(p), '-c:a', 'copy', output],
         totalDuration: num(p.totalDuration, 0),
       }],
     };
@@ -598,7 +733,7 @@ const builders = {
     return {
       output,
       steps: [{
-        args: ['-i', p.input, '-filter_complex', fc, '-map', '[v]', '-map', '0:a?', ...X264, '-c:a', 'copy', output],
+        args: ['-i', p.input, '-filter_complex', fc, '-map', '[v]', '-map', '0:a?', ...videoCodecArgs(p), '-c:a', 'copy', output],
         totalDuration: total,
       }],
     };
@@ -623,7 +758,7 @@ const builders = {
       const output = defaultOutput(p.input, 'ratio', videoExt(p.input));
       return {
         output,
-        steps: [{ args: ['-i', p.input, '-vf', vf, ...X264, '-c:a', 'copy', output], totalDuration: total }],
+        steps: [{ args: ['-i', p.input, '-vf', vf, ...videoCodecArgs(p), '-c:a', 'copy', output], totalDuration: total }],
       };
     }
 
@@ -636,7 +771,7 @@ const builders = {
     return {
       output,
       steps: [{
-        args: ['-i', p.input, '-filter_complex', fc, '-map', '[v]', '-map', '0:a?', ...X264, '-c:a', 'copy', output],
+        args: ['-i', p.input, '-filter_complex', fc, '-map', '[v]', '-map', '0:a?', ...videoCodecArgs(p), '-c:a', 'copy', output],
         totalDuration: total,
       }],
     };
@@ -673,7 +808,7 @@ const builders = {
       return {
         output,
         steps: [{
-          args: ['-i', p.input, '-i', wmImg, '-filter_complex', fc, '-map', '[v]', '-map', '0:a?', ...X264, '-c:a', 'copy', output],
+          args: ['-i', p.input, '-i', wmImg, '-filter_complex', fc, '-map', '[v]', '-map', '0:a?', ...videoCodecArgs(p), '-c:a', 'copy', output],
           totalDuration: total,
         }],
       };
@@ -691,7 +826,7 @@ const builders = {
       center: 'x=(w-text_w)/2:y=(h-text_h)/2',
     }[pos] || 'x=w-text_w-24:y=h-text_h-24';
 
-    const textFile = path.join(os.tmpdir(), `vgt_wm_${Date.now()}.txt`);
+    const textFile = path.join(os.tmpdir(), `vgt_wm_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.txt`);
     fs.writeFileSync(textFile, text, 'utf8');
     const textFileArg = textFile.replace(/\\/g, '/').replace(/:/g, '\\:');
     const drawtext = `drawtext=fontfile='${FONT}':textfile='${textFileArg}':fontsize=${fontsize}:fontcolor=white@${opacity}:shadowcolor=black@${(opacity * 0.7).toFixed(2)}:shadowx=2:shadowy=2:${textPos}:expansion=none`;
@@ -709,7 +844,7 @@ const builders = {
       output,
       cleanup: [textFile],
       steps: [{
-        args: ['-i', p.input, '-vf', drawtext, ...X264, '-c:a', 'copy', output],
+        args: ['-i', p.input, '-vf', drawtext, ...videoCodecArgs(p), '-c:a', 'copy', output],
         totalDuration: total,
       }],
     };
@@ -730,11 +865,11 @@ const builders = {
         colors: 256, totalDuration: num(p.totalDuration, 0), vf,
       });
     }
+    const output = defaultOutput(p.input, 'rot', videoExt(p.input));
     return {
-      output: defaultOutput(p.input, 'rot', videoExt(p.input)),
+      output,
       steps: [{
-        args: ['-i', p.input, '-vf', vf, ...X264, '-c:a', 'copy',
-          defaultOutput(p.input, 'rot', videoExt(p.input))],
+        args: ['-i', p.input, '-vf', vf, ...videoCodecArgs(p), '-c:a', 'copy', output],
         totalDuration: num(p.totalDuration, 0),
       }],
     };
@@ -747,14 +882,15 @@ const builders = {
     const total = num(p.totalDuration, 0);
 
     if (ext === 'gif') {
+      const outGif = defaultOutput(p.input, boomerang ? 'boomerang' : 'reverse', 'gif');
       // 单遍 filter graph：倒放（或正放+倒放拼接）后再做调色板
       const fc = boomerang
         ? '[0:v]split[s1][s2];[s2]reverse[r];[s1][r]concat=n=2:v=1[c];[c]split[c1][c2];[c1]palettegen=max_colors=256[p];[c2][p]paletteuse=dither=bayer:bayer_scale=5'
         : '[0:v]reverse[c];[c]split[c1][c2];[c1]palettegen=max_colors=256[p];[c2][p]paletteuse=dither=bayer:bayer_scale=5';
       return {
-        output: defaultOutput(p.input, boomerang ? 'boomerang' : 'reverse', 'gif'),
+        output: outGif,
         steps: [{
-          args: ['-i', p.input, '-filter_complex', fc, defaultOutput(p.input, boomerang ? 'boomerang' : 'reverse', 'gif')],
+          args: ['-i', p.input, '-filter_complex', fc, outGif],
           totalDuration: boomerang ? total * 2 : total,
         }],
       };
@@ -767,14 +903,14 @@ const builders = {
       return {
         output,
         steps: [{
-          args: ['-i', p.input, '-filter_complex', fc, '-map', '[c]', ...X264, output],
+          args: ['-i', p.input, '-filter_complex', fc, '-map', '[c]', ...videoCodecArgs(p), output],
           totalDuration: total * 2,
         }],
       };
     }
     const args = ['-i', p.input, '-vf', 'reverse'];
     if (p.hasAudio) args.push('-af', 'areverse', '-c:a', 'aac');
-    args.push(...X264);
+    args.push(...videoCodecArgs(p));
     return {
       output,
       steps: [{ args: [...args, output], totalDuration: total }],
@@ -798,7 +934,7 @@ const builders = {
       args.push('-c:v', 'libvpx-vp9', '-crf', '30', '-b:v', '0', '-row-mt', '1');
       if (p.hasAudio) args.push('-c:a', 'libopus');
     } else {
-      args.push(...X264);
+      args.push(...videoCodecArgs(p));
       if (p.hasAudio) args.push('-c:a', 'aac', '-b:a', '128k');
     }
     return {
@@ -827,25 +963,32 @@ const builders = {
     };
   },
 
-  // 音频调整（静音 / 音量 / 淡入淡出），视频流直接复制不重编码
+  // 音频调整（静音 / 音量 / 淡入淡出 / 人声降噪 / 响度标准化），视频流直接复制不重编码
   audioAdjust(p) {
     const output = defaultOutput(p.input, 'audio_adj', videoExt(p.input));
     const D = num(p.totalDuration, 0);
     let args;
     if (p.mode === 'mute') {
       args = ['-i', p.input, '-c:v', 'copy', '-an'];
-    } else if (p.mode === 'volume') {
-      const vol = Math.min(Math.max(num(p.volume, 2), 0.1), 10);
-      args = ['-i', p.input, '-c:v', 'copy', '-af', `volume=${vol}`, '-c:a', 'aac', '-b:a', '192k'];
-    } else if (p.mode === 'fade') {
-      if (D <= 0) throw new Error('无法读取视频时长');
-      const fi = Math.min(num(p.fadeIn, 1), D / 2);
-      const fo = Math.min(num(p.fadeOut, 1), D / 2);
-      args = ['-i', p.input, '-c:v', 'copy',
-        '-af', `afade=t=in:st=0:d=${fi},afade=t=out:st=${Math.max(0, D - fo).toFixed(2)}:d=${fo}`,
-        '-c:a', 'aac', '-b:a', '192k'];
     } else {
-      throw new Error('请选择处理方式');
+      if (p.hasAudio === false) throw new Error('该视频没有音轨，无法调整音频');
+      if (p.mode === 'volume') {
+        const vol = Math.min(Math.max(num(p.volume, 2), 0.1), 10);
+        args = ['-i', p.input, '-c:v', 'copy', '-af', `volume=${vol}`, '-c:a', 'aac', '-b:a', '192k'];
+      } else if (p.mode === 'fade') {
+        if (D <= 0) throw new Error('无法读取视频时长');
+        const fi = Math.min(num(p.fadeIn, 1), D / 2);
+        const fo = Math.min(num(p.fadeOut, 1), D / 2);
+        args = ['-i', p.input, '-c:v', 'copy',
+          '-af', `afade=t=in:st=0:d=${fi},afade=t=out:st=${Math.max(0, D - fo).toFixed(2)}:d=${fo}`,
+          '-c:a', 'aac', '-b:a', '192k'];
+      } else if (p.mode === 'denoise') {
+        args = ['-i', p.input, '-c:v', 'copy', '-af', 'highpass=f=80,afftdn=nf=-25', '-c:a', 'aac', '-b:a', '192k'];
+      } else if (p.mode === 'loudnorm') {
+        args = ['-i', p.input, '-c:v', 'copy', '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11', '-c:a', 'aac', '-b:a', '192k'];
+      } else {
+        throw new Error('请选择处理方式');
+      }
     }
     return {
       output,
@@ -857,7 +1000,7 @@ const builders = {
   addMusic(p) {
     const music = p.music;
     if (!music) throw new Error('请先选择音乐文件');
-    const output = stampOutput(p.input, '配乐', 'mp4');
+    const output = defaultOutput(p.input, '配乐', 'mp4');
     const vol = Math.min(Math.max(num(p.musicVolume, 1), 0.1), 3);
     let args;
     if (p.mode === 'mix') {
@@ -879,8 +1022,19 @@ const builders = {
 
   // ============================ 工具 ============================
 
-  // 视频截图（单帧）或帧序列导出
+  // 视频截图（单帧 / 间隔序列 / 逐帧拆解全部原始帧）
   snapshot(p) {
+    if (p.mode === 'all') {
+      const dir = defaultOutput(p.input, '全部帧', 'png').replace(/\.png$/, '');
+      fs.mkdirSync(dir, { recursive: true });
+      return {
+        output: dir, outputType: 'dir',
+        steps: [{
+          args: ['-i', p.input, '-fps_mode', 'passthrough', path.join(dir, 'frame_%05d.png')],
+          totalDuration: num(p.totalDuration, 0),
+        }],
+      };
+    }
     if (p.mode === 'seq') {
       const dir = defaultOutput(p.input, '帧导出', 'png').replace(/\.png$/, '');
       fs.mkdirSync(dir, { recursive: true });
@@ -942,7 +1096,7 @@ const builders = {
         totalDuration,
       });
     } else {
-      steps.push({ args: [...inputArgs, ...X264, output], totalDuration });
+      steps.push({ args: [...inputArgs, ...videoCodecArgs(p), output], totalDuration });
     }
 
     // 步骤均分总进度
@@ -950,14 +1104,523 @@ const builders = {
 
     return { output, steps, cleanupDirs: [tmpDir] };
   },
+
+  // ============================ 拓展实用功能 ============================
+
+  // 智能切分长视频（按固定时长 / 均分 N 段，导出到目录）
+  splitVideo(p) {
+    const D = num(p.totalDuration, 0);
+    if (D <= 0) throw new Error('无法读取视频时长');
+    const fmt = videoExt(p.input);
+    const dir = defaultOutput(p.input, '切片', 'dir').replace(/\.dir$/, '');
+    fs.mkdirSync(dir, { recursive: true });
+
+    let segDur;
+    let count;
+    if (p.mode === 'count') {
+      count = Math.min(Math.max(Math.round(num(p.count, 3)), 2), 50);
+      segDur = D / count;
+    } else {
+      segDur = Math.min(Math.max(num(p.every, 30), 1), 3600);
+      count = Math.max(1, Math.ceil(D / segDur));
+    }
+
+    if (!p.precise) {
+      return {
+        output: dir, outputType: 'dir',
+        steps: [{
+          args: ['-i', p.input, '-c', 'copy', '-map', '0',
+            '-f', 'segment', '-segment_time', segDur.toFixed(3), '-reset_timestamps', '1',
+            path.join(dir, `part_%03d.${fmt}`)],
+          totalDuration: D,
+        }],
+      };
+    }
+
+    const steps = [];
+    for (let i = 0; i < count; i++) {
+      const start = i * segDur;
+      const len = Math.min(segDur, Math.max(0.1, D - start));
+      if (len < 0.05) break;
+      const outPart = path.join(dir, `part_${String(i + 1).padStart(3, '0')}.${fmt}`);
+      const args = ['-i', p.input, '-ss', start.toFixed(3), '-t', len.toFixed(3),
+        ...videoCodecArgs(p, { crf: 20, preset: 'fast' })];
+      if (p.hasAudio) args.push('-c:a', 'aac', '-b:a', '128k');
+      args.push(outPart);
+      steps.push({ args, totalDuration: len });
+    }
+    steps.forEach((s, i) => { s.from = i / steps.length; s.to = (i + 1) / steps.length; });
+    return { output: dir, outputType: 'dir', steps };
+  },
+
+  // 多片段保留 / 删中间片段
+  multiCut(p) {
+    const D = num(p.totalDuration, 0);
+    if (D <= 0) throw new Error('无法读取视频时长');
+    const raw = (p.segments || [])
+      .map((s) => ({ start: Math.max(0, num(s.start, 0)), end: Math.min(D, num(s.end, 0)) }))
+      .filter((s) => s.end - s.start >= 0.08)
+      .sort((a, b) => a.start - b.start);
+    if (!raw.length) throw new Error('请至少添加一个有效的起止时间段');
+
+    // 合并重叠时间段
+    const merged = [];
+    for (const s of raw) {
+      if (!merged.length || s.start > merged[merged.length - 1].end) {
+        merged.push({ ...s });
+      } else {
+        merged[merged.length - 1].end = Math.max(merged[merged.length - 1].end, s.end);
+      }
+    }
+
+    let kept = merged;
+    if (p.mode === 'remove') {
+      kept = [];
+      let cursor = 0;
+      for (const s of merged) {
+        if (s.start - cursor >= 0.08) kept.push({ start: cursor, end: s.start });
+        cursor = Math.max(cursor, s.end);
+      }
+      if (D - cursor >= 0.08) kept.push({ start: cursor, end: D });
+      if (!kept.length) throw new Error('删除所选片段后没有剩余画面');
+    }
+
+    const fmt = videoExt(p.input);
+    const output = defaultOutput(p.input, p.mode === 'remove' ? '去片段' : '多段拼接', fmt);
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vgt_mcut_'));
+    const segFiles = [];
+    const steps = [];
+
+    kept.forEach((seg, i) => {
+      const dur = seg.end - seg.start;
+      const segFile = path.join(tmpDir, `seg_${String(i).padStart(3, '0')}.${fmt}`);
+      segFiles.push(segFile);
+      const args = ['-i', p.input, '-ss', seg.start.toFixed(3), '-t', dur.toFixed(3)];
+      if (p.precise) {
+        args.push(...videoCodecArgs(p, { crf: 20, preset: 'fast' }));
+        if (p.hasAudio) args.push('-c:a', 'aac', '-b:a', '128k');
+      } else {
+        args.push('-c', 'copy', '-avoid_negative_ts', 'make_zero');
+      }
+      args.push(segFile);
+      steps.push({ args, totalDuration: dur });
+    });
+
+    const listFile = path.join(tmpDir, 'list.txt');
+    fs.writeFileSync(listFile, segFiles.map((f) => `file '${f.replaceAll("'", "'\\''")}'`).join('\n'), 'utf8');
+    steps.push({
+      args: ['-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', output],
+      totalDuration: 0,
+    });
+    steps.forEach((s, i) => { s.from = i / steps.length; s.to = (i + 1) / steps.length; });
+
+    return { output, steps, cleanupDirs: [tmpDir] };
+  },
+
+  // 自动去黑边（cropdetect 多点采样联合边框）
+  autoCrop(p) {
+    const ext = path.extname(p.input).slice(1).toLowerCase();
+    const isGif = ext === 'gif';
+    const output = defaultOutput(p.input, '去黑边', isGif ? 'gif' : videoExt(p.input));
+    const srcW = num(p.srcW, 0);
+    const srcH = num(p.srcH, 0);
+    const D = num(p.totalDuration, 0);
+
+    return {
+      output,
+      async run(taskId, onProgress) {
+        const samplePoints = D > 2 && !isGif
+          ? [D * 0.15, D * 0.5, D * 0.8]
+          : [0];
+        let minX = Infinity, minY = Infinity, maxR = 0, maxB = 0;
+
+        for (let i = 0; i < samplePoints.length; i++) {
+          const t = samplePoints[i];
+          const args = t > 0
+            ? ['-ss', t.toFixed(2), '-i', p.input, '-frames:v', '4', '-vf', 'cropdetect=24:2:0', '-f', 'null', '-']
+            : ['-i', p.input, '-frames:v', '8', '-vf', 'cropdetect=24:2:0', '-f', 'null', '-'];
+          const stderr = await runFfmpegCapture(taskId, args);
+          const matches = [...stderr.matchAll(/crop=(\d+):(\d+):(\d+):(\d+)/g)];
+          for (const m of matches) {
+            const cw = parseInt(m[1], 10);
+            const ch = parseInt(m[2], 10);
+            const cx = parseInt(m[3], 10);
+            const cy = parseInt(m[4], 10);
+            if (cw >= 16 && ch >= 16) {
+              minX = Math.min(minX, cx);
+              minY = Math.min(minY, cy);
+              maxR = Math.max(maxR, cx + cw);
+              maxB = Math.max(maxB, cy + ch);
+            }
+          }
+          onProgress?.(0.15 * ((i + 1) / samplePoints.length));
+        }
+
+        let cropFilter = null;
+        if (Number.isFinite(minX) && maxR > minX && maxB > minY) {
+          const cw = even(maxR - minX);
+          const ch = even(maxB - minY);
+          const cx = even(minX);
+          const cy = even(minY);
+          if (cw >= 16 && ch >= 16 && (!srcW || cw < srcW - 2 || ch < srcH - 2)) {
+            cropFilter = `crop=${cw}:${ch}:${cx}:${cy}`;
+          }
+        }
+
+        if (!cropFilter) {
+          // 画面本身无黑边时直接无损复制（或转出），避免在批量队列报错中断
+          if (isGif) {
+            fs.copyFileSync(p.input, output);
+          } else {
+            await runFfmpeg(taskId, ['-i', p.input, '-c', 'copy', output], {
+              totalDuration: D, from: 0.15, to: 1, onProgress,
+            });
+          }
+          onProgress?.(1);
+          return { output };
+        }
+
+        if (isGif) {
+          const plan = gifPlan({ input: p.input, output, colors: 256, totalDuration: D, vf: cropFilter });
+          try {
+            for (const step of plan.steps) {
+              await runFfmpeg(taskId, step.args, {
+                totalDuration: step.totalDuration,
+                from: 0.15 + 0.85 * (step.from || 0),
+                to: 0.15 + 0.85 * (step.to || 1),
+                onProgress,
+              });
+            }
+          } finally {
+            for (const f of plan.cleanup || []) fs.unlink(f, () => {});
+          }
+        } else {
+          await runFfmpeg(taskId, ['-i', p.input, '-vf', cropFilter, ...videoCodecArgs(p), '-c:a', 'copy', output], {
+            totalDuration: D, from: 0.15, to: 1, onProgress,
+          });
+        }
+        onProgress?.(1);
+        return { output };
+      },
+    };
+  },
+
+  // 分屏对比 / 画中画
+  pipSplit(p) {
+    const second = p.second;
+    if (!second) throw new Error('请先选择第二个对比/画中画文件');
+    const mode = ['hstack', 'vstack', 'pip'].includes(p.mode) ? p.mode : 'hstack';
+    const output = defaultOutput(p.input, mode === 'pip' ? '画中画' : '分屏', 'mp4');
+    const srcW = even(Math.max(num(p.srcW, 1280), 64));
+    const srcH = even(Math.max(num(p.srcH, 720), 64));
+
+    let fc;
+    if (mode === 'hstack') {
+      const targetH = even(Math.min(srcH, 1080));
+      fc = `[0:v]scale=-2:${targetH},setsar=1[v0];[1:v]scale=-2:${targetH},setsar=1[v1];[v0][v1]hstack=inputs=2:shortest=1,scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[v]`;
+    } else if (mode === 'vstack') {
+      const targetW = even(Math.min(srcW, 1920));
+      fc = `[0:v]scale=${targetW}:-2,setsar=1[v0];[1:v]scale=${targetW}:-2,setsar=1[v1];[v0][v1]vstack=inputs=2:shortest=1,scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[v]`;
+    } else {
+      const ratio = Math.min(Math.max(num(p.pipScale, 0.25), 0.12), 0.5);
+      const pipW = even(Math.max(64, srcW * ratio));
+      const posMap = {
+        br: 'W-w-24:H-h-24', bl: '24:H-h-24', tr: 'W-w-24:24', tl: '24:24',
+      };
+      const overlayPos = posMap[p.pipPos] || 'W-w-24:H-h-24';
+      fc = `[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1[base];[1:v]scale=${pipW}:-2,setsar=1[sub];[base][sub]overlay=${overlayPos}:shortest=1,format=yuv420p[v]`;
+    }
+
+    const args = ['-i', p.input, '-i', second];
+    const audioMode = p.audioMode || 'first';
+    let mapAudio = null;
+    if (audioMode === 'mix' && p.hasAudio && p.secondHasAudio) {
+      fc += ';[0:a][1:a]amix=inputs=2:duration=shortest:dropout_transition=2[a]';
+      mapAudio = '[a]';
+    } else if (audioMode === 'second' && p.secondHasAudio) {
+      mapAudio = '1:a';
+    } else if (audioMode !== 'mute' && p.hasAudio) {
+      mapAudio = '0:a';
+    } else if (audioMode !== 'mute' && p.secondHasAudio) {
+      mapAudio = '1:a';
+    }
+
+    args.push('-filter_complex', fc, '-map', '[v]');
+    if (mapAudio) args.push('-map', mapAudio, '-c:a', 'aac', '-b:a', '128k');
+    args.push(...videoCodecArgs(p), '-movflags', '+faststart', output);
+
+    return {
+      output,
+      steps: [{ args, totalDuration: num(p.totalDuration, 0) }],
+    };
+  },
+
+  // 绿幕 / 纯色抠像透明 GIF
+  chromaGif(p) {
+    const output = defaultOutput(p.input, '透明', 'gif');
+    const rawColor = String(p.color || '#00ff00').trim();
+    const color = '0x' + rawColor.replace(/^#|^0x/i, '').slice(0, 6).padStart(6, '0');
+    const sim = Math.min(Math.max(num(p.similarity, 0.2), 0.01), 0.6).toFixed(2);
+    const blend = Math.min(Math.max(num(p.blend, 0.08), 0), 0.4).toFixed(2);
+    const fps = Math.min(Math.max(num(p.fps, 12), 4), 25);
+    const width = even(Math.min(Math.max(num(p.width, 480), 64), 1080));
+    const vf = `fps=${fps},${scaleFilter(width)},format=rgba,colorkey=${color}:${sim}:${blend}`;
+
+    return gifPlan({
+      input: p.input, output, colors: 128,
+      dither: 'bayer:bayer_scale=5',
+      statsMode: 'full',
+      diffMode: 'none',
+      reserveTransparent: true,
+      totalDuration: num(p.totalDuration, 0),
+      vf,
+    });
+  },
+
+  // 动图/视频进度条与圆角装饰
+  decorateMedia(p) {
+    const ext = path.extname(p.input).slice(1).toLowerCase();
+    const isGif = ext === 'gif';
+    const W = even(Math.max(num(p.srcW, 480), 32));
+    const H = even(Math.max(num(p.srcH, 270), 32));
+    const D = Math.max(num(p.totalDuration, 0), 0.1);
+    const progressBar = ['top', 'bottom'].includes(p.progressBar) ? p.progressBar : 'none';
+    const rounded = Math.min(Math.max(Math.round(num(p.rounded, 0)), 0), Math.floor(Math.min(W, H) / 2));
+    if (progressBar === 'none' && rounded === 0) {
+      throw new Error('请至少开启“进度条”或“圆角边框”之一');
+    }
+
+    const barH = Math.min(Math.max(Math.round(num(p.barHeight, 6)), 2), Math.floor(H / 4));
+    const barColor = '0x' + String(p.barColor || '#22d3ee').replace(/^#|^0x/i, '').slice(0, 6).padStart(6, '0');
+    const bgHex = '0x' + String(p.bgColor || '#000000').replace(/^#|^0x/i, '').slice(0, 6).padStart(6, '0');
+
+    const extraInputs = [];
+    const cleanup = [];
+    let chain = '[0:v]format=rgba[v0]';
+    let lastLabel = 'v0';
+
+    if (progressBar !== 'none') {
+      const barY = progressBar === 'top' ? 0 : H - barH;
+      const idx = 1 + extraInputs.filter((a) => a === '-i').length;
+      extraInputs.push('-f', 'lavfi', '-i', `color=c=${barColor}:s=${W}x${barH}:r=30`);
+      chain += `;[${lastLabel}][${idx}:v]overlay=x='-W+(W*t/${D.toFixed(3)})':y=${barY}:shortest=1[vbar]`;
+      lastLabel = 'vbar';
+    }
+
+    if (rounded > 0) {
+      const maskFile = path.join(os.tmpdir(), `vgt_mask_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.pgm`);
+      writeRoundedMaskPgm(maskFile, W, H, rounded);
+      cleanup.push(maskFile);
+      const maskIdx = 1 + extraInputs.filter((a) => a === '-i').length;
+      extraInputs.push('-loop', '1', '-i', maskFile);
+      chain += `;[${maskIdx}:v]format=gray[msk];[${lastLabel}][msk]alphamerge=shortest=1[vmask]`;
+      lastLabel = 'vmask';
+    }
+
+    if (isGif) {
+      const output = defaultOutput(p.input, '装饰', 'gif');
+      const fc = `${chain};[${lastLabel}]copy[x]`;
+      const plan = gifPlan({
+        input: p.input, output, extraInputs, fc,
+        colors: 256, diffMode: rounded > 0 ? 'none' : 'rectangle',
+        reserveTransparent: rounded > 0, totalDuration: D,
+      });
+      plan.cleanup = [...(plan.cleanup || []), ...cleanup];
+      return plan;
+    }
+
+    const output = defaultOutput(p.input, '装饰', videoExt(p.input));
+    if (rounded > 0) {
+      const bgIdx = 1 + extraInputs.filter((a) => a === '-i').length;
+      extraInputs.push('-f', 'lavfi', '-i', `color=c=${bgHex}:s=${W}x${H}:r=30`);
+      chain += `;[${bgIdx}:v][${lastLabel}]overlay=0:0:shortest=1,format=yuv420p[vout]`;
+    } else {
+      chain += `;[${lastLabel}]format=yuv420p[vout]`;
+    }
+
+    return {
+      output,
+      cleanup,
+      steps: [{
+        args: ['-i', p.input, ...extraInputs, '-filter_complex', chain, '-map', '[vout]', '-map', '0:a?', ...videoCodecArgs(p), '-c:a', 'copy', output],
+        totalDuration: D,
+      }],
+    };
+  },
+
+  // 硬字幕压制 & 内嵌字幕提取
+  subtitleTool(p) {
+    if (p.mode === 'extract') {
+      if (p.hasSubtitles === false) throw new Error('该视频没有内嵌字幕流，无法提取');
+      const output = defaultOutput(p.input, '字幕', 'srt');
+      const streamIdx = Math.max(0, Math.round(num(p.subIndex, 0)));
+      return {
+        output,
+        steps: [{
+          args: ['-i', p.input, '-map', `0:s:${streamIdx}`, output],
+          totalDuration: num(p.totalDuration, 0),
+        }],
+      };
+    }
+
+    const sub = p.subtitle;
+    if (!sub) throw new Error('请先选择外挂字幕文件 (.srt / .ass / .vtt)');
+    const subExt = path.extname(sub).toLowerCase() || '.srt';
+    const tmpSub = path.join(os.tmpdir(), `vgt_sub_${Date.now()}_${Math.random().toString(36).slice(2, 6)}${subExt}`);
+    fs.copyFileSync(sub, tmpSub);
+    const subArg = tmpSub.replace(/\\/g, '/').replace(/:/g, '\\:');
+
+    const fontSize = Math.min(Math.max(Math.round(num(p.fontSize, 22)), 10), 72);
+    const marginV = Math.min(Math.max(Math.round(num(p.marginV, 24)), 4), 200);
+    const vf = subExt === '.ass'
+      ? `ass='${subArg}'`
+      : `subtitles='${subArg}':force_style='FontName=Microsoft YaHei,FontSize=${fontSize},MarginV=${marginV}'`;
+
+    const output = defaultOutput(p.input, '字幕', videoExt(p.input));
+    return {
+      output,
+      cleanup: [tmpSub],
+      steps: [{
+        args: ['-i', p.input, '-vf', vf, ...videoCodecArgs(p), '-c:a', 'copy', output],
+        totalDuration: num(p.totalDuration, 0),
+      }],
+    };
+  },
+
+  // 画面调色与防抖（亮度/对比度/饱和度/锐化/防抖）
+  colorStab(p) {
+    const brightness = Math.min(Math.max(num(p.brightness, 0), -0.5), 0.5);
+    const contrast = Math.min(Math.max(num(p.contrast, 1), 0.5), 2);
+    const saturation = Math.min(Math.max(num(p.saturation, 1), 0), 3);
+    const vfParts = [];
+    if (p.stabilize === 'deshake') vfParts.push('deshake');
+    if (brightness !== 0 || contrast !== 1 || saturation !== 1) {
+      vfParts.push(`eq=brightness=${brightness.toFixed(2)}:contrast=${contrast.toFixed(2)}:saturation=${saturation.toFixed(2)}`);
+    }
+    if (p.sharpen === 'light') vfParts.push('unsharp=5:5:0.6:5:5:0.0');
+    else if (p.sharpen === 'strong') vfParts.push('unsharp=5:5:1.2:5:5:0.0');
+
+    if (!vfParts.length) throw new Error('请至少调整一项画面参数或开启防抖');
+    const vf = vfParts.join(',');
+    const ext = path.extname(p.input).slice(1).toLowerCase();
+    const D = num(p.totalDuration, 0);
+
+    if (ext === 'gif') {
+      return gifPlan({ input: p.input, output: defaultOutput(p.input, '调色', 'gif'), colors: 256, totalDuration: D, vf });
+    }
+    const output = defaultOutput(p.input, '调色', videoExt(p.input));
+    return {
+      output,
+      steps: [{
+        args: ['-i', p.input, '-vf', vf, ...videoCodecArgs(p), '-c:a', 'copy', output],
+        totalDuration: D,
+      }],
+    };
+  },
+
+  // 视频缩略图预览墙（九宫格 / 雪碧图）
+  contactSheet(p) {
+    const D = num(p.totalDuration, 0);
+    if (D <= 0) throw new Error('无法读取视频时长');
+    const [cols, rows] = (p.layout || '3x3').split('x').map((n) => Math.min(Math.max(parseInt(n, 10) || 3, 2), 6));
+    const totalTiles = cols * rows;
+    const cellW = even(Math.min(Math.max(num(p.cellWidth, 400), 160), 960));
+    const fmt = p.format === 'png' ? 'png' : 'jpg';
+    const output = defaultOutput(p.input, `预览墙_${cols}x${rows}`, fmt);
+
+    const sampleFps = (totalTiles / Math.max(D, 0.2)).toFixed(5);
+    const vfParts = [`fps=${sampleFps}`, `scale=${cellW}:-2:flags=lanczos`];
+    if (p.timestamps !== 'no') {
+      vfParts.push(`drawtext=fontfile='${FONT}':text='%{pts\\:hms}':x=10:y=h-th-10:fontsize=18:fontcolor=white:box=1:boxcolor=black@0.65:boxborderw=4`);
+    }
+    vfParts.push(`tile=${cols}x${rows}:padding=8:margin=8:color=0x111318`);
+
+    const args = ['-i', p.input, '-vf', vfParts.join(','), '-frames:v', '1'];
+    if (fmt === 'jpg') args.push('-q:v', '2');
+    args.push(output);
+
+    return {
+      output,
+      steps: [{ args, totalDuration: D }],
+    };
+  },
+
+  // 清除隐私元数据（无损剥离 EXIF / GPS / 设备型号）
+  stripMeta(p) {
+    const ext = path.extname(p.input).slice(1).toLowerCase();
+    const isGifOrImg = ext === 'gif' || ['png', 'jpg', 'jpeg', 'webp', 'bmp'].includes(ext);
+    const outExt = isGifOrImg ? ext : (['mp3', 'm4a', 'wav', 'flac'].includes(ext) ? ext : videoExt(p.input));
+    const output = defaultOutput(p.input, '去元数据', outExt);
+    const args = isGifOrImg
+      ? ['-i', p.input, '-map_metadata', '-1', output]
+      : ['-i', p.input, '-map', '0', '-c', 'copy', '-map_metadata', '-1', '-fflags', '+bitexact', output];
+
+    return {
+      output,
+      steps: [{ args, totalDuration: num(p.totalDuration, 0) }],
+    };
+  },
 };
+
+// 生成圆角抗锯齿灰度遮罩 (.pgm)
+function writeRoundedMaskPgm(filePath, w, h, r) {
+  const header = Buffer.from(`P5\n${w} ${h}\n255\n`, 'ascii');
+  const data = Buffer.alloc(w * h, 255);
+  const rad = Math.min(r, Math.floor(Math.min(w, h) / 2));
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let dx = 0;
+      let dy = 0;
+      if (x < rad && y < rad) { dx = rad - x; dy = rad - y; }
+      else if (x >= w - rad && y < rad) { dx = x - (w - 1 - rad); dy = rad - y; }
+      else if (x < rad && y >= h - rad) { dx = rad - x; dy = y - (h - 1 - rad); }
+      else if (x >= w - rad && y >= h - rad) { dx = x - (w - 1 - rad); dy = y - (h - 1 - rad); }
+      else continue;
+      const dist = Math.hypot(dx, dy);
+      if (dist >= rad + 0.5) data[y * w + x] = 0;
+      else if (dist > rad - 0.5) data[y * w + x] = Math.round((rad + 0.5 - dist) * 255);
+    }
+  }
+  fs.writeFileSync(filePath, Buffer.concat([header, data]));
+}
+
+// 运行 ffmpeg 并捕获 stderr（用于 cropdetect 等探测类命令）
+function runFfmpegCapture(taskId, argsList) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(FFMPEG, ['-hide_banner', '-y', ...argsList], { windowsHide: true });
+    runningTasks.set(taskId, child);
+    let stderr = '';
+    let cancelled = false;
+    child.stderr.on('data', (d) => { stderr = (stderr + d.toString()).slice(-16000); });
+    runningTasks.get(taskId).__cancel = () => { cancelled = true; };
+    child.on('error', (err) => { runningTasks.delete(taskId); reject(err); });
+    child.on('close', (code) => {
+      runningTasks.delete(taskId);
+      if (cancelled) return reject(new Error('任务已取消'));
+      if (code === 0) return resolve(stderr);
+      const lines = stderr.split('\n').filter((l) => l.trim()).slice(-3).join('\n');
+      reject(new Error(`ffmpeg 失败（退出码 ${code}）：\n${lines || '未知错误'}`));
+    });
+  });
+}
 
 // 执行一个任务：构建命令 → （动态计划或静态步骤）→ 清理临时文件
 async function executeTask(taskId, feature, params, onProgress) {
   assertBinaries();
   const builder = builders[feature];
   if (!builder) throw new Error(`未知功能：${feature}`);
-  const plan = builder(params);
+
+  if (params?.__hwAccel === 'auto' && !_hwCache) {
+    await detectHwEncoders().catch(() => {});
+  }
+
+  _outCtx = params?.__outputMode ? { mode: params.__outputMode, dir: params.__outputDir } : null;
+  let plan;
+  try {
+    plan = builder(params);
+  } finally {
+    _outCtx = null;
+  }
 
   if (plan.run) {
     const result = await plan.run(taskId, onProgress);
@@ -966,7 +1629,7 @@ async function executeTask(taskId, feature, params, onProgress) {
 
   try {
     for (const step of plan.steps) {
-      await runFfmpeg(taskId, step.args, step);
+      await runFfmpeg(taskId, step.args, { ...step, onProgress });
     }
   } finally {
     for (const f of plan.cleanup || []) {
@@ -979,4 +1642,4 @@ async function executeTask(taskId, feature, params, onProgress) {
   return { output: plan.output, outputType: plan.outputType };
 }
 
-module.exports = { probe, executeTask, cancelTask, FFMPEG };
+module.exports = { probe, executeTask, cancelTask, detectHwEncoders, FFMPEG };

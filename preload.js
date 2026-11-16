@@ -4,6 +4,8 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
   pickFile: (feature, kind) => ipcRenderer.invoke('pick-file', feature, kind),
+  pickDir: () => ipcRenderer.invoke('pick-dir'),
+  detectHw: () => ipcRenderer.invoke('detect-hw'),
   probe: (filePath) => ipcRenderer.invoke('probe', filePath),
   probeMulti: (filePaths) => ipcRenderer.invoke('probe-multi', filePaths),
   firstFrame: (filePath) => ipcRenderer.invoke('first-frame', filePath),

@@ -45,45 +45,81 @@ app.on('window-all-closed', () => {
 
 const VIDEO_EXT = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'ts', 'm4v'];
 
+const ALL_MEDIA_EXT = [...VIDEO_EXT, 'gif'];
+const AUDIO_EXT = ['mp3', 'm4a', 'wav', 'flac'];
+const IMG_EXT = ['jpg', 'jpeg', 'png', 'webp', 'bmp'];
+
 // 各功能对应的文件选择过滤器（multi: 是否允许多选）
 const FILE_FILTERS = {
   videoToGif: { exts: VIDEO_EXT },
   gifToVideo: { exts: ['gif'] },
-  toWebp: { exts: [...VIDEO_EXT, 'gif'] },
+  toWebp: { exts: ALL_MEDIA_EXT },
   convertVideo: { exts: VIDEO_EXT },
   compressGif: { exts: ['gif'] },
   gifText: { exts: ['gif'] },
-  compressTarget: { exts: [...VIDEO_EXT, 'gif'] },
+  compressTarget: { exts: ALL_MEDIA_EXT },
+  chromaGif: { exts: ALL_MEDIA_EXT },
+  decorateMedia: { exts: ALL_MEDIA_EXT },
   trimVideo: { exts: VIDEO_EXT },
+  multiCut: { exts: VIDEO_EXT },
+  splitVideo: { exts: VIDEO_EXT },
   mergeVideos: { exts: VIDEO_EXT, multi: true },
-  videoCrop: { exts: [...VIDEO_EXT, 'gif'] },
-  videoBlur: { exts: [...VIDEO_EXT, 'gif'] },
-  aspectPad: { exts: [...VIDEO_EXT, 'gif'] },
-  watermark: { exts: [...VIDEO_EXT, 'gif'] },
-  rotateFlip: { exts: [...VIDEO_EXT, 'gif'] },
-  reverse: { exts: [...VIDEO_EXT, 'gif'] },
-  changeSpeed: { exts: [...VIDEO_EXT, 'gif'] },
-  extractAudio: { exts: [...VIDEO_EXT, 'mp3', 'm4a', 'wav', 'flac'] },
+  videoCrop: { exts: ALL_MEDIA_EXT },
+  autoCrop: { exts: ALL_MEDIA_EXT },
+  videoBlur: { exts: ALL_MEDIA_EXT },
+  aspectPad: { exts: ALL_MEDIA_EXT },
+  pipSplit: { exts: ALL_MEDIA_EXT },
+  colorStab: { exts: ALL_MEDIA_EXT },
+  watermark: { exts: ALL_MEDIA_EXT },
+  subtitleTool: { exts: VIDEO_EXT },
+  rotateFlip: { exts: ALL_MEDIA_EXT },
+  reverse: { exts: ALL_MEDIA_EXT },
+  changeSpeed: { exts: ALL_MEDIA_EXT },
+  extractAudio: { exts: [...VIDEO_EXT, ...AUDIO_EXT] },
   audioAdjust: { exts: VIDEO_EXT },
   addMusic: { exts: VIDEO_EXT },
-  snapshot: { exts: [...VIDEO_EXT, 'gif'] },
-  imagesTo: { exts: ['jpg', 'jpeg', 'png', 'webp', 'bmp'], multi: true },
-  // 第二文件（背景音乐 / 水印图片）
+  snapshot: { exts: ALL_MEDIA_EXT },
+  contactSheet: { exts: VIDEO_EXT },
+  stripMeta: { exts: [...ALL_MEDIA_EXT, ...AUDIO_EXT, ...IMG_EXT] },
+  imagesTo: { exts: IMG_EXT, multi: true },
+  // 第二文件（背景音乐 / 水印图片 / 分屏副视频 / 外挂字幕）
   audioFile: { exts: ['mp3', 'wav', 'm4a', 'flac', 'aac', 'ogg'] },
   imageFile: { exts: ['png', 'jpg', 'jpeg', 'webp', 'bmp'] },
+  videoGifFile: { exts: ALL_MEDIA_EXT },
+  subFile: { exts: ['srt', 'ass', 'ssa', 'vtt'] },
 };
 
+const SINGLE_ONLY = new Set(['videoCrop', 'videoBlur', 'multiCut', 'audioFile', 'imageFile', 'videoGifFile', 'subFile']);
+
 ipcMain.handle('pick-file', async (_e, feature, kind) => {
-  const cfg = FILE_FILTERS[kind || feature] || { exts: ['*'] };
+  const targetKey = kind || feature;
+  const cfg = FILE_FILTERS[targetKey] || { exts: ['*'] };
   const filters = [
     { name: '支持的文件', extensions: cfg.exts },
     { name: '所有文件', extensions: ['*'] },
   ];
   const properties = ['openFile'];
-  if (cfg.multi) properties.push('multiSelections');
+  const allowMulti = cfg.multi || !SINGLE_ONLY.has(targetKey);
+  if (allowMulti) properties.push('multiSelections');
   const { canceled, filePaths } = await dialog.showOpenDialog(win, { properties, filters });
   if (canceled || !filePaths.length) return null;
-  return cfg.multi ? filePaths : filePaths[0];
+  return allowMulti ? filePaths : filePaths[0];
+});
+
+ipcMain.handle('pick-dir', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  if (canceled || !filePaths.length) return null;
+  return filePaths[0];
+});
+
+ipcMain.handle('detect-hw', async () => {
+  try {
+    return await ffmpeg.detectHwEncoders();
+  } catch {
+    return { available: [], primary: null };
+  }
 });
 
 ipcMain.handle('probe', async (_e, filePath) => {
@@ -94,7 +130,7 @@ ipcMain.handle('probe', async (_e, filePath) => {
   }
 });
 
-// 批量探测（合并/图片序列用）
+// 批量探测（合并/图片序列/批量处理用）
 ipcMain.handle('probe-multi', async (_e, filePaths) => {
   const results = [];
   for (const p of filePaths) {
@@ -127,6 +163,7 @@ ipcMain.handle('first-frame', (_e, filePath) => {
 ipcMain.handle('task:start', async (_e, { feature, params }) => {
   const taskId = `t${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
   const send = (channel, payload) => win?.webContents.send(channel, { taskId, ...payload });
+  send('task:progress', { ratio: 0 });
   try {
     const result = await ffmpeg.executeTask(taskId, feature, params, (ratio) => {
       send('task:progress', { ratio });
