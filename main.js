@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, Notification } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
@@ -8,10 +8,42 @@ const ffmpeg = require('./ffmpeg');
 
 let win = null;
 
+function getStateFile() {
+  return path.join(app.getPath('userData'), 'window-state.json');
+}
+
+function loadWindowState() {
+  try {
+    const data = JSON.parse(fs.readFileSync(getStateFile(), 'utf8'));
+    if (data && typeof data.width === 'number' && typeof data.height === 'number') {
+      return {
+        width: Math.max(960, data.width),
+        height: Math.max(640, data.height),
+        x: typeof data.x === 'number' ? data.x : undefined,
+        y: typeof data.y === 'number' ? data.y : undefined,
+        maximized: !!data.maximized,
+      };
+    }
+  } catch {}
+  return { width: 1180, height: 780 };
+}
+
+function saveWindowState() {
+  if (!win || win.isDestroyed()) return;
+  try {
+    const maximized = win.isMaximized();
+    const bounds = maximized ? win.getNormalBounds() : win.getBounds();
+    fs.writeFileSync(getStateFile(), JSON.stringify({ ...bounds, maximized }), 'utf8');
+  } catch {}
+}
+
 function createWindow() {
+  const state = loadWindowState();
   win = new BrowserWindow({
-    width: 1180,
-    height: 780,
+    width: state.width,
+    height: state.height,
+    x: state.x,
+    y: state.y,
     minWidth: 960,
     minHeight: 640,
     backgroundColor: '#0f1115',
@@ -22,10 +54,38 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
+  if (state.maximized) win.maximize();
   Menu.setApplicationMenu(null);
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   win.webContents.on('did-finish-load', () => console.log('[main] renderer loaded OK'));
   win.webContents.on('render-process-gone', (_e, details) => console.error('[main] renderer gone:', details.reason));
+
+  let saveTimer = null;
+  const scheduleSave = () => {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(saveWindowState, 250);
+  };
+  win.on('resize', scheduleSave);
+  win.on('move', scheduleSave);
+
+  win.on('close', (e) => {
+    saveWindowState();
+    if (ffmpeg.hasRunningTasks()) {
+      const choice = dialog.showMessageBoxSync(win, {
+        type: 'warning',
+        buttons: ['继续在后台处理', '停止任务并退出'],
+        defaultId: 0,
+        cancelId: 0,
+        title: '有任务正在运行',
+        message: '当前还有视频/GIF 处理任务未完成，关闭窗口会中断处理。确定要退出吗？',
+      });
+      if (choice === 0) {
+        e.preventDefault();
+        return;
+      }
+      ffmpeg.cancelAllTasks();
+    }
+  });
 }
 
 app.whenReady().then(() => {
@@ -46,8 +106,10 @@ app.on('window-all-closed', () => {
 const VIDEO_EXT = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'ts', 'm4v'];
 
 const ALL_MEDIA_EXT = [...VIDEO_EXT, 'gif'];
+const ALL_VISUAL_EXT = [...ALL_MEDIA_EXT, 'jpg', 'jpeg', 'png', 'webp', 'bmp', 'avif'];
 const AUDIO_EXT = ['mp3', 'm4a', 'wav', 'flac'];
-const IMG_EXT = ['jpg', 'jpeg', 'png', 'webp', 'bmp'];
+const IMG_EXT = ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'avif'];
+const SVG_EXT = ['svg'];
 
 // 各功能对应的文件选择过滤器（multi: 是否允许多选）
 const FILE_FILTERS = {
@@ -60,19 +122,31 @@ const FILE_FILTERS = {
   compressTarget: { exts: ALL_MEDIA_EXT },
   chromaGif: { exts: ALL_MEDIA_EXT },
   decorateMedia: { exts: ALL_MEDIA_EXT },
+  // 图片专属模块
+  imageConvert: { exts: IMG_EXT },
+  imageCompressTarget: { exts: IMG_EXT },
+  imageStitch: { exts: IMG_EXT, multi: true },
+  imageSplit: { exts: IMG_EXT },
+  imageCutout: { exts: IMG_EXT },
+  imageFrame: { exts: IMG_EXT },
+  // SVG 矢量模块
+  svgToRaster: { exts: SVG_EXT },
+  svgOptimize: { exts: SVG_EXT },
+  imageToSvg: { exts: IMG_EXT },
+  // 剪辑 / 工具（兼容静态图片）
   trimVideo: { exts: VIDEO_EXT },
   multiCut: { exts: VIDEO_EXT },
   splitVideo: { exts: VIDEO_EXT },
   mergeVideos: { exts: VIDEO_EXT, multi: true },
-  videoCrop: { exts: ALL_MEDIA_EXT },
+  videoCrop: { exts: ALL_VISUAL_EXT },
   autoCrop: { exts: ALL_MEDIA_EXT },
-  videoBlur: { exts: ALL_MEDIA_EXT },
-  aspectPad: { exts: ALL_MEDIA_EXT },
+  videoBlur: { exts: ALL_VISUAL_EXT },
+  aspectPad: { exts: ALL_VISUAL_EXT },
   pipSplit: { exts: ALL_MEDIA_EXT },
-  colorStab: { exts: ALL_MEDIA_EXT },
-  watermark: { exts: ALL_MEDIA_EXT },
+  colorStab: { exts: ALL_VISUAL_EXT },
+  watermark: { exts: ALL_VISUAL_EXT },
   subtitleTool: { exts: VIDEO_EXT },
-  rotateFlip: { exts: ALL_MEDIA_EXT },
+  rotateFlip: { exts: ALL_VISUAL_EXT },
   reverse: { exts: ALL_MEDIA_EXT },
   changeSpeed: { exts: ALL_MEDIA_EXT },
   extractAudio: { exts: [...VIDEO_EXT, ...AUDIO_EXT] },
@@ -143,13 +217,16 @@ ipcMain.handle('probe-multi', async (_e, filePaths) => {
   return results;
 });
 
-// 提取首帧为 dataURL（可视化裁剪画布用）
-ipcMain.handle('first-frame', (_e, filePath) => {
+// 提取指定时间点画面为 dataURL（可视化裁剪 / 打码 / 吸管取色用；静态图片不传 -ss）
+ipcMain.handle('first-frame', (_e, filePath, timeSec = 0.1) => {
   return new Promise((resolve) => {
-    const child = spawn(ffmpeg.FFMPEG, [
-      '-hide_banner', '-ss', '0.1', '-i', filePath,
-      '-vf', 'scale=400:-2', '-frames:v', '1', '-f', 'image2', 'pipe:1',
-    ], { windowsHide: true });
+    const ext = path.extname(filePath).slice(1).toLowerCase();
+    const isImg = IMG_EXT.includes(ext);
+    const t = !isImg && Number.isFinite(parseFloat(timeSec)) ? Math.max(0, parseFloat(timeSec)) : 0;
+    const args = ['-hide_banner'];
+    if (t > 0) args.push('-ss', t.toFixed(2));
+    args.push('-i', filePath, '-vf', "scale='min(640,iw)':-1", '-frames:v', '1', '-f', 'image2', 'pipe:1');
+    const child = spawn(ffmpeg.FFMPEG, args, { windowsHide: true });
     const chunks = [];
     child.stdout.on('data', (d) => chunks.push(d));
     child.on('error', () => resolve(null));
@@ -162,11 +239,17 @@ ipcMain.handle('first-frame', (_e, filePath) => {
 
 ipcMain.handle('task:start', async (_e, { feature, params }) => {
   const taskId = `t${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
-  const send = (channel, payload) => win?.webContents.send(channel, { taskId, ...payload });
+  const send = (channel, payload) => {
+    if (win && !win.isDestroyed()) win.webContents.send(channel, { taskId, ...payload });
+  };
   send('task:progress', { ratio: 0 });
+  if (win && !win.isDestroyed() && !params?.__batchItem) win.setProgressBar(0);
   try {
     const result = await ffmpeg.executeTask(taskId, feature, params, (ratio) => {
       send('task:progress', { ratio });
+      if (win && !win.isDestroyed() && !params?.__batchItem) {
+        win.setProgressBar(Math.max(0, Math.min(1, ratio)));
+      }
     });
     const payload = {
       output: result.output,
@@ -174,16 +257,30 @@ ipcMain.handle('task:start', async (_e, { feature, params }) => {
       targetReached: result.targetReached,
       targetMB: result.targetMB,
     };
+    if (win && !win.isDestroyed() && !params?.__batchItem) win.setProgressBar(-1);
     send('task:done', payload);
     return { ok: true, taskId, ...payload };
   } catch (err) {
     const cancelled = err.message === '任务已取消';
+    if (win && !win.isDestroyed() && !params?.__batchItem) win.setProgressBar(-1);
     send(cancelled ? 'task:cancelled' : 'task:error', { error: err.message });
     return { ok: false, cancelled, error: err.message, taskId };
   }
 });
 
 ipcMain.handle('task:cancel', (_e, taskId) => ffmpeg.cancelTask(taskId));
+
+ipcMain.on('set-progress-bar', (_e, ratio) => {
+  if (win && !win.isDestroyed()) {
+    win.setProgressBar(typeof ratio === 'number' && ratio >= 0 ? Math.min(1, ratio) : -1);
+  }
+});
+
+ipcMain.on('notify-done', (_e, title, body) => {
+  if (win && !win.isDestroyed() && !win.isFocused() && Notification.isSupported()) {
+    new Notification({ title: title || '视频 · GIF 工具箱', body: body || '处理已完成' }).show();
+  }
+});
 
 ipcMain.handle('show-in-folder', (_e, filePath) => {
   shell.showItemInFolder(filePath);
@@ -207,5 +304,16 @@ ipcMain.handle('count-dir', (_e, dirPath) => {
     return fs.readdirSync(dirPath).filter((f) => !f.startsWith('.')).length;
   } catch {
     return 0;
+  }
+});
+
+ipcMain.handle('list-dir', (_e, dirPath, limit = 6) => {
+  try {
+    return fs.readdirSync(dirPath)
+      .filter((f) => !f.startsWith('.'))
+      .slice(0, limit)
+      .map((f) => path.join(dirPath, f));
+  } catch {
+    return [];
   }
 });

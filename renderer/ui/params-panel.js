@@ -1,0 +1,453 @@
+(() => {
+'use strict';
+
+window.VGT = window.VGT || {};
+
+const SAVABLE_TYPES = new Set(['select', 'chips', 'range', 'color', 'number', 'text']);
+const round1 = (n) => Math.round(n * 10) / 10;
+
+function readChips(key) {
+  const row = document.querySelector(`.chip-row[data-key="${key}"]`);
+  const on = row?.querySelector('.chip.on');
+  return on ? on.dataset.val : null;
+}
+
+function collectFieldValues() {
+  const values = {};
+  document.querySelectorAll('#params [data-key]').forEach((el) => {
+    if (el.classList.contains('chip-row')) values[el.dataset.key] = readChips(el.dataset.key);
+    else values[el.dataset.key] = el.value;
+  });
+  document.querySelectorAll('#params input[type="range"][data-key]').forEach((range) => {
+    values[range.dataset.key] = parseFloat(range.value);
+  });
+  return values;
+}
+
+function loadSavedParams(featureId) {
+  try { return JSON.parse(localStorage.getItem(`vgt_params_${featureId}`) || 'null'); } catch { return null; }
+}
+
+function saveCurrentParams(feature) {
+  const vals = collectFieldValues();
+  const data = {};
+  for (const field of feature.fields) {
+    if (field.key && SAVABLE_TYPES.has(field.type) && vals[field.key] !== undefined) {
+      data[field.key] = vals[field.key];
+    }
+  }
+  try { localStorage.setItem(`vgt_params_${feature.id}`, JSON.stringify(data)); } catch {}
+}
+
+function createParamsController(appCtx) {
+  const { $, getCurrentFeature, getFile, getBatchFiles, toast, prefillTimes } = appCtx;
+
+  const isContextImage = () => {
+    const file = getFile();
+    if (file?.info?.isImage) return true;
+    const batch = getBatchFiles();
+    if (batch?.length && batch.every((b) => b.info?.isImage)) return true;
+    return false;
+  };
+
+  function syncVisibility() {
+    const currentFeature = getCurrentFeature();
+    const values = collectFieldValues();
+    const ctx = { isImage: isContextImage() };
+    for (const field of currentFeature.fields) {
+      if (!field.showIf) continue;
+      let target = null;
+      if (field.key) {
+        target = document.querySelector(`#params .field[data-field-key="${field.key}"]`);
+      } else if (field.type === 'times') {
+        target = document.querySelector('#t-start')?.closest('.field');
+      }
+      if (target) target.style.display = field.showIf(values, ctx) ? '' : 'none';
+    }
+  }
+
+  function renderParams() {
+    const currentFeature = getCurrentFeature();
+    const file = getFile();
+
+    window.__crop = null;
+    window.__secondFile = null;
+    window.__secondInfo = null;
+    window.__segments = [];
+    const box = $('params');
+    box.innerHTML = '';
+
+    if (currentFeature.fields.length) {
+      const head = document.createElement('div');
+      head.className = 'params-head';
+      head.innerHTML = `<span>参数设置</span><button class="batch-btn" id="btn-reset-params" title="清除本功能已记忆的参数">↺ 恢复默认</button>`;
+      box.appendChild(head);
+    }
+
+    const grid = document.createElement('div');
+    grid.className = 'param-grid';
+    const hasVideo = !!document.querySelector('#preview-box video');
+    const saved = loadSavedParams(currentFeature.id);
+
+    for (const field of currentFeature.fields) {
+      const wrap = document.createElement('div');
+      wrap.className = 'field' + (field.fullWidth ? ' field-full' : '');
+      if (field.key) wrap.dataset.fieldKey = field.key;
+      if (field.showIf) wrap.dataset.showIf = '1';
+
+      let initVal = field.def;
+      if (saved && field.key && saved[field.key] !== undefined && SAVABLE_TYPES.has(field.type)) {
+        initVal = String(saved[field.key]);
+      }
+
+      if (field.type === 'times') {
+        const pickHtml = hasVideo
+          ? `<div class="chip-row"><button class="chip" id="pick-t-start">⏮ 设为起点</button><button class="chip" id="pick-t-end">⏭ 设为终点</button></div>`
+          : '';
+        wrap.innerHTML = `
+          <label>时间段（秒）</label>
+          <div class="times-row">
+            <input type="number" id="t-start" value="0" min="0" step="0.1" />
+            <span class="times-sep">→</span>
+            <input type="number" id="t-end" value="0" min="0" step="0.1" />
+          </div>
+          <div class="chip-row" id="times-chips"></div>${pickHtml}`;
+      } else if (field.type === 'multiSegments') {
+        wrap.innerHTML = `<label>时间段列表（秒）</label>
+          <div class="seg-list" id="seg-list"></div>
+          <div class="chip-row">
+            <button class="chip" id="seg-add">+ 添加片段</button>
+          </div>`;
+      } else if (field.type === 'select') {
+        const validVal = field.options.some(([v]) => v === initVal) ? initVal : field.def;
+        wrap.innerHTML = `<label>${field.label}</label>
+          <select data-key="${field.key}">${field.options.map(([v, l]) => `<option value="${v}" ${v === validVal ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
+      } else if (field.type === 'chips') {
+        const validVal = field.options.some(([v]) => v === initVal) ? initVal : field.def;
+        wrap.innerHTML = `<label>${field.label}</label>
+          <div class="chip-row" data-key="${field.key}">
+            ${field.options.map(([v, l]) => `<button class="chip ${v === validVal ? 'on' : ''}" data-val="${v}">${l}</button>`).join('')}
+          </div>`;
+      } else if (field.type === 'range') {
+        const unit = field.unit ?? 'x';
+        const n = parseFloat(initVal);
+        const val = Number.isFinite(n) ? Math.min(Math.max(n, field.min), field.max) : field.def;
+        wrap.innerHTML = `<label>${field.label}：<span class="range-val" data-range-key="${field.key}">${val}${unit}</span></label>
+          <input type="range" data-key="${field.key}" data-unit="${unit}" min="${field.min}" max="${field.max}" step="${field.step}" value="${val}" />
+          <div class="chip-row">
+            ${field.presets.map(([v, l]) => `<button class="chip preset" data-val="${v}">${l}</button>`).join('')}
+          </div>`;
+      } else if (field.type === 'color') {
+        const val = /^#[0-9a-f]{6}$/i.test(initVal || '') ? initVal : (field.def || '#00ff00');
+        const presetsHtml = field.presets
+          ? field.presets.map(([v, l]) => `<button class="chip preset" data-val="${v}">${l}</button>`).join('')
+          : '';
+        const eyeBtn = field.eyedropper && file
+          ? `<button class="chip" data-eye-key="${field.key}">🪄 画面取色</button>`
+          : '';
+        const eyeBox = field.eyedropper && file
+          ? `<div class="eyedropper-box hidden" id="eyedropper-box-${field.key}"></div>`
+          : '';
+        wrap.innerHTML = `<label>${field.label}</label>
+          <div class="color-row">
+            <input type="color" data-key="${field.key}" value="${val}" />
+            ${presetsHtml}${eyeBtn}
+          </div>${eyeBox}`;
+      } else if (field.type === 'text') {
+        const val = saved && field.key && saved[field.key] !== undefined ? String(saved[field.key]) : (field.def || '');
+        wrap.innerHTML = `<label>${field.label}</label>
+          <input type="text" data-key="${field.key}" placeholder="${field.placeholder || ''}" value="${val.replace(/"/g, '&quot;')}" />`;
+      } else if (field.type === 'number') {
+        const val = saved && field.key && saved[field.key] !== undefined ? saved[field.key] : field.def;
+        const maxAttr = field.max !== undefined ? ` max="${field.max}"` : '';
+        const presetsHtml = field.presets
+          ? `<div class="chip-row">${field.presets.map(([v, l]) => `<button class="chip preset ${String(v) === String(val) ? 'on' : ''}" data-val="${v}">${l}</button>`).join('')}</div>`
+          : '';
+        const videoPickHtml = field.withVideoTime && hasVideo
+          ? `<div class="chip-row"><button class="chip" id="pick-video-time">📍 取当前播放时间</button></div>`
+          : '';
+        wrap.innerHTML = `<label>${field.label}</label>
+          <input type="number" data-key="${field.key}" value="${val}" min="${field.min ?? 0}"${maxAttr} step="${field.step || 1}" />${presetsHtml}${videoPickHtml}`;
+      } else if (field.type === 'secondFile') {
+        wrap.innerHTML = `<label>${field.label}</label>
+          <div class="second-file">
+            <button class="btn btn-ghost btn-sm" id="pick-second" data-kind="${field.kind || 'audioFile'}">📁 选择${field.label}</button>
+            <span class="muted second-name" id="second-name">${field.placeholder || '未选择'}</span>
+          </div>`;
+      } else if (field.type === 'cropCanvas') {
+        const dur = file?.info.duration || 0;
+        const scrubHtml = dur > 0.3
+          ? `<div class="crop-time-row">
+               <span>参考帧</span>
+               <input type="range" id="crop-frame-time" min="0" max="${Math.max(0.1, round1(dur - 0.1))}" step="0.1" value="${Math.min(0.5, round1(dur / 2))}" />
+               <span id="crop-frame-label">${Math.min(0.5, round1(dur / 2))}s</span>
+               ${hasVideo ? '<button class="chip" id="crop-from-vid">📷 取当前播放帧</button>' : ''}
+             </div>`
+          : '';
+        const ratioHtml = currentFeature.id === 'videoCrop'
+          ? `<div class="chip-row" id="crop-ratios">
+               <button class="chip on" data-ratio="0">自由比例</button>
+               <button class="chip" data-ratio="${16 / 9}">16:9</button>
+               <button class="chip" data-ratio="${9 / 16}">9:16</button>
+               <button class="chip" data-ratio="1">1:1</button>
+               <button class="chip" data-ratio="${4 / 3}">4:3</button>
+             </div>`
+          : '';
+        wrap.innerHTML = `<label>${field.label || '拖动鼠标框出要保留的区域'}</label>
+          <div class="crop-tools">${scrubHtml}${ratioHtml}</div>
+          <div class="crop-wrap"><canvas id="crop-canvas"></canvas></div>
+          <div class="chip-row"><button class="chip" id="crop-reset">重置选区</button></div>
+          <div class="muted crop-status" id="crop-status">尚未选择区域</div>`;
+      }
+      grid.appendChild(wrap);
+    }
+    box.appendChild(grid);
+    if (!currentFeature.fields.length) box.classList.add('hidden');
+    else box.classList.remove('hidden');
+
+    const persist = () => saveCurrentParams(currentFeature);
+
+    const resetBtn = box.querySelector('#btn-reset-params');
+    if (resetBtn) {
+      resetBtn.onclick = () => {
+        localStorage.removeItem(`vgt_params_${currentFeature.id}`);
+        renderParams();
+        if (file?.info) prefillTimes(file.info);
+        toast('已恢复默认参数');
+      };
+    }
+
+    box.querySelectorAll('select[data-key]').forEach((sel) => {
+      sel.onchange = () => { syncVisibility(); persist(); };
+    });
+    box.querySelectorAll('input[type="text"][data-key]').forEach((inp) => {
+      inp.addEventListener('input', persist);
+    });
+
+    box.querySelectorAll('.chip-row[data-key]').forEach((row) => {
+      const fieldDef = currentFeature.fields.find((f) => f.key === row.dataset.key);
+      row.querySelectorAll('.chip').forEach((chip) => {
+        chip.onclick = () => {
+          row.querySelectorAll('.chip').forEach((c) => c.classList.remove('on'));
+          chip.classList.add('on');
+          const presetValues = fieldDef?.applyPresets?.[chip.dataset.val];
+          if (presetValues) {
+            for (const [k, val] of Object.entries(presetValues)) {
+              const targetEl = box.querySelector(`[data-key="${k}"]`);
+              if (!targetEl) continue;
+              if (targetEl.classList.contains('chip-row')) {
+                targetEl.querySelectorAll('.chip').forEach((c) => c.classList.toggle('on', c.dataset.val === val));
+              } else {
+                targetEl.value = val;
+                targetEl.dispatchEvent(new Event('input'));
+              }
+            }
+          }
+          syncVisibility();
+          persist();
+        };
+      });
+    });
+
+    box.querySelectorAll('input[type="range"][data-key]').forEach((range) => {
+      const unit = range.dataset.unit ?? '';
+      const valEl = box.querySelector(`.range-val[data-range-key="${range.dataset.key}"]`);
+      const updateLabel = () => { if (valEl) valEl.textContent = `${range.value}${unit}`; persist(); };
+      range.oninput = updateLabel;
+      range.closest('.field').querySelectorAll('.chip.preset').forEach((chip) => {
+        chip.onclick = () => {
+          range.value = chip.dataset.val;
+          updateLabel();
+        };
+      });
+    });
+
+    box.querySelectorAll('input[type="color"][data-key]').forEach((picker) => {
+      const fieldWrap = picker.closest('.field');
+      const chips = fieldWrap?.querySelectorAll('.chip.preset');
+      const syncColorChips = () => {
+        const cur = picker.value.toLowerCase();
+        chips?.forEach((c) => c.classList.toggle('on', c.dataset.val.toLowerCase() === cur));
+      };
+      picker.addEventListener('input', () => { syncColorChips(); persist(); });
+      chips?.forEach((chip) => {
+        chip.onclick = () => {
+          picker.value = chip.dataset.val;
+          syncColorChips();
+          persist();
+        };
+      });
+      syncColorChips();
+
+      const eyeBtn = fieldWrap?.querySelector(`[data-eye-key="${picker.dataset.key}"]`);
+      const eyeBox = fieldWrap?.querySelector(`#eyedropper-box-${picker.dataset.key}`);
+      if (eyeBtn && eyeBox && file) {
+        eyeBtn.onclick = async () => {
+          const opening = eyeBox.classList.contains('hidden');
+          eyeBox.classList.toggle('hidden');
+          if (!opening || eyeBox.dataset.loaded) return;
+          eyeBox.innerHTML = '<div class="muted" style="font-size:12px">正在加载画面…</div>';
+          const v = document.querySelector('#preview-box video');
+          const t = file.info?.isImage
+            ? 0
+            : (v ? round1(v.currentTime || 0) : Math.min(0.5, round1((file.info.duration || 0) / 2)));
+          const dataUrl = await window.api.firstFrame(file.path, t);
+          if (!dataUrl) {
+            eyeBox.innerHTML = '<div class="muted" style="font-size:12px">无法提取画面</div>';
+            return;
+          }
+          const img = new Image();
+          img.onload = () => {
+            eyeBox.innerHTML = '<div class="muted" style="font-size:11.5px;margin-bottom:6px">点击画面任意位置即可吸取背景颜色：</div><canvas class="eyedropper-canvas"></canvas>';
+            const c = eyeBox.querySelector('canvas');
+            c.width = img.width;
+            c.height = img.height;
+            const cctx = c.getContext('2d');
+            cctx.drawImage(img, 0, 0);
+            eyeBox.dataset.loaded = '1';
+            c.onclick = (e) => {
+              const r = c.getBoundingClientRect();
+              const px = Math.min(c.width - 1, Math.max(0, Math.floor((e.clientX - r.left) * (c.width / r.width))));
+              const py = Math.min(c.height - 1, Math.max(0, Math.floor((e.clientY - r.top) * (c.height / r.height))));
+              const [red, green, blue] = cctx.getImageData(px, py, 1, 1).data;
+              const hex = '#' + [red, green, blue].map((x) => x.toString(16).padStart(2, '0')).join('');
+              picker.value = hex;
+              syncColorChips();
+              persist();
+              toast(`已吸取颜色 ${hex}`);
+            };
+          };
+          img.src = dataUrl;
+        };
+      }
+    });
+
+    box.querySelectorAll('input[type="number"][data-key]').forEach((input) => {
+      const fieldWrap = input.closest('.field');
+      const chips = fieldWrap?.querySelectorAll('.chip.preset');
+      const syncChips = () => {
+        chips?.forEach((c) => c.classList.toggle('on', parseFloat(c.dataset.val) === parseFloat(input.value)));
+        persist();
+      };
+      input.addEventListener('input', syncChips);
+      chips?.forEach((chip) => {
+        chip.onclick = () => {
+          input.value = chip.dataset.val;
+          syncChips();
+        };
+      });
+    });
+
+    const getVidTime = () => {
+      const v = document.querySelector('#preview-box video');
+      return v ? round1(v.currentTime || 0) : 0;
+    };
+    const pickStart = box.querySelector('#pick-t-start');
+    const pickEnd = box.querySelector('#pick-t-end');
+    if (pickStart) {
+      pickStart.onclick = () => {
+        const t = getVidTime();
+        $('t-start').value = t;
+        if (parseFloat($('t-end').value) <= t && file?.info.duration) $('t-end').value = round1(file.info.duration);
+      };
+    }
+    if (pickEnd) {
+      pickEnd.onclick = () => {
+        const t = getVidTime();
+        $('t-end').value = t;
+      };
+    }
+    const pickVideoTime = box.querySelector('#pick-video-time');
+    if (pickVideoTime) {
+      pickVideoTime.onclick = () => {
+        const input = pickVideoTime.closest('.field')?.querySelector('input[type="number"]');
+        if (input) { input.value = getVidTime(); input.dispatchEvent(new Event('input')); }
+      };
+    }
+
+    const segListEl = box.querySelector('#seg-list');
+    if (segListEl) {
+      const dur = file?.info.duration || 0;
+      window.__segments = [{ start: 0, end: dur > 0 ? round1(Math.min(dur, 5)) : 5 }];
+
+      const renderSegs = () => {
+        segListEl.innerHTML = '';
+        window.__segments.forEach((seg, idx) => {
+          const row = document.createElement('div');
+          row.className = 'seg-row';
+          row.innerHTML = `
+            <span class="seg-idx">片段 #${idx + 1}</span>
+            <input type="number" class="seg-start" value="${seg.start}" min="0" step="0.1" />
+            <span class="times-sep">→</span>
+            <input type="number" class="seg-end" value="${seg.end}" min="0" step="0.1" />
+            ${hasVideo ? '<button class="batch-btn seg-pick-s" title="用当前播放时间设为起点">⏮</button><button class="batch-btn seg-pick-e" title="用当前播放时间设为终点">⏭</button>' : ''}
+            ${window.__segments.length > 1 ? '<button class="batch-btn seg-rm" title="删除该段">✕</button>' : ''}
+          `;
+          const sIn = row.querySelector('.seg-start');
+          const eIn = row.querySelector('.seg-end');
+          sIn.oninput = () => { seg.start = parseFloat(sIn.value) || 0; };
+          eIn.oninput = () => { seg.end = parseFloat(eIn.value) || 0; };
+          const ps = row.querySelector('.seg-pick-s');
+          const pe = row.querySelector('.seg-pick-e');
+          if (ps) ps.onclick = () => { const t = getVidTime(); seg.start = t; sIn.value = t; };
+          if (pe) pe.onclick = () => { const t = getVidTime(); seg.end = t; eIn.value = t; };
+          const rm = row.querySelector('.seg-rm');
+          if (rm) rm.onclick = () => { window.__segments.splice(idx, 1); renderSegs(); };
+          segListEl.appendChild(row);
+        });
+      };
+
+      renderSegs();
+      box.querySelector('#seg-add').onclick = () => {
+        const last = window.__segments[window.__segments.length - 1];
+        const nextStart = last ? round1(last.end) : 0;
+        const nextEnd = dur > 0 ? round1(Math.min(dur, nextStart + 5)) : round1(nextStart + 5);
+        window.__segments.push({ start: nextStart, end: Math.max(nextEnd, round1(nextStart + 1)) });
+        renderSegs();
+      };
+    }
+
+    const pickSecond = box.querySelector('#pick-second');
+    if (pickSecond) {
+      pickSecond.onclick = async () => {
+        const kind = pickSecond.dataset.kind || 'audioFile';
+        const p = await window.api.pickFile(currentFeature.id, kind);
+        if (p) {
+          window.__secondFile = p;
+          window.__secondInfo = null;
+          const name = $('second-name');
+          name.textContent = p.split(/[\\/]/).pop();
+          name.title = p;
+          name.classList.remove('muted');
+          if (kind === 'videoGifFile') {
+            const res = await window.api.probe(p);
+            if (res.ok) window.__secondInfo = res.info;
+          }
+        }
+      };
+    }
+
+    if (box.querySelector('#crop-canvas')) {
+      window.VGT.initCropCanvas({ $, getFile, getCurrentFeature });
+    }
+
+    syncVisibility();
+  }
+
+  return { renderParams, syncVisibility };
+}
+
+window.VGT.params = {
+  readChips,
+  collectFieldValues,
+  createParamsController,
+  round1,
+  readTimes(targetFile) {
+    const start = parseFloat(document.getElementById('t-start')?.value) || 0;
+    let end = parseFloat(document.getElementById('t-end')?.value) || 0;
+    const dur = targetFile?.info.duration || 0;
+    if (end <= start) end = dur || start + 1;
+    return { start, end, duration: Math.max(end - start, 0.1) };
+  },
+};
+})();

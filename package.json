@@ -1,7 +1,7 @@
 {
   "name": "video-gif-toolbox",
-  "version": "2.0.0",
-  "description": "视频/GIF 工具箱：31 个功能——转换、GIF 编辑、剪辑、音频、工具，全部本地处理",
+  "version": "2.1.0",
+  "description": "视频 · GIF · 图片 · SVG 工具箱：40 个功能，全部本地离线处理",
   "main": "main.js",
   "author": "user",
   "license": "MIT",
@@ -9,6 +9,11 @@
     "start": "electron .",
     "pack": "electron-builder --win portable --dir",
     "dist": "electron-builder --win portable nsis"
+  },
+  "dependencies": {
+    "@resvg/resvg-js": "^2.6.2",
+    "imagetracerjs": "^1.2.6",
+    "svgo": "^4.1.0"
   },
   "devDependencies": {
     "electron": "^33.0.0",
@@ -24,7 +29,12 @@
       "main.js",
       "ffmpeg.js",
       "preload.js",
+      "core/**/*",
+      "modules/**/*",
       "renderer/**/*"
+    ],
+    "asarUnpack": [
+      "node_modules/@resvg/**/*"
     ],
     "extraResources": [
       {
@@ -46,5 +56,10 @@
       "oneClick": true,
       "artifactName": "视频GIF工具箱-${version}-安装版.exe"
     }
+  },
+  "dependencies": {
+    "@resvg/resvg-js": "^2.6.2",
+    "imagetracerjs": "^1.2.6",
+    "svgo": "^4.1.0"
   }
 }

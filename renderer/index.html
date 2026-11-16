@@ -15,8 +15,9 @@
         <div class="logo-sub">本地转换 · 无需联网</div>
       </div>
     </div>
+    <input type="search" id="nav-search" class="nav-search" placeholder="🔍 搜索功能（gif / 图片 / svg / 压缩…）" />
     <nav id="nav"></nav>
-    <div class="sidebar-foot">本地 FFmpeg 9.0 · v2.0</div>
+    <div class="sidebar-foot">本地 FFmpeg 9.0 · Ctrl+O 选文件 · 空格播放</div>
   </aside>
 
   <main class="main">
@@ -46,6 +47,10 @@
               <option value="h264_amf">AMD AMF</option>
             </select>
           </label>
+          <label class="pref-check" title="输出文件若已存在，自动追加 _1、_2 编号，避免覆盖旧结果">
+            <input type="checkbox" id="pref-no-overwrite" checked />
+            <span>防覆盖编号</span>
+          </label>
         </div>
       </div>
     </header>
@@ -64,6 +69,7 @@
         <div class="file-actions">
           <button id="btn-replace" class="btn btn-ghost btn-sm">换一个文件</button>
           <button id="btn-add-more" class="btn btn-ghost btn-sm hidden">+ 添加文件</button>
+          <button id="btn-zoom-preview" class="btn btn-ghost btn-sm hidden">⛶ 放大预览</button>
         </div>
       </div>
     </section>
@@ -86,6 +92,12 @@
   </main>
 
   <div id="toast" class="toast hidden"></div>
+  <script src="ui/crop-canvas.js"></script>
+  <script src="ui/params-panel.js"></script>
+  <script src="ui/lightbox.js"></script>
+  <script src="features/video-gif.js"></script>
+  <script src="features/image.js"></script>
+  <script src="features/svg.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -393,6 +393,170 @@ async function test(name, feature, params, check) {
     if (pr.stdout.toString().includes('SecretCamera')) throw new Error('元数据未被清除');
   });
 
+  // 此时 TMP/test_clip.mp4 已存在（用例 7/8 生成），开启 __noOverwrite 应自动生成 _1.mp4 而不覆盖
+  await test('62. 防覆盖编号：已存在同名输出文件时自动 _1 递增', 'trimVideo', {
+    input: testVideo, start: 0, duration: 2, precise: false, __noOverwrite: true,
+  }, () => {
+    const out1 = path.join(TMP, 'test_clip_1.mp4');
+    if (!fs.existsSync(out1)) throw new Error('防覆盖自动编号 _1.mp4 未生成');
+  });
+
+  // 此时 TMP/test_全部帧 已存在（用例 59 生成），开启 __noOverwrite 应自动生成 _1 目录
+  await test('63. 防覆盖编号：已存在同名输出文件夹时自动 _1 递增', 'snapshot', {
+    input: testGif, mode: 'all', totalDuration: 4, __noOverwrite: true,
+  }, () => {
+    const dir1 = path.join(TMP, 'test_全部帧_1');
+    if (!fs.existsSync(dir1)) throw new Error('防覆盖自动编号 _1 文件夹未生成');
+    const n = fs.readdirSync(dir1).filter((f) => f.endsWith('.png')).length;
+    if (n < 30) throw new Error(`_1 文件夹内帧数异常: ${n}`);
+  });
+
+  // ============ 第四批：图片模块与通用工具图片兼容 ============
+
+  const alphaImg = path.join(TMP, 'alpha_src.png');
+  run(['-f', 'lavfi', '-i', 'color=c=0x00000000:size=600x400:rate=1:duration=1',
+    '-f', 'lavfi', '-i', 'testsrc2=size=320x240:rate=1:duration=1',
+    '-filter_complex', '[0:v]format=rgba[bg];[1:v]format=rgba[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2',
+    '-frames:v', '1', alphaImg]);
+
+  await test('64. 图片格式转换 PNG→WebP (限制最长边 400)', 'imageConvert', {
+    input: alphaImg, format: 'webp', quality: 'medium', resizeMode: 'maxSide', maxSide: 400, stripMeta: 'yes',
+  }, (i) => { if (i.width !== 400 || !i.isImage) throw new Error(`应为 400px 图片，实际 ${i.width} isImage=${i.isImage}`); });
+
+  await test('65. 图片格式转换 透明PNG→JPG (白底防变黑)', 'imageConvert', {
+    input: alphaImg, format: 'jpg', quality: 'high', resizeMode: 'keep', bgColor: '#ffffff', stripMeta: 'yes',
+  }, (i) => { if (i.width !== 600 || i.height !== 400) throw new Error(`尺寸异常 ${i.width}x${i.height}`); });
+
+  await test('66. 图片 PNG 8-bit 调色板量化瘦身', 'imageConvert', {
+    input: img1, format: 'png', quality: 'png8', resizeMode: 'percent', percent: 50, stripMeta: 'yes',
+  }, (i) => { if (i.width !== 220) throw new Error(`50% 缩放后应为 220，实际 ${i.width}`); });
+
+  await test('67. 图片转 Windows ICO 图标 (128x128)', 'imageConvert', {
+    input: alphaImg, format: 'ico', icoSize: 128, stripMeta: 'yes',
+  }, (i) => { if (i.width !== 128 || i.height !== 128) throw new Error(`ICO 尺寸应为 128x128，实际 ${i.width}x${i.height}`); });
+
+  await test('68. 图片转 AVIF', 'imageConvert', {
+    input: img2, format: 'avif', quality: 'medium', resizeMode: 'keep', stripMeta: 'yes',
+  }, (i) => { if (i.width !== 480) throw new Error(`AVIF 尺寸异常 ${i.width}`); });
+
+  const bigPhoto = path.join(TMP, 'big_photo.png');
+  run(['-f', 'lavfi', '-i', 'testsrc2=size=1200x900:rate=1:duration=1', '-frames:v', '1', bigPhoto]);
+  await test('69. 图片压缩到指定体积 (目标 80KB JPG)', 'imageCompressTarget', {
+    input: bigPhoto, targetKB: 80, format: 'jpg', bgColor: '#ffffff', srcW: 1200, srcH: 900,
+  }, () => {
+    const out = path.join(TMP, 'big_photo_80KB.jpg');
+    const kb = fs.statSync(out).size / 1024;
+    if (kb > 85) throw new Error(`压缩后 ${kb.toFixed(1)}KB，超出 80KB 目标`);
+  });
+
+  await test('70. 多图纵向长图拼接 (3张不同尺寸)', 'imageStitch', {
+    files: [img1, img2, img3],
+    infos: [{ width: 440, height: 300 }, { width: 480, height: 300 }, { width: 520, height: 300 }],
+    mode: 'vertical', gap: 10, format: 'jpg', bgColor: '#ffffff',
+  }, (i) => { if (i.width !== 540 || i.height < 900) throw new Error(`长图拼接尺寸异常 ${i.width}x${i.height}`); });
+
+  await test('71. 多图 2×2 网格拼图 (3张图自动补位)', 'imageStitch', {
+    files: [img1, img2, img3],
+    infos: [{ width: 440, height: 300 }, { width: 480, height: 300 }, { width: 520, height: 300 }],
+    mode: 'grid', cols: 2, fit: 'cover', cellRatio: '1:1', cellSize: 300, gap: 8, format: 'png', bgColor: 'transparent',
+  }, (i) => { if (i.width < 600 || i.height < 600) throw new Error(`网格拼图尺寸异常 ${i.width}x${i.height}`); });
+
+  await test('72. 九宫格切图 (3×3 导出 9 张)', 'imageSplit', {
+    input: bigPhoto, mode: '3x3', format: 'png', srcW: 1200, srcH: 900,
+  }, () => {
+    const dir = path.join(TMP, 'big_photo_切图');
+    const slices = fs.readdirSync(dir).filter((f) => f.endsWith('.png'));
+    if (slices.length !== 9) throw new Error(`应切出 9 张，实际 ${slices.length}`);
+  });
+
+  const whiteBgImg = path.join(TMP, 'white_bg.png');
+  run(['-f', 'lavfi', '-i', 'color=c=white:size=300x300:rate=1:duration=1',
+    '-f', 'lavfi', '-i', 'color=c=red:size=100x100:rate=1:duration=1',
+    '-filter_complex', '[0:v][1:v]overlay=(W-w)/2:(H-h)/2', '-frames:v', '1', whiteBgImg]);
+  await test('73. 纯色抠图透明 PNG (白底→透明)', 'imageCutout', {
+    input: whiteBgImg, color: '#ffffff', similarity: 0.18, blend: 0.06, format: 'png',
+  }, (i) => { if (i.width !== 300 || i.height !== 300) throw new Error('抠图尺寸异常'); });
+
+  await test('74. 图片圆角与边框留白', 'imageFrame', {
+    input: img2, rounded: 32, padding: 24, format: 'png', bgColor: 'transparent', srcW: 480, srcH: 300,
+  }, (i) => { if (i.width !== 528 || i.height !== 348) throw new Error(`加边框后应为 528x348，实际 ${i.width}x${i.height}`); });
+
+  await test('75. 画面裁剪兼容静态图片 (精确奇数像素)', 'videoCrop', {
+    input: bigPhoto, crop: { w: 401, h: 301, x: 100, y: 100 }, srcW: 1200, srcH: 900,
+  }, (i) => { if (i.width !== 401 || i.height !== 301) throw new Error(`应为 401x301，实际 ${i.width}x${i.height}`); });
+
+  await test('76. 局部马赛克打码兼容静态图片', 'videoBlur', {
+    input: bigPhoto, crop: { w: 200, h: 150, x: 50, y: 50 }, srcW: 1200, srcH: 900, mode: 'mosaic', strength: 'strong',
+  }, (i) => { if (i.width !== 1200 || i.height !== 900) throw new Error('图片尺寸不应变化'); });
+
+  await test('77. 比例适配 1:1 模糊背景兼容静态图片', 'aspectPad', {
+    input: img2, ratio: '1:1', bg: 'blur',
+  }, (i) => { if (i.width !== 1080 || i.height !== 1080) throw new Error(`应为 1080x1080，实际 ${i.width}x${i.height}`); });
+
+  await test('78. 添加文字水印兼容静态图片', 'watermark', {
+    input: bigPhoto, mode: 'text', text: 'PhotoWaterMark', pos: 'br', size: 'medium', opacity: '0.7', srcW: 1200, srcH: 900,
+  }, (i) => { if (i.width !== 1200) throw new Error('水印图尺寸异常'); });
+
+  await test('79. 旋转 90° & 调色兼容静态图片', 'rotateFlip', {
+    input: img2, mode: 'r90',
+  }, (i) => { if (i.width !== 300 || i.height !== 480) throw new Error(`旋转后应为 300x480，实际 ${i.width}x${i.height}`); });
+
+  // SVG 矢量模块测试
+  const testSvg = path.join(TMP, 'sample.svg');
+  fs.writeFileSync(testSvg, `<?xml version="1.0" encoding="UTF-8"?>
+<!-- editor comment to strip -->
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100" viewBox="0 0 200 100">
+  <metadata>Created by Editor</metadata>
+  <g>
+    <rect x="10.000" y="10.000" width="80.1234" height="80.5678" rx="12" fill="#6366f1"/>
+    <circle cx="150" cy="50" r="35" fill="#22d3ee"/>
+  </g>
+</svg>`, 'utf8');
+
+  const svgProbeInfo = await probe(testSvg);
+  if (!svgProbeInfo.isSvg || svgProbeInfo.width !== 200 || svgProbeInfo.height !== 100) {
+    throw new Error(`SVG probe 异常: ${JSON.stringify(svgProbeInfo)}`);
+  }
+
+  await test('80. SVG→PNG (2× 倍率透明输出)', 'svgToRaster', {
+    input: testSvg, format: 'png', scaleMode: 'scale', scale: 2, bgColor: 'transparent',
+  }, (i) => { if (i.width !== 400 || i.height !== 200) throw new Error(`应为 400x200，实际 ${i.width}x${i.height}`); });
+
+  await test('81. SVG→JPG (指定宽度 600 + 白底)', 'svgToRaster', {
+    input: testSvg, format: 'jpg', scaleMode: 'width', width: 600, quality: 'high', bgColor: '#ffffff',
+  }, (i) => { if (i.width !== 600 || i.height !== 300) throw new Error(`应为 600x300，实际 ${i.width}x${i.height}`); });
+
+  await test('82. SVG→WebP (限制最长边 300)', 'svgToRaster', {
+    input: testSvg, format: 'webp', scaleMode: 'maxSide', maxSide: 300, quality: 'medium', bgColor: 'transparent',
+  }, (i) => { if (i.width !== 300 || i.height !== 150) throw new Error(`应为 300x150，实际 ${i.width}x${i.height}`); });
+
+  await test('83. SVG→ICO (64×64)', 'svgToRaster', {
+    input: testSvg, format: 'ico', scaleMode: 'original', icoSize: 64, bgColor: 'transparent',
+  }, (i) => { if (i.width !== 64 || i.height !== 64) throw new Error(`ICO 应为 64x64，实际 ${i.width}x${i.height}`); });
+
+  await test('84. SVG 压缩优化 (SVGO 瘦身)', 'svgOptimize', {
+    input: testSvg, preset: 'default', floatPrecision: 2, multipass: true, keepViewBox: true, stripDims: false,
+  }, (i) => {
+    const optPath = path.join(TMP, 'sample_opt.svg');
+    const rawSz = fs.statSync(testSvg).size;
+    const optSz = fs.statSync(optPath).size;
+    if (!i.isSvg || optSz >= rawSz) throw new Error(`优化后未缩小: ${rawSz} -> ${optSz}`);
+  });
+
+  await test('85. 位图→SVG (黑白单色剪影描摹)', 'imageToSvg', {
+    input: whiteBgImg, mode: 'bw', smooth: 'medium', transparentBg: 'alpha', maxDim: 400, noiseFilter: 8, optimizeSvg: true,
+  }, (i) => {
+    const outPath = path.join(TMP, 'white_bg_vector.svg');
+    const txt = fs.readFileSync(outPath, 'utf8');
+    if (!i.isSvg || !/<path/i.test(txt)) throw new Error('黑白描摹未生成有效 <path>');
+  });
+
+  await test('86. 位图→SVG (多彩插画矢量描摹)', 'imageToSvg', {
+    input: img2, mode: 'poster', colors: 8, smooth: 'medium', transparentBg: 'none', maxDim: 400, noiseFilter: 8, optimizeSvg: true,
+  }, (i) => {
+    if (!i.isSvg || i.width !== 400) throw new Error(`多彩描摹 SVG 信息异常: ${JSON.stringify(i)}`);
+  });
+
   console.log(failed ? `\n❌ ${failed} 个用例失败` : '\n🎉 全部通过');
   process.exit(failed ? 1 : 0);
 })();
