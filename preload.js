@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld('api', {
   wfClearCache: () => ipcRenderer.invoke('wf:clear-cache'),
   wfAllocNodeDir: (opts) => ipcRenderer.invoke('wf:alloc-node-dir', opts),
   wfStatMulti: (filePaths) => ipcRenderer.invoke('wf:stat-multi', filePaths),
+  wfScanDir: (opts) => ipcRenderer.invoke('wf:scan-dir', opts),
   wfExportFiles: (opts) => ipcRenderer.invoke('wf:export-files', opts),
   wfExportJson: (opts) => ipcRenderer.invoke('wf:export-json', opts),
   wfImportJson: () => ipcRenderer.invoke('wf:import-json'),

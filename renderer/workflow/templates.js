@@ -155,6 +155,32 @@
         ],
       },
     },
+    {
+      id: 'tpl_folder_smart_route',
+      name: '📁 文件夹自动扫描 → 按格式分流压缩汇总导出',
+      desc: '自动扫描文件夹内的混合素材 → 按位图 / SVG / 视频动图智能分流压缩优化 → 空分支自动跳过并汇总导出',
+      category: '自动批处理',
+      graph: {
+        name: '文件夹混合素材分流批处理',
+        nodes: [
+          { id: 'n1', type: 'io.loadFolder', x: 60, y: 260, params: { dirPath: '', recursive: 'no', filterKind: 'all' } },
+          { id: 'n2', type: 'io.routeType', x: 440, y: 260, params: { gifBucket: 'anims' } },
+          { id: 'n3', type: 'feat.imageConvert', x: 840, y: 30, params: { format: 'webp', quality: 'medium', resizeMode: 'maxSide', maxSide: '1920', bgColor: '#ffffff', stripMeta: 'yes' } },
+          { id: 'n4', type: 'feat.svgOptimize', x: 840, y: 380, params: { preset: 'default', floatPrecision: '2', keepViewBox: 'yes', stripDims: 'no' } },
+          { id: 'n5', type: 'feat.compressTarget', x: 840, y: 650, params: { targetMB: '5' } },
+          { id: 'n6', type: 'io.save', x: 1240, y: 260, params: { outMode: 'global', customDir: '', suffix: '_批处理', exportAsFolder: 'auto', noOverwrite: 'yes' } },
+        ],
+        edges: [
+          { id: 'e1', fromNode: 'n1', fromPort: 'media', toNode: 'n2', toPort: 'items' },
+          { id: 'e2', fromNode: 'n2', fromPort: 'images', toNode: 'n3', toPort: 'input' },
+          { id: 'e3', fromNode: 'n2', fromPort: 'svgs', toNode: 'n4', toPort: 'input' },
+          { id: 'e4', fromNode: 'n2', fromPort: 'anims', toNode: 'n5', toPort: 'input' },
+          { id: 'e5', fromNode: 'n3', fromPort: 'out', toNode: 'n6', toPort: 'media' },
+          { id: 'e6', fromNode: 'n4', fromPort: 'out', toNode: 'n6', toPort: 'media' },
+          { id: 'e7', fromNode: 'n5', fromPort: 'out', toNode: 'n6', toPort: 'media' },
+        ],
+      },
+    },
   ];
 
   // DAG 最长路径分层排版算法，自动将杂乱画布整理为整洁的左→右流水线

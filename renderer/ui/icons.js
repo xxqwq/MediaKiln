@@ -82,6 +82,7 @@
     skipBack: '<path d="M19 20 9 12l10-8zM5 19V5"/>',
     skipFwd: '<path d="m5 4 10 8-10 8zM19 5v14"/>',
     upload2: '<path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"/><path d="M12 12v9M16 16l-4-4-4 4"/>',
+    gitBranch: '<line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
   };
 
   // emoji → [图标名, 语义色调]
@@ -89,7 +90,7 @@
     '🎞': ['film'], '🎬': ['clapper'], '🖼': ['image'], '📦': ['package'], '🗜': ['shrink'],
     '✂': ['scissors'], '💬': ['message'], '🎯': ['target'], '🪄': ['wand'], '✨': ['sparkles'],
     '🔪': ['slice'], '🔗': ['link'], '🔲': ['crop'], '🧲': ['scan'], '🫥': ['eyeOff'],
-    '📐': ['ratio'], '🪟': ['pip'], '🎨': ['palette'], '🔁': ['rotate'], '🔄': ['swap'],
+    '📐': ['ratio'], '🪟': ['pip'], '🎨': ['palette'], '🔁': ['rotate'], '🔄': ['swap'], '🔀': ['gitBranch'],
     '◀': ['rewind'], '⚡': ['zap'], '🎵': ['music'], '🔊': ['volume'], '🎼': ['listMusic'],
     '🎧': ['headphones'], '🏷': ['tag'], '📸': ['camera'], '📷': ['camera'], '🗂': ['grid'],
     '🛡': ['shield'], '🧩': ['layout'], '⬜': ['frame'], '✒': ['pen'], '📑': ['files'],
@@ -101,6 +102,7 @@
     '💡': ['bulb', 'warn'], '📋': ['clipboard'], '↗': ['external'], '↘': ['arrowDR'], '➡': ['arrowR'],
     '⚖': ['scale'], '🔥': ['flame'], '📍': ['pin'], '📱': ['phone'], '⭐': ['star', 'warn'],
     '▶': ['play'], '⏹': ['stop'], '⏮': ['skipBack'], '⏭': ['skipFwd'], '↻': ['rotate'],
+    '↩': ['rewind'],
   };
 
   const keys = Object.keys(EMOJI).sort((a, b) => b.length - a.length)

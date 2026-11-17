@@ -257,7 +257,7 @@
   }
 
   // 根据节点当前参数与上游输入动态计算输出端口格式
-  function getDynamicOutputSpec(node, upstreamExts = null, upstreamIsList = false) {
+  function getDynamicOutputSpec(node, upstreamExts = null, upstreamIsList = false, portId = null) {
     const p = node.params || {};
     if (node.type === 'io.loadFile') {
       const pathStr = p.filePath || '';
@@ -286,6 +286,19 @@
       const exts = filterMap[p.filterKind || 'all'] || ['*'];
       return { exts, typeId: inferPortTypeId(exts), isList: true };
     }
+    if (node.type === 'io.loadFolder') {
+      const filterMap = {
+        all: ALL_SUPPORTED_EXTS,
+        videoAnim: [...VIDEO_EXTS, 'gif'],
+        image: RASTER_OUT_EXTS,
+        gif: ['gif'],
+        svg: SVG_EXTS,
+        audio: AUDIO_EXTS,
+        doc: DOC_EXTS,
+      };
+      const exts = filterMap[p.filterKind || 'all'] || ALL_SUPPORTED_EXTS;
+      return { exts, typeId: inferPortTypeId(exts), isList: true };
+    }
     if (node.type === 'io.listPick') {
       const mode = p.pickMode || 'first';
       const isSingle = mode === 'first' || mode === 'last' || mode === 'index';
@@ -294,6 +307,20 @@
       else if (mode === 'svgOnly') exts = SVG_EXTS;
       else if (mode === 'videoOnly') exts = VIDEO_EXTS;
       return { exts, typeId: inferPortTypeId(exts), isList: !isSingle };
+    }
+    if (node.type === 'io.routeType') {
+      const gifToImg = p.gifBucket === 'images';
+      const imgExts = gifToImg ? [...RASTER_OUT_EXTS, 'gif'] : RASTER_OUT_EXTS;
+      const animExts = gifToImg ? VIDEO_EXTS : [...VIDEO_EXTS, 'gif'];
+      if (portId === 'images') return { exts: imgExts, typeId: 'image', isList: true };
+      if (portId === 'svgs') return { exts: SVG_EXTS, typeId: 'svg', isList: true };
+      if (portId === 'anims') return { exts: animExts, typeId: gifToImg ? 'video' : 'anim', isList: true };
+      if (portId === 'others') return { exts: [...AUDIO_EXTS, ...SUB_EXTS, ...DOC_EXTS, ...PDF_EXTS], typeId: 'any', isList: true };
+      return null;
+    }
+    if (node.type === 'io.routeCondition') {
+      const exts = upstreamExts && upstreamExts.length ? upstreamExts : ['*'];
+      return { exts, typeId: inferPortTypeId(exts), isList: upstreamIsList };
     }
     if (node.type === 'io.preview') {
       const exts = upstreamExts && upstreamExts.length ? upstreamExts : ['*'];
@@ -541,6 +568,45 @@
       defaultParams: () => ({ filterKind: 'all', filePaths: [] }),
     },
     {
+      type: 'io.loadFolder',
+      isIo: true,
+      group: '输入 / 输出',
+      icon: '📁',
+      name: '文件夹扫描',
+      desc: '自动扫描指定文件夹内的全部媒体或文档（支持递归子目录与格式过滤），驱动整目录自动批处理',
+      inputs: [],
+      outputs: [{ id: 'media', label: '文件列表', typeId: 'any', exts: ALL_SUPPORTED_EXTS, isList: true }],
+      fields: [
+        { key: 'dirPath', type: 'wfFolderScanPicker', label: '目标文件夹' },
+        {
+          key: 'recursive',
+          label: '扫描范围',
+          type: 'chips',
+          def: 'no',
+          options: [
+            ['no', '仅当前目录'],
+            ['yes', '包含子目录'],
+          ],
+        },
+        {
+          key: 'filterKind',
+          label: '筛选媒体类型',
+          type: 'select',
+          def: 'all',
+          options: [
+            ['all', '全部支持格式'],
+            ['image', '仅图片'],
+            ['videoAnim', '仅视频与 GIF'],
+            ['gif', '仅 GIF'],
+            ['svg', '仅 SVG'],
+            ['audio', '仅音频'],
+            ['doc', '仅文档'],
+          ],
+        },
+      ],
+      defaultParams: () => ({ dirPath: '', recursive: 'no', filterKind: 'all' }),
+    },
+    {
       type: 'io.listPick',
       isIo: true,
       group: '输入 / 输出',
@@ -578,6 +644,83 @@
       defaultParams: () => ({ pickMode: 'first', index: '1' }),
     },
     {
+      type: 'io.routeType',
+      isIo: true,
+      group: '输入 / 输出',
+      icon: '🔀',
+      name: '按格式分流',
+      desc: '将混合素材列表自动拆分为位图、SVG、视频/GIF 与其他文件 4 路输出；空分支自动跳过不报错',
+      inputs: [{ id: 'items', label: '混合输入', typeId: 'any', accept: ['*'], multiConnect: true, required: true }],
+      outputs: [
+        { id: 'images', label: '位图图片', typeId: 'image', exts: RASTER_OUT_EXTS, isList: true },
+        { id: 'svgs', label: 'SVG 矢量', typeId: 'svg', exts: SVG_EXTS, isList: true },
+        { id: 'anims', label: '视频 / GIF', typeId: 'anim', exts: [...VIDEO_EXTS, 'gif'], isList: true },
+        { id: 'others', label: '音频 / 文档等', typeId: 'any', exts: [...AUDIO_EXTS, ...SUB_EXTS, ...DOC_EXTS, ...PDF_EXTS], isList: true },
+      ],
+      fields: [
+        {
+          key: 'gifBucket',
+          label: 'GIF 动图归类',
+          type: 'chips',
+          def: 'anims',
+          options: [
+            ['anims', '视频/GIF 路'],
+            ['images', '位图路'],
+          ],
+        },
+      ],
+      defaultParams: () => ({ gifBucket: 'anims' }),
+    },
+    {
+      type: 'io.routeCondition',
+      isIo: true,
+      group: '输入 / 输出',
+      icon: '⚖️',
+      name: '条件分流',
+      desc: '按文件体积、画面尺寸、横竖屏方向或文件名关键词将媒体拆分为「符合 / 不符合」两路处理',
+      inputs: [{ id: 'items', label: '媒体输入', typeId: 'any', accept: ['*'], multiConnect: true, required: true }],
+      outputs: [
+        { id: 'matched', label: '✅ 符合条件', typeId: 'any', exts: ['*'], isList: true },
+        { id: 'unmatched', label: '↩️ 不符合', typeId: 'any', exts: ['*'], isList: true },
+      ],
+      fields: [
+        {
+          key: 'rule',
+          label: '判断条件',
+          type: 'select',
+          def: 'sizeGtKB',
+          options: [
+            ['sizeGtKB', '体积大于指定 KB'],
+            ['sizeLtKB', '体积小于指定 KB'],
+            ['widthGt', '画面宽度大于 (px)'],
+            ['landscape', '横屏画面 (宽 > 高)'],
+            ['portrait', '竖屏画面 (高 > 宽)'],
+            ['nameMatch', '文件名包含关键词'],
+            ['hasAudio', '视频包含音轨'],
+          ],
+        },
+        {
+          key: 'threshold',
+          label: '阈值（KB 或 px）',
+          type: 'number',
+          def: '500',
+          min: 1,
+          max: 1048576,
+          step: 10,
+          showIf: (v) => ['sizeGtKB', 'sizeLtKB', 'widthGt'].includes(v.rule || 'sizeGtKB'),
+        },
+        {
+          key: 'keyword',
+          label: '文件名关键词（逗号分隔）',
+          type: 'text',
+          def: '',
+          placeholder: '如：banner, 封面',
+          showIf: (v) => v.rule === 'nameMatch',
+        },
+      ],
+      defaultParams: () => ({ rule: 'sizeGtKB', threshold: '500', keyword: '' }),
+    },
+    {
       type: 'io.preview',
       isIo: true,
       group: '输入 / 输出',
@@ -610,8 +753,8 @@
       group: '输入 / 输出',
       icon: '💾',
       name: '保存 / 导出',
-      desc: '将上游最终结果写入目标目录（只有连接到此节点的文件才会导出，中间节点仅留缓存）',
-      inputs: [{ id: 'media', label: '待导出结果', typeId: 'any', accept: ['*'], multiConnect: false, required: true }],
+      desc: '将上游最终结果写入目标目录（支持多条分支同时接入汇总导出；中间节点仅留缓存）',
+      inputs: [{ id: 'media', label: '待导出结果', typeId: 'any', accept: ['*'], multiConnect: true, required: true }],
       outputs: [],
       fields: [
         {
@@ -743,7 +886,7 @@
         }
       }
 
-      const dyn = getDynamicOutputSpec(node, upExts, upIsList);
+      const dyn = getDynamicOutputSpec(node, upExts, upIsList, portId);
       if (dyn) return dyn;
       const outPort = def.outputs.find((o) => o.id === portId) || def.outputs[0];
       return { exts: outPort.exts, typeId: outPort.typeId, isList: !!outPort.isList };

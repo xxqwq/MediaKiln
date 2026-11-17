@@ -74,6 +74,21 @@
     return m ? m[1].toLowerCase() : '';
   }
 
+  const FOLDER_FILTER_EXTS = {
+    all: [
+      'mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'ts', 'm4v',
+      'gif', 'jpg', 'jpeg', 'png', 'webp', 'bmp', 'avif', 'ico',
+      'svg', 'mp3', 'm4a', 'wav', 'flac', 'aac', 'ogg',
+      'srt', 'ass', 'ssa', 'vtt', 'docx', 'pptx', 'md', 'markdown', 'pdf',
+    ],
+    videoAnim: ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'ts', 'm4v', 'gif'],
+    image: ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'avif', 'ico'],
+    gif: ['gif'],
+    svg: ['svg'],
+    audio: ['mp3', 'm4a', 'wav', 'flac', 'aac', 'ogg'],
+    doc: ['docx', 'pptx', 'md', 'markdown'],
+  };
+
   function initWorkflowCanvas(containerEl, bridge) {
     const reg = window.VGT.wfRegistry;
     const engineMod = window.VGT.wfEngine;
@@ -510,7 +525,11 @@
         const st = nodeStates.get(n.id)?.status;
         ctx.fillStyle = selectedNodes.has(n.id)
           ? '#8b85ff'
-          : (st === 'done' ? 'rgba(61,214,140,0.7)' : (st === 'error' ? 'rgba(244,112,103,0.8)' : 'rgba(255,255,255,0.22)'));
+          : (st === 'done'
+            ? 'rgba(61,214,140,0.7)'
+            : (st === 'error'
+              ? 'rgba(244,112,103,0.8)'
+              : (st === 'skipped' ? 'rgba(148,163,184,0.38)' : 'rgba(255,255,255,0.22)')));
         ctx.fillRect(tx(n.x), ty(n.y), Math.max(6, nw * scale), Math.max(4, nh * scale));
       }
 
@@ -786,10 +805,40 @@
       return el;
     }
 
+    async function scanFolderForNode(node, limit = 500) {
+      const p = node.params || {};
+      if (!p.dirPath) return { ok: false, files: [] };
+      const exts = FOLDER_FILTER_EXTS[p.filterKind || 'all'] || FOLDER_FILTER_EXTS.all;
+      try {
+        return await window.api.wfScanDir({
+          dirPath: p.dirPath,
+          recursive: p.recursive === 'yes',
+          extensions: exts,
+          limit,
+        });
+      } catch {
+        return { ok: false, files: [] };
+      }
+    }
+
+    async function refreshFolderCount(node, targetEl = null) {
+      const countEl = targetEl || nodeEls.get(node.id)?.querySelector('[data-folder-count]');
+      if (!countEl) return;
+      if (!node.params?.dirPath) {
+        countEl.textContent = '';
+        return;
+      }
+      const res = await scanFolderForNode(node, 500);
+      if (node.params?.dirPath) {
+        countEl.textContent = res?.ok ? `已匹配 ${res.files.length} 个文件` : '目录不可用';
+      }
+    }
+
     function onParamsChanged(node, reRenderDynamic = true) {
       runner.invalidateNodeAndDownstream(graph, node.id);
       persistCurrent();
       renderNodeFieldsVisibility(node.id);
+      if (node.type === 'io.loadFolder') refreshFolderCount(node);
       if (reRenderDynamic) {
         renderNodeDynamicPorts();
         renderWires();
@@ -799,7 +848,7 @@
     function shouldFieldSpanFull(field, totalFields) {
       if (totalFields < 4) return true;
       if ([
-        'wfFilePicker', 'wfBatchPicker', 'wfDirPicker',
+        'wfFilePicker', 'wfBatchPicker', 'wfFolderScanPicker', 'wfDirPicker',
         'cropCanvas', 'multiSegments', 'secondFile', 'replaceSource',
         'times', 'text', 'color',
       ].includes(field.type)) return true;
@@ -876,6 +925,23 @@
               rerenderNodeBody(node);
             };
           });
+        } else if (field.type === 'wfFolderScanPicker') {
+          const curDir = p.dirPath || '';
+          const dirName = curDir ? (curDir.split(/[\\/]/).filter(Boolean).pop() || curDir) : '未选择文件夹（点击选择或拖入）';
+          fw.innerHTML = `
+            <div class="wf-field-label"><span>${esc(field.label)}</span><span class="muted" data-folder-count></span></div>
+            <div class="wf-file-box">
+              <button class="btn btn-ghost btn-sm" data-pick-scan-dir>📁 选择文件夹</button>
+              <span class="wf-file-name ${curDir ? '' : 'empty'}" title="${esc(curDir)}">${esc(dirName)}</span>
+            </div>`;
+          fw.querySelector('[data-pick-scan-dir]').onclick = async () => {
+            const picked = await window.api.pickDir();
+            if (!picked) return;
+            await assignFolderToNode(node, picked);
+          };
+          if (curDir) {
+            refreshFolderCount(node, fw.querySelector('[data-folder-count]'));
+          }
         } else if (field.type === 'wfDirPicker') {
           const dir = p.customDir || '';
           fw.innerHTML = `
@@ -1107,7 +1173,7 @@
       if (!el || !node) return;
       const st = nodeStates.get(nodeId);
 
-      el.classList.remove('state-running', 'state-done', 'state-cached', 'state-error');
+      el.classList.remove('state-running', 'state-done', 'state-cached', 'state-error', 'state-skipped');
       const badge = el.querySelector('[data-badge]');
       const previewArea = el.querySelector('[data-preview-box]');
       if (!badge || !previewArea) return;
@@ -1125,6 +1191,10 @@
         el.classList.add('state-running');
         badge.className = 'wf-node-badge running';
         badge.textContent = `${Math.round((st.progress || 0) * 100)}%`;
+      } else if (st.status === 'skipped') {
+        el.classList.add('state-skipped');
+        badge.className = 'wf-node-badge skipped';
+        badge.textContent = '⏭ 跳过';
       } else if (st.status === 'cached') {
         el.classList.add('state-cached');
         badge.className = 'wf-node-badge cached';
@@ -1149,6 +1219,26 @@
       if (st?.status === 'error' && st.errorMsg) {
         previewArea.classList.remove('hidden');
         previewArea.innerHTML = `<div class="wf-node-error-box">${esc(st.errorMsg)}</div>`;
+      } else if (st?.status === 'skipped') {
+        previewArea.classList.remove('hidden');
+        previewArea.innerHTML = '<div class="wf-node-preview-meta"><span>上游分流无匹配项，已跳过执行</span></div>';
+      } else if (st?.payload?.branchCounts) {
+        const bc = st.payload.branchCounts;
+        const labels = node.type === 'io.routeType'
+          ? [['images', '位图'], ['svgs', 'SVG'], ['anims', '动图/视频'], ['others', '其他']]
+          : [['matched', '符合'], ['unmatched', '不符合']];
+        previewArea.classList.remove('hidden');
+        previewArea.innerHTML = `
+          <div class="wf-branch-counts">
+            ${labels.map(([k, l]) => {
+              const cnt = Number(bc[k]) || 0;
+              return `<span class="wf-branch-pill ${cnt > 0 ? 'has' : ''}">${esc(l)}: ${cnt}</span>`;
+            }).join('')}
+          </div>
+          <div class="wf-node-preview-meta">
+            <span>总计 ${st.payload.paths?.length || 0} 项已分流</span>
+          </div>
+        `;
       } else if (st?.payload?.kind === 'compare') {
         previewArea.classList.remove('hidden');
         const bExt = extOf(st.payload.beforePath);
@@ -1216,7 +1306,7 @@
           <div class="wf-node-preview-ops">
             ${isImgLike || isVideo ? '<button class="wf-mini-btn" data-op="zoom">⛶ 放大</button>' : ''}
             <button class="wf-mini-btn" data-op="locate">📂 定位</button>
-            ${node.type !== 'io.save' && node.type !== 'io.loadFile' && node.type !== 'io.loadBatch'
+            ${!['io.save', 'io.loadFile', 'io.loadBatch', 'io.loadFolder'].includes(node.type)
               ? '<button class="wf-mini-btn" data-op="save-as">💾 另存</button>'
               : ''}
             <button class="wf-mini-btn" data-op="to-single" title="将该节点结果发送回单工具模式">🛠️ 发回单工具</button>
@@ -1449,16 +1539,33 @@
       const st = nodeStates.get(node.id);
       const menu = document.createElement('div');
       menu.className = 'wf-ctx-menu';
-      menu.style.left = `${Math.min(clientX, window.innerWidth - 205)}px`;
-      menu.style.top = `${Math.min(clientY, window.innerHeight - 230)}px`;
+      menu.style.left = `${Math.min(clientX, window.innerWidth - 220)}px`;
+      menu.style.top = `${Math.min(clientY, window.innerHeight - 280)}px`;
 
+      const canBypass = !def?.isIo || ['io.listPick', 'io.routeCondition'].includes(node.type);
       const items = [
         { label: '▶ 运行到此节点', act: () => runWorkflow({ targetNodeId: node.id }) },
-        ...(!def?.isIo || node.type === 'io.listPick' ? [{
+        {
+          label: '🔁 强制重跑此节点及下游',
+          act: () => {
+            const affected = runner.invalidateNodeAndDownstream(graph, node.id);
+            for (const nid of affected) {
+              nodeStates.delete(nid);
+              updateNodeStateUI(nid);
+            }
+            runWorkflow({ forceRun: false });
+          },
+        },
+        ...(canBypass ? [{
           label: node.bypass ? '✅ 恢复启用此节点' : '⏭ 旁路跳过 (Ctrl+B)',
           act: () => toggleBypassSelected(),
         }] : []),
         { label: '📑 复制节点 (Ctrl+D)', act: () => duplicateSelected() },
+        ...(selectedNodes.size >= 2 ? [
+          { sep: true },
+          { label: '📐 顶部水平对齐', act: () => alignSelected('top') },
+          { label: '📐 左侧垂直对齐', act: () => alignSelected('left') },
+        ] : []),
         ...(st?.payload?.paths?.length ? [{
           label: '🛠️ 发送结果到单工具',
           act: () => bridge.sendToSingle(st.payload.paths),
@@ -1488,8 +1595,35 @@
     }
 
     // -----------------------------------------------------------------------
-    // 快捷键操作（旁路 / 复制 / 向上游追溯参考画面）
+    // 快捷键操作（旁路 / 复制 / 对齐 / 向上游追溯参考画面）
     // -----------------------------------------------------------------------
+    function alignSelected(axis) {
+      if (selectedNodes.size < 2) return;
+      snapshotUndo();
+      const nodes = Array.from(selectedNodes)
+        .map((id) => graph.nodes.find((x) => x.id === id))
+        .filter(Boolean);
+      if (nodes.length < 2) return;
+      if (axis === 'top') {
+        const minY = Math.min(...nodes.map((n) => n.y));
+        nodes.forEach((n) => {
+          n.y = minY;
+          const el = nodeEls.get(n.id);
+          if (el) el.style.top = `${minY}px`;
+        });
+      } else {
+        const minX = Math.min(...nodes.map((n) => n.x));
+        nodes.forEach((n) => {
+          n.x = minX;
+          const el = nodeEls.get(n.id);
+          if (el) el.style.left = `${minX}px`;
+        });
+      }
+      persistCurrent();
+      renderWires();
+      bridge.toast(axis === 'top' ? '已顶部水平对齐选中节点' : '已左侧垂直对齐选中节点');
+    }
+
     function toggleBypassSelected() {
       if (!selectedNodes.size) return;
       snapshotUndo();
@@ -1497,7 +1631,7 @@
         const n = graph.nodes.find((x) => x.id === nid);
         if (!n) continue;
         const def = reg.getDef(n.type);
-        if (def?.isIo && n.type !== 'io.listPick') continue;
+        if (def?.isIo && !['io.listPick', 'io.routeCondition'].includes(n.type)) continue;
         n.bypass = !n.bypass;
         runner.invalidateNodeAndDownstream(graph, n.id);
         const el = nodeEls.get(n.id);
@@ -1562,6 +1696,13 @@
         const r = await window.api.probe(n.params.filePaths[0]);
         if (r.ok) return { path: n.params.filePaths[0], info: r.info };
       }
+      if (n?.type === 'io.loadFolder' && n.params?.dirPath) {
+        const scan = await scanFolderForNode(n, 5);
+        if (scan?.ok && scan.files?.length) {
+          const r = await window.api.probe(scan.files[0]);
+          if (r.ok) return { path: scan.files[0], info: r.info };
+        }
+      }
       const inEdges = graph.edges.filter((e) => e.toNode === nodeId);
       for (const e of inEdges) {
         const found = await findUpstreamSampleFile(e.fromNode, visited);
@@ -1601,6 +1742,19 @@
       onParamsChanged(node);
       rerenderNodeBody(node);
       updateNodeStateUI(node.id);
+    }
+
+    async function assignFolderToNode(node, dirPath) {
+      if (isRunning) return;
+      node.params.dirPath = dirPath;
+      nodeStates.delete(node.id);
+      onParamsChanged(node);
+      rerenderNodeBody(node);
+      updateNodeStateUI(node.id);
+      const scan = await scanFolderForNode(node, 500);
+      if (scan?.ok) {
+        bridge.toast(`已绑定文件夹，当前匹配 ${scan.files.length} 个文件`);
+      }
     }
 
     // -----------------------------------------------------------------------
@@ -1650,6 +1804,7 @@
         probe: (p) => window.api.probe(p),
         probeMulti: (ps) => window.api.probeMulti(ps),
         listDir: (d, lim) => window.api.listDir(d, lim),
+        scanDir: (opts) => window.api.wfScanDir(opts),
         statMulti: (ps) => window.api.wfStatMulti(ps),
         allocNodeDir: (opts) => window.api.wfAllocNodeDir(opts),
         exportFiles: (opts) => window.api.wfExportFiles(opts),
@@ -1691,12 +1846,12 @@
         const { summary } = res;
         window.api.notifyDone(
           '工作流执行完成',
-          `执行 ${summary.executed} 个，命中缓存 ${summary.cached} 个${summary.exportedFiles.length ? `，导出 ${summary.exportedFiles.length} 个文件` : ''}`,
+          `执行 ${summary.executed} 个，命中缓存 ${summary.cached} 个${summary.skipped ? `，跳过空分支 ${summary.skipped} 个` : ''}${summary.exportedFiles.length ? `，导出 ${summary.exportedFiles.length} 个文件` : ''}`,
         );
         const noSaveHint = !targetNodeId && !graph.nodes.some((n) => n.type === 'io.save')
           ? '（未连接「保存/导出」节点，结果仅在节点内预览，可点另存或接入保存节点落盘）'
           : '';
-        bridge.toast(`✅ 工作流完成：执行 ${summary.executed} · 缓存 ${summary.cached}${summary.exportedFiles.length ? ` · 导出 ${summary.exportedFiles.length} 项` : ''}${noSaveHint}`);
+        bridge.toast(`✅ 工作流完成：执行 ${summary.executed} · 缓存 ${summary.cached}${summary.skipped ? ` · 跳过 ${summary.skipped}` : ''}${summary.exportedFiles.length ? ` · 导出 ${summary.exportedFiles.length} 项` : ''}${noSaveHint}`);
       } catch (err) {
         if (err.message === '工作流已取消' || err.message === '任务已取消') {
           bridge.toast('已停止运行工作流', true);
@@ -1807,7 +1962,7 @@
         openQuickNodeMenu(e.clientX, e.clientY);
       });
 
-      // 从左侧栏拖入节点或从桌面拖入媒体文件
+      // 从左侧栏拖入节点或从桌面拖入媒体文件/文件夹
       vpEl.addEventListener('dragover', (e) => {
         e.preventDefault();
         vpEl.classList.add('dragover');
@@ -1830,9 +1985,16 @@
           const paths = [...files].map((f) => window.api.getPath(f)).filter(Boolean);
           if (!paths.length) return;
           if (paths.length === 1) {
-            const node = addNode('io.loadFile', pt.x - DEFAULT_NODE_W / 2, pt.y - 30);
-            if (node) await assignSingleFileToNode(node, paths[0]);
-            ensureNodeVisible(node);
+            const st = await window.api.wfStatMulti(paths).catch(() => []);
+            if (st?.[0]?.isDirectory) {
+              const node = addNode('io.loadFolder', pt.x - DEFAULT_NODE_W / 2, pt.y - 30);
+              if (node) await assignFolderToNode(node, paths[0]);
+              ensureNodeVisible(node);
+            } else {
+              const node = addNode('io.loadFile', pt.x - DEFAULT_NODE_W / 2, pt.y - 30);
+              if (node) await assignSingleFileToNode(node, paths[0]);
+              ensureNodeVisible(node);
+            }
           } else {
             const node = addNode('io.loadBatch', pt.x - DEFAULT_NODE_W / 2, pt.y - 30);
             if (node) await assignBatchFilesToNode(node, paths, false);

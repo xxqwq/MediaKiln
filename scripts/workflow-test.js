@@ -81,6 +81,39 @@ function createNodeRuntime() {
         return [];
       }
     },
+    scanDir(opts = {}) {
+      const dirPath = opts.dirPath;
+      const recursive = !!opts.recursive;
+      const limit = Math.max(1, Math.min(2000, Number(opts.limit) || 500));
+      const extSet = Array.isArray(opts.extensions) && opts.extensions.length
+        ? new Set(opts.extensions.map((e) => String(e).toLowerCase().replace(/^\./, '')))
+        : null;
+      if (!dirPath || !fs.existsSync(dirPath)) return { ok: false, error: '文件夹不存在', files: [] };
+      const results = [];
+      const walk = (dir) => {
+        if (results.length >= limit) return;
+        let entries = [];
+        try {
+          entries = fs.readdirSync(dir, { withFileTypes: true });
+        } catch {
+          return;
+        }
+        entries.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+        for (const ent of entries) {
+          if (results.length >= limit) break;
+          if (ent.name.startsWith('.') || ent.name === 'node_modules') continue;
+          const full = path.join(dir, ent.name);
+          if (ent.isDirectory()) {
+            if (recursive) walk(full);
+          } else if (ent.isFile()) {
+            const ext = path.extname(ent.name).slice(1).toLowerCase();
+            if (!extSet || extSet.has(ext)) results.push(full);
+          }
+        }
+      };
+      walk(dirPath);
+      return { ok: true, files: results };
+    },
     statMulti(filePaths) {
       return (filePaths || []).map((p) => {
         try {
@@ -162,10 +195,10 @@ async function step(name, fn) {
   const reg = regFactory.createRegistry(features);
   const runtime = createNodeRuntime();
 
-  await step('1. 节点注册表完整性（6 个 I/O + 49 个子功能 = 55 个节点）', () => {
+  await step('1. 节点注册表完整性（9 个 I/O + 49 个子功能 = 58 个节点）', () => {
     const all = reg.getAllDefs();
     assert.strictEqual(features.length, 49, `FEATURES 应为 49 个，实际 ${features.length}`);
-    assert.strictEqual(all.length, 55, `总节点数应为 55 个，实际 ${all.length}`);
+    assert.strictEqual(all.length, 58, `总节点数应为 58 个，实际 ${all.length}`);
     for (const def of all) {
       assert(def.type && def.name && def.group, `节点定义字段缺失: ${def.type}`);
       const dp = def.defaultParams();
@@ -207,8 +240,8 @@ async function step(name, fn) {
     assert(subSpecBurn.exts.includes('mp4'), '字幕烧录模式动态输出应包含视频格式');
   });
 
-  await step('3. 6 套预设模板通过 normalizeGraphData 与拓扑排序校验', () => {
-    assert.strictEqual(tplMod.WORKFLOW_TEMPLATES.length, 6);
+  await step('3. 7 套预设模板通过 normalizeGraphData 与拓扑排序校验', () => {
+    assert.strictEqual(tplMod.WORKFLOW_TEMPLATES.length, 7);
     for (const tpl of tplMod.WORKFLOW_TEMPLATES) {
       const norm = tplMod.normalizeGraphData(tpl.graph, reg);
       assert.strictEqual(norm.nodes.length, tpl.graph.nodes.length, `模板 ${tpl.id} 节点数丢失`);
@@ -398,6 +431,68 @@ async function step(name, fn) {
     assert(fs.existsSync(outStyledDocx) && outStyledDocx.endsWith('.docx'), '应成功导出美化后的 docx');
     const docInfo = await probe(outStyledDocx);
     assert.strictEqual(docInfo.imageCount, 1);
+  });
+
+  await step('9. 文件夹扫描 + 按格式分流 + 条件分流 + 空分支跳过 + 多分支汇聚导出', async () => {
+    const mixDir = path.join(TMP, 'mix_folder');
+    const subDir = path.join(mixDir, 'nested');
+    const routeOutDir = path.join(TMP, 'route_exported');
+    fs.mkdirSync(subDir, { recursive: true });
+    fs.mkdirSync(routeOutDir, { recursive: true });
+
+    const bigImg = path.join(mixDir, 'hero_wide.png');
+    const smallImg = path.join(subDir, 'thumb_small.png');
+    const svgFile = path.join(subDir, 'logo.svg');
+    fs.copyFileSync(bigPng, bigImg);
+    runFfmpegSync(['-f', 'lavfi', '-i', 'color=c=red:s=200x120:d=0.1', '-frames:v', '1', smallImg]);
+    fs.writeFileSync(svgFile, '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><rect x="0" y="0" width="120" height="120" fill="#3366ff"/><!-- comment --></svg>', 'utf8');
+
+    const nodeStatesLog = new Map();
+    const flowRoute = tplMod.normalizeGraphData({
+      name: '目录混合素材分流',
+      nodes: [
+        { id: 'r1', type: 'io.loadFolder', x: 0, y: 200, params: { dirPath: mixDir, recursive: 'yes', filterKind: 'all' } },
+        { id: 'r2', type: 'io.routeType', x: 340, y: 200, params: { gifBucket: 'anims' } },
+        // images 分支再按宽度 > 500 条件分流
+        { id: 'r3', type: 'io.routeCondition', x: 680, y: 60, params: { rule: 'widthGt', threshold: '500', keyword: '' } },
+        { id: 'r4', type: 'feat.imageConvert', x: 1020, y: 0, params: { format: 'webp', quality: 'medium', resizeMode: 'keep', maxSide: '1920', bgColor: '#ffffff', stripMeta: 'yes' } },
+        { id: 'r5', type: 'feat.imageFrame', x: 1020, y: 180, params: { rounded: '16', padding: '8', format: 'png', bgMode: 'transparent' } },
+        // svgs 分支
+        { id: 'r6', type: 'feat.svgOptimize', x: 680, y: 320, params: { preset: 'default', floatPrecision: '2', keepViewBox: 'yes', stripDims: 'no' } },
+        // anims 为空分支（目录中没有视频/GIF），应自动跳过而非报错
+        { id: 'r7', type: 'feat.compressTarget', x: 680, y: 520, params: { targetMB: '2' } },
+        // 多分支汇聚同一个保存节点
+        { id: 'r8', type: 'io.save', x: 1380, y: 220, params: { outMode: 'custom', customDir: routeOutDir, suffix: '_rt', exportAsFolder: 'flat', noOverwrite: 'no' } },
+      ],
+      edges: [
+        { id: 're1', fromNode: 'r1', fromPort: 'media', toNode: 'r2', toPort: 'items' },
+        { id: 're2', fromNode: 'r2', fromPort: 'images', toNode: 'r3', toPort: 'items' },
+        { id: 're3', fromNode: 'r3', fromPort: 'matched', toNode: 'r4', toPort: 'input' },
+        { id: 're4', fromNode: 'r3', fromPort: 'unmatched', toNode: 'r5', toPort: 'input' },
+        { id: 're5', fromNode: 'r2', fromPort: 'svgs', toNode: 'r6', toPort: 'input' },
+        { id: 're6', fromNode: 'r2', fromPort: 'anims', toNode: 'r7', toPort: 'input' },
+        { id: 're7', fromNode: 'r4', fromPort: 'out', toNode: 'r8', toPort: 'media' },
+        { id: 're8', fromNode: 'r5', fromPort: 'out', toNode: 'r8', toPort: 'media' },
+        { id: 're9', fromNode: 'r6', fromPort: 'out', toNode: 'r8', toPort: 'media' },
+        { id: 're10', fromNode: 'r7', fromPort: 'out', toNode: 'r8', toPort: 'media' },
+      ],
+    }, reg);
+
+    const { promise } = runner.execute(flowRoute, runtime, {
+      hwAccel: 'cpu',
+      onNodeState(nid, st) {
+        nodeStatesLog.set(nid, st);
+      },
+    });
+    const res = await promise;
+    assert.strictEqual(res.summary.skipped, 1, `空分支 r7 应被跳过 1 次，实际 ${res.summary.skipped}`);
+    assert.strictEqual(nodeStatesLog.get('r7')?.status, 'skipped', 'r7 状态应为 skipped');
+    assert.deepStrictEqual(res.outputs.get('r2').branchCounts, { images: 2, svgs: 1, anims: 0, others: 0 });
+    assert.deepStrictEqual(res.outputs.get('r3').branchCounts, { matched: 1, unmatched: 1 });
+    assert.strictEqual(res.summary.exportedFiles.length, 3, `多分支汇总应导出 3 个文件，实际 ${res.summary.exportedFiles.length}`);
+    assert(res.summary.exportedFiles.some((p) => p.endsWith('.webp')), '大图分支应导出 webp');
+    assert(res.summary.exportedFiles.some((p) => p.endsWith('.png')), '小图分支应导出 png');
+    assert(res.summary.exportedFiles.some((p) => p.endsWith('.svg')), 'SVG 分支应导出 svg');
   });
 
   // 清理测试素材与中间缓存

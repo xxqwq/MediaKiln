@@ -242,6 +242,7 @@ input[type="text"].wf-name-input:focus {
 .wf-node.state-done { border-color: rgba(61, 214, 140, .5); }
 .wf-node.state-cached { border-color: rgba(103, 199, 230, .45); }
 .wf-node.state-error { border-color: rgba(244, 112, 103, .8); }
+.wf-node.state-skipped { border-color: rgba(148, 163, 184, .35); opacity: 0.72; }
 .wf-node.bypassed { opacity: 0.55; }
 
 .wf-node-head {
@@ -296,6 +297,7 @@ input[type="text"].wf-name-input:focus {
 .wf-node-badge.done { background: rgba(61, 214, 140, .18); color: var(--success); }
 .wf-node-badge.cached { background: rgba(103, 199, 230, .18); color: var(--accent-2); }
 .wf-node-badge.error { background: rgba(244, 112, 103, .22); color: var(--danger); }
+.wf-node-badge.skipped { background: rgba(148, 163, 184, .18); color: #94a3b8; }
 .wf-node-badge.bypassed { background: rgba(148, 163, 184, .2); color: #cbd5e1; }
 
 .wf-node-hbtn {
@@ -566,6 +568,24 @@ input[type="text"].wf-name-input:focus {
   cursor: pointer;
 }
 .wf-mini-btn:hover { border-color: var(--accent-2); color: var(--accent-2); }
+.wf-branch-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.wf-branch-pill {
+  font-size: 10.5px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, .03);
+  color: var(--muted);
+}
+.wf-branch-pill.has {
+  border-color: rgba(103, 199, 230, .4);
+  background: rgba(103, 199, 230, .12);
+  color: var(--text);
+}
 .wf-node-error-box {
   padding: 6px 8px;
   border-radius: 6px;

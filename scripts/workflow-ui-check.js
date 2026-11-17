@@ -12,6 +12,7 @@ function registerStubIpc() {
   ipcMain.handle('wf:clear-cache', () => ({ ok: true }));
   ipcMain.handle('wf:alloc-node-dir', (_e, o) => ({ ok: true, dir: path.join(ROOT, '.workflow_cache', o?.subKey || 'test') }));
   ipcMain.handle('wf:stat-multi', () => []);
+  ipcMain.handle('wf:scan-dir', () => ({ ok: true, files: [] }));
   ipcMain.handle('probe', () => ({ ok: false, error: 'stub' }));
   ipcMain.handle('probe-multi', () => []);
   ipcMain.on('set-progress-bar', () => {});
@@ -55,11 +56,11 @@ app.whenReady().then(async () => {
       modeBtnWf.click();
       await new Promise((r) => setTimeout(r, 120));
       const paletteCount = document.querySelectorAll('#nav .wf-node-tpl').length;
-      if (paletteCount !== 55) throw new Error('侧栏工作流节点数异常: ' + paletteCount);
+      if (paletteCount !== 58) throw new Error('侧栏工作流节点数异常: ' + paletteCount);
 
-      // 2. 依次载入 6 套模板并校验节点、连线、可视区域与 HUD 避让
+      // 2. 依次载入 7 套模板并校验节点、连线、可视区域与 HUD 避让
       const tplCount = window.VGT.wfTemplates.WORKFLOW_TEMPLATES.length;
-      if (tplCount !== 6) throw new Error('预设模板数量异常: ' + tplCount);
+      if (tplCount !== 7) throw new Error('预设模板数量异常: ' + tplCount);
 
       for (let i = 0; i < tplCount; i++) {
         window.VGT.wfController.__loadTemplate(i);
@@ -112,7 +113,7 @@ app.whenReady().then(async () => {
         throw new Error('新增高节点超出画布可视区域');
       }
 
-      // 5. 校验全部 55 个节点的标题与端口标签无截断
+      // 5. 校验全部 58 个节点的标题与端口标签无截断
       document.getElementById('wf-btn-clear').click();
       for (const btn of document.querySelectorAll('#nav .wf-node-tpl')) btn.click();
       await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));

@@ -621,6 +621,52 @@ ipcMain.handle('wf:stat-multi', (_e, filePaths) => {
   });
 });
 
+ipcMain.handle('wf:scan-dir', (_e, opts = {}) => {
+  const dirPath = String(opts.dirPath || '').trim();
+  if (!dirPath || !fs.existsSync(dirPath)) {
+    return { ok: false, error: '所选文件夹不存在', files: [] };
+  }
+  try {
+    if (!fs.statSync(dirPath).isDirectory()) {
+      return { ok: false, error: '目标路径不是文件夹', files: [] };
+    }
+  } catch (err) {
+    return { ok: false, error: err.message, files: [] };
+  }
+
+  const recursive = !!opts.recursive;
+  const limit = Math.max(1, Math.min(2000, Number(opts.limit) || 500));
+  const rawExts = Array.isArray(opts.extensions) ? opts.extensions.map((e) => String(e).toLowerCase()) : ['*'];
+  const allowAll = !rawExts.length || rawExts.includes('*');
+  const extSet = new Set(rawExts);
+  if (extSet.has('jpg')) extSet.add('jpeg');
+  if (extSet.has('md')) extSet.add('markdown');
+
+  const files = [];
+  let truncated = false;
+  const walk = (curDir) => {
+    if (files.length >= limit) { truncated = true; return; }
+    let entries;
+    try { entries = fs.readdirSync(curDir, { withFileTypes: true }); } catch { return; }
+    entries.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+    for (const ent of entries) {
+      if (files.length >= limit) { truncated = true; return; }
+      if (ent.name.startsWith('.') || ent.name === 'node_modules') continue;
+      const full = path.join(curDir, ent.name);
+      if (ent.isDirectory()) {
+        if (recursive) walk(full);
+      } else if (ent.isFile()) {
+        const ext = path.extname(ent.name).slice(1).toLowerCase();
+        if (allowAll || (ext && extSet.has(ext))) {
+          files.push(full);
+        }
+      }
+    }
+  };
+  walk(dirPath);
+  return { ok: true, dir: dirPath, files, truncated };
+});
+
 ipcMain.handle('wf:export-files', (_e, opts = {}) => {
   const files = Array.isArray(opts.files) ? opts.files.filter((f) => f && fs.existsSync(f)) : [];
   if (!files.length) return { ok: false, error: '没有可导出的输出文件' };

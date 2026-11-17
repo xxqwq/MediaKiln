@@ -170,6 +170,139 @@
     };
   }
 
+  const FOLDER_FILTER_EXTS = {
+    all: [
+      'mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'ts', 'm4v',
+      'gif', 'jpg', 'jpeg', 'png', 'webp', 'bmp', 'avif', 'ico',
+      'svg', 'mp3', 'm4a', 'wav', 'flac', 'aac', 'ogg',
+      'srt', 'ass', 'ssa', 'vtt', 'docx', 'pptx', 'md', 'markdown', 'pdf',
+    ],
+    videoAnim: ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'ts', 'm4v', 'gif'],
+    image: ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'avif', 'ico'],
+    gif: ['gif'],
+    svg: ['svg'],
+    audio: ['mp3', 'm4a', 'wav', 'flac', 'aac', 'ogg'],
+    doc: ['docx', 'pptx', 'md', 'markdown'],
+  };
+
+  function applyRouteType(payload, params) {
+    const gifToImg = params?.gifBucket === 'images';
+    const rasterExts = new Set(['jpg', 'jpeg', 'png', 'webp', 'bmp', 'avif', 'ico']);
+    const animExts = new Set(['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'ts', 'm4v']);
+    if (gifToImg) rasterExts.add('gif');
+    else animExts.add('gif');
+
+    const buckets = {
+      images: { paths: [], infos: [] },
+      svgs: { paths: [], infos: [] },
+      anims: { paths: [], infos: [] },
+      others: { paths: [], infos: [] },
+    };
+
+    (payload.paths || []).forEach((p, idx) => {
+      const ext = extOf(p);
+      const info = payload.infos?.[idx] || {};
+      let key = 'others';
+      if (rasterExts.has(ext)) key = 'images';
+      else if (ext === 'svg') key = 'svgs';
+      else if (animExts.has(ext)) key = 'anims';
+      buckets[key].paths.push(p);
+      buckets[key].infos.push(info);
+    });
+
+    const mkPort = (b) => ({
+      kind: b.paths.length > 1 ? 'list' : (b.paths.length === 1 ? 'single' : 'list'),
+      paths: b.paths,
+      infos: b.infos,
+      originPath: b.paths[0] || payload.originPath || '',
+      manifestDir: payload.manifestDir || '',
+      sourceDocx: payload.sourceDocx || '',
+    });
+
+    const portPayloads = {
+      images: mkPort(buckets.images),
+      svgs: mkPort(buckets.svgs),
+      anims: mkPort(buckets.anims),
+      others: mkPort(buckets.others),
+    };
+
+    return {
+      kind: 'list',
+      paths: payload.paths || [],
+      infos: payload.infos || [],
+      originPath: payload.originPath || payload.paths?.[0] || '',
+      manifestDir: payload.manifestDir || '',
+      sourceDocx: payload.sourceDocx || '',
+      portPayloads,
+      branchCounts: {
+        images: buckets.images.paths.length,
+        svgs: buckets.svgs.paths.length,
+        anims: buckets.anims.paths.length,
+        others: buckets.others.paths.length,
+      },
+    };
+  }
+
+  function applyRouteCondition(payload, params, fileStatMap) {
+    const rule = params?.rule || 'sizeGtKB';
+    const threshold = Number(params?.threshold) || 0;
+    const keywords = String(params?.keyword || '')
+      .split(/[,，]+/)
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+
+    const matched = { paths: [], infos: [] };
+    const unmatched = { paths: [], infos: [] };
+
+    (payload.paths || []).forEach((p, idx) => {
+      const info = payload.infos?.[idx] || {};
+      const st = fileStatMap?.get(p);
+      const sizeBytes = Number(info.size) || Number(st?.size) || 0;
+      const w = Number(info.width) || 0;
+      const h = Number(info.height) || 0;
+      const baseName = String(p).split(/[\\/]/).pop()?.toLowerCase() || '';
+
+      let ok = false;
+      if (rule === 'sizeGtKB') ok = sizeBytes > threshold * 1024;
+      else if (rule === 'sizeLtKB') ok = sizeBytes < threshold * 1024;
+      else if (rule === 'widthGt') ok = w > threshold;
+      else if (rule === 'landscape') ok = w > 0 && h > 0 && w > h;
+      else if (rule === 'portrait') ok = w > 0 && h > 0 && h > w;
+      else if (rule === 'nameMatch') ok = keywords.length ? keywords.some((kw) => baseName.includes(kw)) : false;
+      else if (rule === 'hasAudio') ok = !!info.hasAudio;
+
+      const dest = ok ? matched : unmatched;
+      dest.paths.push(p);
+      dest.infos.push(info);
+    });
+
+    const mkPort = (b) => ({
+      kind: b.paths.length > 1 ? 'list' : (b.paths.length === 1 ? 'single' : 'list'),
+      paths: b.paths,
+      infos: b.infos,
+      originPath: b.paths[0] || payload.originPath || '',
+      manifestDir: payload.manifestDir || '',
+      sourceDocx: payload.sourceDocx || '',
+    });
+
+    return {
+      kind: 'list',
+      paths: payload.paths || [],
+      infos: payload.infos || [],
+      originPath: payload.originPath || payload.paths?.[0] || '',
+      manifestDir: payload.manifestDir || '',
+      sourceDocx: payload.sourceDocx || '',
+      portPayloads: {
+        matched: mkPort(matched),
+        unmatched: mkPort(unmatched),
+      },
+      branchCounts: {
+        matched: matched.paths.length,
+        unmatched: unmatched.paths.length,
+      },
+    };
+  }
+
   function createWorkflowRunner({ registry, cacheStore }) {
     const store = cacheStore || new Map(); // nodeId -> { sig, payload, savedPaths? }
 
@@ -207,12 +340,26 @@
 
         if (!order.length) throw new Error('画布中还没有任何节点');
 
-        // 收集本地引用文件，一次 stat 校验源文件修改时间与大小
+        // 收集本地引用文件与文件夹扫描结果，一次 stat 校验源文件修改时间与大小
         const localFilesToStat = [];
+        const folderScanMap = new Map();
         for (const nid of order) {
           const n = nodeMap.get(nid);
           if (n.type === 'io.loadFile' && n.params?.filePath) localFilesToStat.push(n.params.filePath);
           if (n.type === 'io.loadBatch' && Array.isArray(n.params?.filePaths)) localFilesToStat.push(...n.params.filePaths);
+          if (n.type === 'io.loadFolder' && n.params?.dirPath) {
+            const exts = FOLDER_FILTER_EXTS[n.params.filterKind || 'all'] || FOLDER_FILTER_EXTS.all;
+            const scanRes = await runtime.scanDir?.({
+              dirPath: n.params.dirPath,
+              recursive: n.params.recursive === 'yes',
+              extensions: exts,
+              limit: 500,
+            });
+            folderScanMap.set(nid, scanRes || { ok: false, error: '当前环境不支持文件夹扫描', files: [] });
+            if (scanRes?.ok && Array.isArray(scanRes.files)) {
+              localFilesToStat.push(...scanRes.files);
+            }
+          }
           for (const [k, val] of Object.entries(n.params || {})) {
             if (k.startsWith('__local_') && typeof val === 'string' && val) localFilesToStat.push(val);
           }
@@ -224,7 +371,56 @@
 
         const outputs = new Map(); // nodeId -> payload
         const signatures = new Map(); // nodeId -> sig string
-        const summary = { executed: 0, cached: 0, bypassed: 0, exportedFiles: [] };
+        const summary = { executed: 0, cached: 0, bypassed: 0, skipped: 0, exportedFiles: [] };
+
+        const resolveEdgePayload = (edge) => {
+          const up = outputs.get(edge.fromNode);
+          if (!up) return null;
+          if (up.portPayloads && edge.fromPort && Object.prototype.hasOwnProperty.call(up.portPayloads, edge.fromPort)) {
+            return up.portPayloads[edge.fromPort];
+          }
+          return up;
+        };
+
+        const collectEdgesPayload = (edgeList) => {
+          const paths = [];
+          const infos = [];
+          let originPath = '';
+          let manifestDir = '';
+          let sourceDocx = '';
+          let kind = 'list';
+          let meta = null;
+          for (const e of edgeList) {
+            const up = resolveEdgePayload(e);
+            if (!up?.paths?.length) continue;
+            if (!originPath && up.originPath) originPath = up.originPath;
+            if (!manifestDir && up.manifestDir) manifestDir = up.manifestDir;
+            if (!sourceDocx && up.sourceDocx) sourceDocx = up.sourceDocx;
+            if (!meta && up.meta) meta = up.meta;
+            if (edgeList.length === 1 && up.kind === 'single') kind = 'single';
+            up.paths.forEach((p, idx) => {
+              paths.push(p);
+              infos.push(up.infos?.[idx] || {});
+            });
+          }
+          if (!originPath && paths.length) originPath = paths[0];
+          return { kind: paths.length > 1 ? 'list' : kind, paths, infos, originPath, manifestDir, sourceDocx, meta };
+        };
+
+        const markNodeSkipped = (nid, node, sig, def, stepIdx) => {
+          const emptyPayload = {
+            kind: 'list',
+            paths: [],
+            infos: [],
+            skipped: true,
+            ...(def.outputs?.length > 1 ? { portPayloads: Object.fromEntries(def.outputs.map((o) => [o.id, { kind: 'list', paths: [], infos: [] }])) } : {}),
+          };
+          summary.skipped++;
+          outputs.set(nid, emptyPayload);
+          store.set(nid, { sig, payload: emptyPayload });
+          onNodeState(nid, { status: 'skipped', progress: 1, payload: emptyPayload });
+          onOverallProgress((stepIdx + 1) / order.length, `⏭ 空分支跳过 (${stepIdx + 1}/${order.length}) · ${def.name}`);
+        };
 
         for (const nid of order) {
           onNodeState(nid, { status: 'pending', progress: 0 });
@@ -253,7 +449,10 @@
           // 计算确定性签名
           const upstreamSigs = {};
           for (const [portId, elist] of inEdgesByPort.entries()) {
-            upstreamSigs[portId] = elist.map((e) => `${e.fromNode}:${e.fromPort}:${signatures.get(e.fromNode) || ''}`);
+            upstreamSigs[portId] = elist.map((e) => {
+              const pRes = resolveEdgePayload(e);
+              return `${e.fromNode}:${e.fromPort}:${signatures.get(e.fromNode) || ''}:${pRes?.paths?.length || 0}`;
+            });
           }
           const localStatsSig = {};
           if (node.type === 'io.loadFile' && node.params?.filePath) {
@@ -264,6 +463,14 @@
               const st = fileStatMap.get(p);
               return st ? `${p}:${st.size}:${st.mtimeMs}` : `${p}:missing`;
             });
+          } else if (node.type === 'io.loadFolder' && node.params?.dirPath) {
+            const scanRes = folderScanMap.get(nid);
+            localStatsSig.folderFiles = scanRes?.ok
+              ? scanRes.files.map((p) => {
+                  const st = fileStatMap.get(p);
+                  return st ? `${p}:${st.size}:${st.mtimeMs}` : `${p}:missing`;
+                })
+              : 'scan-error';
           } else {
             for (const [k, val] of Object.entries(node.params || {})) {
               if (k.startsWith('__local_') && typeof val === 'string' && val) {
@@ -284,29 +491,38 @@
           }));
           signatures.set(nid, sig);
 
-          // 校验缓存命中（io.save 需确认目标导出文件仍存在）
+          // 校验缓存命中（io.save 需确认目标导出文件仍存在；skipped 与多端口路由也支持缓存命中）
           const cached = store.get(nid);
-          if (!forceRun && cached && cached.sig === sig && cached.payload?.paths?.length) {
+          if (!forceRun && cached && cached.sig === sig && cached.payload) {
+            if (cached.payload.skipped) {
+              outputs.set(nid, cached.payload);
+              summary.skipped++;
+              onNodeState(nid, { status: 'skipped', progress: 1, payload: cached.payload });
+              onOverallProgress((stepIdx + 1) / order.length, `⏭ 空分支跳过 (${stepIdx + 1}/${order.length}) · ${def.name}`);
+              continue;
+            }
             const checkPaths = node.type === 'io.save' && cached.savedPaths?.length
               ? cached.savedPaths
-              : cached.payload.paths;
-            const diskStats = await runtime.statMulti(checkPaths);
-            const allAlive = diskStats.length === checkPaths.length && diskStats.every((s) => s.exists && !s.isDirectory && s.size > 0);
-            if (allAlive) {
-              outputs.set(nid, cached.payload);
-              summary.cached++;
-              if (node.type === 'io.save' && cached.savedPaths) {
-                summary.exportedFiles.push(...cached.savedPaths);
+              : (cached.payload.paths || []);
+            if (checkPaths.length) {
+              const diskStats = await runtime.statMulti(checkPaths);
+              const allAlive = diskStats.length === checkPaths.length && diskStats.every((s) => s.exists && !s.isDirectory && s.size > 0);
+              if (allAlive) {
+                outputs.set(nid, cached.payload);
+                summary.cached++;
+                if (node.type === 'io.save' && cached.savedPaths) {
+                  summary.exportedFiles.push(...cached.savedPaths);
+                }
+                onNodeState(nid, {
+                  status: 'cached',
+                  progress: 1,
+                  payload: cached.payload,
+                  savedPaths: cached.savedPaths,
+                  targetDir: cached.targetDir,
+                });
+                onOverallProgress((stepIdx + 1) / order.length, `⚡ 命中缓存 (${stepIdx + 1}/${order.length}) · ${def.name}`);
+                continue;
               }
-              onNodeState(nid, {
-                status: 'cached',
-                progress: 1,
-                payload: cached.payload,
-                savedPaths: cached.savedPaths,
-                targetDir: cached.targetDir,
-              });
-              onOverallProgress((stepIdx + 1) / order.length, `⚡ 命中缓存 (${stepIdx + 1}/${order.length}) · ${def.name}`);
-              continue;
             }
           }
 
@@ -329,7 +545,7 @@
             let savedPaths = null;
             let targetDir = null;
 
-            // ---------- 1. I/O 专用节点 ----------
+            // ---------- 1. I/O 与路由节点 ----------
             if (node.type === 'io.loadFile') {
               const p = node.params?.filePath;
               if (!p) throw new Error('请先选择输入文件');
@@ -355,21 +571,76 @@
                 infos: valid.map((v) => v.info),
                 originPath: valid[0].path,
               };
+            } else if (node.type === 'io.loadFolder') {
+              const dir = node.params?.dirPath;
+              if (!dir) throw new Error('请先选择要扫描的文件夹');
+              const scanRes = folderScanMap.get(nid);
+              if (!scanRes?.ok) throw new Error(scanRes?.error || '无法扫描所选文件夹');
+              if (!scanRes.files.length) throw new Error('所选文件夹内没有符合条件的媒体或文档');
+              const probed = await runtime.probeMulti(scanRes.files);
+              const valid = probed.filter((i) => i.info);
+              if (!valid.length) throw new Error('文件夹内扫描到的文件均无法读取，请检查格式');
+              resultPayload = {
+                kind: 'list',
+                paths: valid.map((v) => v.path),
+                infos: valid.map((v) => v.info),
+                originPath: valid[0].path,
+              };
             } else if (node.type === 'io.listPick') {
-              const upEdge = inEdgesByPort.get('items')?.[0];
-              if (!upEdge) throw new Error('请先连接上游输入');
-              const upPayload = outputs.get(upEdge.fromNode);
+              const upEdges = inEdgesByPort.get('items') || [];
+              if (!upEdges.length) throw new Error('请先连接上游输入');
+              const upPayload = collectEdgesPayload(upEdges);
+              if (!upPayload.paths.length) {
+                markNodeSkipped(nid, node, sig, def, stepIdx);
+                continue;
+              }
               resultPayload = node.bypass ? upPayload : applyListPick(upPayload, node.params);
+            } else if (node.type === 'io.routeType') {
+              const upEdges = inEdgesByPort.get('items') || [];
+              if (!upEdges.length) throw new Error('请先连接上游输入');
+              const upPayload = collectEdgesPayload(upEdges);
+              if (!upPayload.paths.length) {
+                markNodeSkipped(nid, node, sig, def, stepIdx);
+                continue;
+              }
+              resultPayload = applyRouteType(upPayload, node.params);
+            } else if (node.type === 'io.routeCondition') {
+              const upEdges = inEdgesByPort.get('items') || [];
+              if (!upEdges.length) throw new Error('请先连接上游输入');
+              const upPayload = collectEdgesPayload(upEdges);
+              if (!upPayload.paths.length) {
+                markNodeSkipped(nid, node, sig, def, stepIdx);
+                continue;
+              }
+              resultPayload = node.bypass
+                ? {
+                    ...upPayload,
+                    portPayloads: {
+                      matched: { ...upPayload },
+                      unmatched: { kind: 'list', paths: [], infos: [] },
+                    },
+                    branchCounts: { matched: upPayload.paths.length, unmatched: 0 },
+                  }
+                : applyRouteCondition(upPayload, node.params, fileStatMap);
             } else if (node.type === 'io.preview') {
-              const upEdge = inEdgesByPort.get('media')?.[0];
-              if (!upEdge) throw new Error('请先连接要预览的节点');
-              resultPayload = outputs.get(upEdge.fromNode);
+              const upEdges = inEdgesByPort.get('media') || [];
+              if (!upEdges.length) throw new Error('请先连接要预览的节点');
+              const upPayload = collectEdgesPayload(upEdges);
+              if (!upPayload.paths.length) {
+                markNodeSkipped(nid, node, sig, def, stepIdx);
+                continue;
+              }
+              resultPayload = upPayload;
             } else if (node.type === 'io.compare') {
               const eBefore = inEdgesByPort.get('before')?.[0];
               const eAfter = inEdgesByPort.get('after')?.[0];
               if (!eBefore || !eAfter) throw new Error('请同时连接「处理前」与「处理后」两个端口');
-              const pBefore = outputs.get(eBefore.fromNode);
-              const pAfter = outputs.get(eAfter.fromNode);
+              const pBefore = resolveEdgePayload(eBefore);
+              const pAfter = resolveEdgePayload(eAfter);
+              if (!pBefore?.paths?.length || !pAfter?.paths?.length) {
+                markNodeSkipped(nid, node, sig, def, stepIdx);
+                continue;
+              }
               resultPayload = {
                 kind: 'compare',
                 paths: pAfter.paths,
@@ -381,10 +652,13 @@
                 originPath: pAfter.originPath || pBefore.originPath,
               };
             } else if (node.type === 'io.save') {
-              const upEdge = inEdgesByPort.get('media')?.[0];
-              if (!upEdge) throw new Error('请先连接待导出的上游节点');
-              const upPayload = outputs.get(upEdge.fromNode);
-              if (!upPayload?.paths?.length) throw new Error('上游节点没有可导出的文件');
+              const upEdges = inEdgesByPort.get('media') || [];
+              if (!upEdges.length) throw new Error('请先连接待导出的上游节点');
+              const upPayload = collectEdgesPayload(upEdges);
+              if (!upPayload.paths.length) {
+                markNodeSkipped(nid, node, sig, def, stepIdx);
+                continue;
+              }
               const p = node.params || {};
               const outMode = p.outMode === 'global' ? globalOutputMode : (p.outMode || 'same');
               const customDir = p.outMode === 'global' ? globalOutputDir : (p.customDir || '');
@@ -415,26 +689,15 @@
                 throw new Error(`节点「${def.name}」缺少主输入连线`);
               }
 
+              const combinedPrimary = collectEdgesPayload(primaryEdges);
+              if (!combinedPrimary.paths.length) {
+                markNodeSkipped(nid, node, sig, def, stepIdx);
+                continue;
+              }
+
               // 旁路模式：直接将主输入原样透传
               if (node.bypass) {
-                const firstUp = outputs.get(primaryEdges[0].fromNode);
-                if (primaryEdges.length === 1) {
-                  resultPayload = firstUp;
-                } else {
-                  const mergedPaths = [];
-                  const mergedInfos = [];
-                  for (const pe of primaryEdges) {
-                    const up = outputs.get(pe.fromNode);
-                    mergedPaths.push(...(up.paths || []));
-                    mergedInfos.push(...(up.infos || []));
-                  }
-                  resultPayload = {
-                    kind: mergedPaths.length > 1 ? 'list' : 'single',
-                    paths: mergedPaths,
-                    infos: mergedInfos,
-                    originPath: firstUp.originPath,
-                  };
-                }
+                resultPayload = combinedPrimary;
                 summary.bypassed++;
                 outputs.set(nid, resultPayload);
                 store.set(nid, { sig, payload: resultPayload });
@@ -449,44 +712,26 @@
                 const sp = def.inputs[i];
                 const sedges = inEdgesByPort.get(sp.id) || [];
                 if (sedges.length) {
-                  const combinedPaths = [];
-                  const combinedInfos = [];
-                  let sManifestDir = '';
-                  let sSourceDir = '';
-                  for (const se of sedges) {
-                    const sup = outputs.get(se.fromNode);
-                    if (sup?.paths?.length) {
-                      combinedPaths.push(...sup.paths);
-                      combinedInfos.push(...(sup.infos || []));
-                    }
-                    if (!sManifestDir && sup?.manifestDir) sManifestDir = sup.manifestDir;
-                    if (!sSourceDir && sup?.sourceDir) sSourceDir = sup.sourceDir;
+                  const combinedSec = collectEdgesPayload(sedges);
+                  if (combinedSec.paths.length) {
+                    secondaryPayloads[sp.id] = {
+                      paths: combinedSec.paths,
+                      infos: combinedSec.infos,
+                      manifestDir: combinedSec.manifestDir,
+                      sourceDir: combinedSec.sourceDir || '',
+                    };
                   }
-                  secondaryPayloads[sp.id] = {
-                    paths: combinedPaths,
-                    infos: combinedInfos,
-                    manifestDir: sManifestDir,
-                    sourceDir: sSourceDir,
-                  };
                 }
               }
 
               // 展平主输入（单文件 / 列表 / 多连汇聚）
-              const primaryItems = [];
-              let originPath = '';
-              let manifestDir = '';
-              let sourceDocx = '';
-              for (const pe of primaryEdges) {
-                const up = outputs.get(pe.fromNode);
-                if (!originPath && up?.originPath) originPath = up.originPath;
-                if (!manifestDir && up?.manifestDir) manifestDir = up.manifestDir;
-                if (!sourceDocx && up?.sourceDocx) sourceDocx = up.sourceDocx;
-                (up?.paths || []).forEach((p, idx) => {
-                  primaryItems.push({ path: p, info: up.infos?.[idx] || {} });
-                });
-              }
-              if (!primaryItems.length) throw new Error(`节点「${def.name}」上游没有可用文件`);
-              if (!originPath) originPath = primaryItems[0].path;
+              const primaryItems = combinedPrimary.paths.map((p, idx) => ({
+                path: p,
+                info: combinedPrimary.infos?.[idx] || {},
+              }));
+              const originPath = combinedPrimary.originPath || primaryItems[0].path;
+              const manifestDir = combinedPrimary.manifestDir || '';
+              const sourceDocx = combinedPrimary.sourceDocx || '';
 
               // 为本节点分配非 C 盘工作流缓存目录
               const alloc = await runtime.allocNodeDir({
