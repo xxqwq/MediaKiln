@@ -89,6 +89,12 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  try {
+    ffmpeg.ensureBinaries();
+  } catch (err) {
+    console.error('[main] ensureBinaries failed:', err);
+    dialog.showErrorBox('FFmpeg 初始化失败', err.message);
+  }
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -229,6 +235,11 @@ ipcMain.handle('probe-multi', async (_e, filePaths) => {
 // 提取指定时间点画面为 dataURL（可视化裁剪 / 打码 / 吸管取色用；静态图片不传 -ss）
 ipcMain.handle('first-frame', (_e, filePath, timeSec = 0.1) => {
   return new Promise((resolve) => {
+    try {
+      ffmpeg.ensureBinaries();
+    } catch {
+      return resolve(null);
+    }
     const ext = path.extname(filePath).slice(1).toLowerCase();
     const isImg = IMG_EXT.includes(ext);
     const t = !isImg && Number.isFinite(parseFloat(timeSec)) ? Math.max(0, parseFloat(timeSec)) : 0;

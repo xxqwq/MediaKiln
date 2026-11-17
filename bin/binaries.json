@@ -1,0 +1,12 @@
+{
+  "ffmpeg.exe": {
+    "size": 105423872,
+    "sha256": "3256173f3f8bffd7df12227c68adf68025edb1832273a9530688a7bb1ed8edec",
+    "brSize": 29661645
+  },
+  "ffprobe.exe": {
+    "size": 105221120,
+    "sha256": "f0d36ecbbdd3bcfac3efa078c96c7271c2e68b3810595552ac3b7f17e9a65c52",
+    "brSize": 29580280
+  }
+}

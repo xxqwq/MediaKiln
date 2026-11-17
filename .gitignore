@@ -5,8 +5,10 @@ out/
 logs/
 *.log
 
-# Large local FFmpeg binaries (>100MB GitHub limit)
+# Large uncompressed FFmpeg binaries (>100MB GitHub limit; auto-restored from bin/*.exe.br)
 bin/*.exe
+bin/*.tmp.*
+bin/.extracted.json
 
 # Smoke test generated media
 scripts/smoke/

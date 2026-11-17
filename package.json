@@ -7,8 +7,13 @@
   "license": "MIT",
   "scripts": {
     "start": "electron .",
+    "ensure-ffmpeg": "node scripts/ensure-ffmpeg.js",
+    "postinstall": "node scripts/ensure-ffmpeg.js",
+    "prepack": "node scripts/ensure-ffmpeg.js",
+    "predist": "node scripts/ensure-ffmpeg.js",
     "pack": "electron-builder --win portable --dir",
-    "dist": "electron-builder --win portable nsis"
+    "dist": "electron-builder --win portable nsis",
+    "release": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release.ps1"
   },
   "dependencies": {
     "@resvg/resvg-js": "^2.6.2",
@@ -40,7 +45,11 @@
     "extraResources": [
       {
         "from": "bin",
-        "to": "bin"
+        "to": "bin",
+        "filter": [
+          "ffmpeg.exe",
+          "ffprobe.exe"
+        ]
       }
     ],
     "win": {

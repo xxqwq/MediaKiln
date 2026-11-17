@@ -87,15 +87,15 @@ Windows 桌面小工具，全部处理在本地完成，无需联网、不上传
 ## 使用
 
 - **源码一键启动**：双击根目录 `启动工具箱.bat`（直接运行最新代码，不弹长期驻留黑框）
-- **免安装运行**：双击 `release/视频GIF工具箱-2.1.0-便携版.exe`
-- **安装版**：`release/视频GIF工具箱-2.1.0-安装版.exe`（若便携版被杀软误报，用这个）
+- **免安装运行**：双击 `release/视频GIF工具箱-2.1.1-便携版.exe`
+- **安装版**：`release/视频GIF工具箱-2.1.1-安装版.exe`（若便携版被杀软误报，用这个）
 - **开发模式**：`npm start`
 
 ## 开发
 
 ```bash
-npm install          # 建议配置 ELECTRON_MIRROR 等 npmmirror 镜像
-npm start            # 运行
+npm install          # 自动安装依赖并从 bin/*.exe.br 解压内置 FFmpeg（建议配置 ELECTRON_MIRROR 等 npmmirror 镜像）
+npm start            # 运行（若 bin/*.exe 缺失，启动时也会自动从内置压缩包解压）
 node scripts/smoke-test.js   # 冒烟测试（自动生成素材，93 用例覆盖全部功能）
 npm run dist         # 打包便携版 + 安装版到 release/
 ```
@@ -105,12 +105,12 @@ npm run dist         # 打包便携版 + 安装版到 release/
 ```
 main.js            Electron 主进程：窗口、IPC（文件/目录对话框、硬件编码探测、首帧提取、批量探测）
 ffmpeg.js          统一门面：组合 core 与 modules，保持 IPC 调用接口兼容
-core/              基础设施：runner.js（ffprobe/ffmpeg/SVG/文档探测与执行器）、doc-parser.js（DOCX/PPTX/MD 解析）与 utils.js
+core/              基础设施：runner.js（ffprobe/ffmpeg/SVG/文档探测与执行器）、ffmpeg-bin.js（内置 FFmpeg 自动解压校验）、doc-parser.js（DOCX/PPTX/MD 解析）与 utils.js
 modules/           功能模块：video.js、image.js、svg.js、document.js
 preload.js         contextBridge 安全桥接（含 webUtils.getPathForFile 处理拖拽路径）
 renderer/          界面：features/（功能注册表）+ ui/（参数面板/裁剪画布/放大对比弹窗）+ app.js（队列与交互编排）
-bin/               ffmpeg.exe / ffprobe.exe（gyan 9.0.2，打包时经 extraResources 释放）
-scripts/           冒烟测试、WebP 渲染校验工具
+bin/               内置 FFmpeg 9.0.2（gyan.dev）：仓库内置 ffmpeg.exe.br / ffprobe.exe.br 压缩包（每件 ~28MB），npm install 或首次启动自动解压出 ffmpeg.exe / ffprobe.exe，打包时经 extraResources 释放
+scripts/           FFmpeg 解压校验（ensure-ffmpeg.js）、冒烟测试、WebP 渲染校验工具
 ```
 
 ## 技术备注

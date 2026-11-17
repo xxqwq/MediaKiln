@@ -22,5 +22,6 @@ module.exports = {
   cancelAllTasks: runner.cancelAllTasks,
   hasRunningTasks: runner.hasRunningTasks,
   detectHwEncoders: runner.detectHwEncoders,
+  ensureBinaries: runner.ensureBinaries,
   FFMPEG: runner.FFMPEG,
 };

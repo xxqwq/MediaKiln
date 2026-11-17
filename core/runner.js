@@ -5,21 +5,27 @@ const fs = require('fs');
 const path = require('path');
 const { isImagePath, isSvgPath, isDocPath, parseSvgDims } = require('./utils');
 const { inspectDocument } = require('./doc-parser');
+const { resolveBinDir, ensureBinaries: ensureFfmpegBinaries } = require('./ffmpeg-bin');
 
 // 使用项目自带的新版 ffmpeg（gyan 9.0.2）。
 // 不用 ffmpeg-static：其内置的 ffmpeg 6.1 存在动画 WebP 编码缺陷（输出文件损坏）。
-// 开发态位于 <项目>/bin/；打包后由 extraResources 放在 <exe目录>/resources/bin/。
-const binDir = __dirname.includes('app.asar')
-  ? path.join(process.resourcesPath, 'bin')
-  : path.join(__dirname, '..', 'bin');
+// 开发态位于 <项目>/bin/（缺失时自动从内置 .br 解压）；打包后由 extraResources 放在 <exe目录>/resources/bin/。
+const binDir = resolveBinDir();
 
 const FFMPEG = path.join(binDir, 'ffmpeg.exe');
 const FFPROBE = path.join(binDir, 'ffprobe.exe');
 
+// 尝试在加载阶段自动补全（仅当存在内置 .br 压缩包时解压，不会在缺少二进制时直接抛错）
+try {
+  ensureFfmpegBinaries({ strict: false });
+} catch {}
+
+function ensureBinaries(opts) {
+  return ensureFfmpegBinaries({ strict: true, ...opts });
+}
+
 function assertBinaries() {
-  if (!fs.existsSync(FFMPEG) || !fs.existsSync(FFPROBE)) {
-    throw new Error(`ffmpeg 二进制缺失：${binDir} 目录需要包含 ffmpeg.exe 和 ffprobe.exe`);
-  }
+  ensureBinaries();
 }
 
 // ---------------------------------------------------------------------------
@@ -389,6 +395,7 @@ function createExecutor(builders) {
 module.exports = {
   FFMPEG,
   FFPROBE,
+  ensureBinaries,
   probe,
   runFfmpeg,
   runFfmpegCapture,
