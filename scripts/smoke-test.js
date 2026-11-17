@@ -5,8 +5,14 @@ const fs = require('fs');
 const { spawnSync } = require('child_process');
 const { probe, executeTask, FFMPEG } = require('../ffmpeg');
 
-const TMP = path.join(__dirname, 'smoke');
-fs.rmSync(TMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+const TMP_ROOT = path.join(__dirname, 'smoke');
+if (fs.existsSync(TMP_ROOT)) {
+  try { fs.rmSync(TMP_ROOT, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch {}
+  if (fs.existsSync(TMP_ROOT) && process.platform === 'win32') {
+    spawnSync('cmd', ['/d', '/s', '/c', `rd /s /q "${TMP_ROOT}"`], { stdio: 'ignore' });
+  }
+}
+const TMP = path.join(TMP_ROOT, `run_${Date.now()}`);
 fs.mkdirSync(TMP, { recursive: true });
 
 function run(args) {
