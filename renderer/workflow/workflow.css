@@ -37,22 +37,34 @@
 }
 .nav-item.wf-node-tpl {
   cursor: grab;
+  padding: 8px 8px 8px 10px;
+  gap: 7px;
 }
 .nav-item.wf-node-tpl:active { cursor: grabbing; }
 .nav-add-badge {
-  margin-left: auto;
-  opacity: 0;
+  display: none;
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
   font-size: 11px;
   color: var(--accent-2);
   padding: 1px 6px;
   border-radius: 5px;
-  background: rgba(34, 211, 238, .12);
+  background: rgba(15, 22, 36, .94);
+  border: 1px solid rgba(34, 211, 238, .3);
+  pointer-events: none;
 }
-.nav-item.wf-node-tpl:hover .nav-add-badge { opacity: 1; }
+.nav-item.wf-node-tpl:hover .nav-add-badge {
+  display: inline-block;
+  opacity: 1;
+}
 
 /* 工作流主容器 */
 .wf-main {
   flex: 1;
+  min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   height: 100vh;
@@ -109,6 +121,8 @@
 /* 画布视口与点阵网格 */
 .wf-viewport {
   flex: 1;
+  min-width: 0;
+  min-height: 0;
   position: relative;
   overflow: hidden;
   cursor: grab;
@@ -186,7 +200,7 @@
 /* 节点卡片 */
 .wf-node {
   position: absolute;
-  width: 292px;
+  width: 336px;
   background: rgba(20, 25, 36, .96);
   border: 1px solid #283246;
   border-radius: 12px;
@@ -211,8 +225,8 @@
 .wf-node-head {
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 8px 10px;
+  gap: 6px;
+  padding: 8px 9px;
   border-radius: 11px 11px 0 0;
   background: #192030;
   border-bottom: 1px solid #242e42;
@@ -233,14 +247,14 @@
 .wf-node-title {
   font-weight: 600;
   font-size: 12.5px;
+  line-height: 1.3;
   flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  min-width: 0;
+  word-break: break-word;
 }
 .wf-node-badge {
-  font-size: 10.5px;
-  padding: 2px 6px;
+  font-size: 10px;
+  padding: 2px 5px;
   border-radius: 999px;
   background: #232c3f;
   color: var(--muted);
@@ -263,6 +277,7 @@
   cursor: pointer;
   display: grid;
   place-items: center;
+  flex-shrink: 0;
 }
 .wf-node-hbtn:hover { background: rgba(255, 255, 255, .1); color: var(--text); }
 
@@ -271,7 +286,7 @@
   display: flex;
   justify-content: space-between;
   gap: 8px;
-  padding: 8px 0 6px;
+  padding: 7px 0 6px;
 }
 .wf-ports-col {
   display: flex;
@@ -320,15 +335,16 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 120px;
+  max-width: 150px;
 }
 
 /* 节点内嵌参数区 */
 .wf-node-body {
-  padding: 4px 10px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
+  padding: 6px 10px 10px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px 8px;
+  align-items: start;
   border-top: 1px solid rgba(255, 255, 255, .04);
 }
 .wf-node.collapsed .wf-node-ports-body { display: none; }
@@ -337,6 +353,10 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
+}
+.wf-field.wf-field-full {
+  grid-column: 1 / -1;
 }
 .wf-field-label {
   font-size: 11px;
@@ -344,12 +364,19 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 4px;
+}
+.wf-field-label span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .wf-field select,
 .wf-field input[type="text"],
 .wf-field input[type="number"] {
   width: 100%;
-  padding: 5px 8px;
+  min-width: 0;
+  padding: 5px 7px;
   font-size: 12px;
   background: #0e131d;
   border: 1px solid #283347;

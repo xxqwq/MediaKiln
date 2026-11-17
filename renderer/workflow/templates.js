@@ -18,12 +18,12 @@
         name: '视频转精品压缩 GIF',
         nodes: [
           { id: 'n1', type: 'io.loadFile', x: 60, y: 180, params: { filePath: '' } },
-          { id: 'n2', type: 'feat.trimVideo', x: 380, y: 180, params: { tStart: 0, tEnd: 6, precise: 'precise' } },
-          { id: 'n3', type: 'feat.watermark', x: 700, y: 180, params: { mode: 'text', text: '@工具箱', pos: 'br', size: 'medium', opacity: '0.75' } },
-          { id: 'n4', type: 'feat.videoToGif', x: 1020, y: 180, params: { tStart: 0, tEnd: 0, fps: '15', width: '480', colors: '128' } },
-          { id: 'n5', type: 'feat.compressGif', x: 1340, y: 180, params: { preset: 'balanced', width: '480', fps: '12', colors: '128', dither: 'bayer5', statsMode: 'diff', denoise: 'none', dedup: 'no', diffMode: 'rectangle', speed: '1', loop: '0', useTrim: 'no' } },
-          { id: 'n6', type: 'io.compare', x: 1680, y: 60, params: {} },
-          { id: 'n7', type: 'io.save', x: 1680, y: 310, params: { outMode: 'global', customDir: '', suffix: '', exportAsFolder: 'auto', noOverwrite: 'yes' } },
+          { id: 'n2', type: 'feat.trimVideo', x: 440, y: 180, params: { tStart: 0, tEnd: 6, precise: 'precise' } },
+          { id: 'n3', type: 'feat.watermark', x: 820, y: 180, params: { mode: 'text', text: '@工具箱', pos: 'br', size: 'medium', opacity: '0.75' } },
+          { id: 'n4', type: 'feat.videoToGif', x: 1200, y: 180, params: { tStart: 0, tEnd: 0, fps: '15', width: '480', colors: '128' } },
+          { id: 'n5', type: 'feat.compressGif', x: 1580, y: 120, params: { preset: 'balanced', width: '480', fps: '12', colors: '128', dither: 'bayer5', statsMode: 'diff', denoise: 'none', dedup: 'no', diffMode: 'rectangle', speed: '1', loop: '0', useTrim: 'no' } },
+          { id: 'n6', type: 'io.compare', x: 1960, y: 60, params: {} },
+          { id: 'n7', type: 'io.save', x: 1960, y: 290, params: { outMode: 'global', customDir: '', suffix: '', exportAsFolder: 'auto', noOverwrite: 'yes' } },
         ],
         edges: [
           { id: 'e1', fromNode: 'n1', fromPort: 'media', toNode: 'n2', toPort: 'input' },
@@ -44,12 +44,12 @@
       graph: {
         name: '横屏转 9:16 配乐短视频',
         nodes: [
-          { id: 'n1', type: 'io.loadFile', x: 60, y: 120, params: { filePath: '' } },
-          { id: 'n2', type: 'io.loadFile', x: 60, y: 400, params: { filePath: '' } },
-          { id: 'n3', type: 'feat.autoCrop', x: 380, y: 120, params: {} },
-          { id: 'n4', type: 'feat.aspectPad', x: 700, y: 120, params: { ratio: '9:16', bg: 'blur' } },
-          { id: 'n5', type: 'feat.addMusic', x: 1040, y: 240, params: { mode: 'replace', musicVolume: '1' } },
-          { id: 'n6', type: 'io.save', x: 1380, y: 240, params: { outMode: 'global', customDir: '', suffix: '_竖屏', exportAsFolder: 'auto', noOverwrite: 'yes' } },
+          { id: 'n1', type: 'io.loadFile', x: 60, y: 100, params: { filePath: '' } },
+          { id: 'n2', type: 'io.loadFile', x: 60, y: 340, params: { filePath: '' } },
+          { id: 'n3', type: 'feat.autoCrop', x: 440, y: 100, params: {} },
+          { id: 'n4', type: 'feat.aspectPad', x: 820, y: 100, params: { ratio: '9:16', bg: 'blur' } },
+          { id: 'n5', type: 'feat.addMusic', x: 1200, y: 200, params: { mode: 'replace', musicVolume: '1' } },
+          { id: 'n6', type: 'io.save', x: 1580, y: 200, params: { outMode: 'global', customDir: '', suffix: '_竖屏', exportAsFolder: 'auto', noOverwrite: 'yes' } },
         ],
         edges: [
           { id: 'e1', fromNode: 'n1', fromPort: 'media', toNode: 'n3', toPort: 'input' },
@@ -69,10 +69,10 @@
         name: '文档图片提取压缩并回填',
         nodes: [
           { id: 'n1', type: 'io.loadFile', x: 60, y: 200, params: { filePath: '' } },
-          { id: 'n2', type: 'feat.docExtractImages', x: 380, y: 80, params: { naming: 'order', pptMedia: 'images', remoteMode: 'skip', includeSvg: 'yes', dedupe: 'yes' } },
-          { id: 'n3', type: 'feat.imageConvert', x: 720, y: 80, params: { format: 'jpg', quality: 'medium', resizeMode: 'maxSide', maxSide: '1920', bgColor: '#ffffff', stripMeta: 'yes' } },
-          { id: 'n4', type: 'feat.docRepackImages', x: 1060, y: 200, params: {} },
-          { id: 'n5', type: 'io.save', x: 1380, y: 200, params: { outMode: 'global', customDir: '', suffix: '_瘦身回填', exportAsFolder: 'auto', noOverwrite: 'yes' } },
+          { id: 'n2', type: 'feat.docExtractImages', x: 440, y: 80, params: { naming: 'order', pptMedia: 'images', remoteMode: 'skip', includeSvg: 'yes', dedupe: 'yes' } },
+          { id: 'n3', type: 'feat.imageConvert', x: 820, y: 80, params: { format: 'jpg', quality: 'medium', resizeMode: 'maxSide', maxSide: '1920', bgColor: '#ffffff', stripMeta: 'yes' } },
+          { id: 'n4', type: 'feat.docRepackImages', x: 1200, y: 180, params: {} },
+          { id: 'n5', type: 'io.save', x: 1580, y: 180, params: { outMode: 'global', customDir: '', suffix: '_瘦身回填', exportAsFolder: 'auto', noOverwrite: 'yes' } },
         ],
         edges: [
           { id: 'e1', fromNode: 'n1', fromPort: 'media', toNode: 'n2', toPort: 'input' },
@@ -91,12 +91,12 @@
       graph: {
         name: '绿幕透明表情包制作流',
         nodes: [
-          { id: 'n1', type: 'io.loadFile', x: 60, y: 180, params: { filePath: '' } },
-          { id: 'n2', type: 'feat.chromaGif', x: 380, y: 180, params: { color: '#00ff00', similarity: '0.2', blend: '0.08', width: '480', fps: '12' } },
-          { id: 'n3', type: 'feat.decorateMedia', x: 700, y: 180, params: { progressBar: 'none', barColor: '#22d3ee', barHeight: '6', rounded: '24', bgColor: '#000000' } },
-          { id: 'n4', type: 'feat.compressTarget', x: 1020, y: 180, params: { targetMB: '1' } },
-          { id: 'n5', type: 'io.preview', x: 1340, y: 90, params: {} },
-          { id: 'n6', type: 'io.save', x: 1660, y: 90, params: { outMode: 'global', customDir: '', suffix: '_表情包', exportAsFolder: 'auto', noOverwrite: 'yes' } },
+          { id: 'n1', type: 'io.loadFile', x: 60, y: 160, params: { filePath: '' } },
+          { id: 'n2', type: 'feat.chromaGif', x: 440, y: 160, params: { color: '#00ff00', similarity: '0.2', blend: '0.08', width: '480', fps: '12' } },
+          { id: 'n3', type: 'feat.decorateMedia', x: 820, y: 160, params: { progressBar: 'none', barColor: '#22d3ee', barHeight: '6', rounded: '24', bgColor: '#000000' } },
+          { id: 'n4', type: 'feat.compressTarget', x: 1200, y: 160, params: { targetMB: '1' } },
+          { id: 'n5', type: 'io.preview', x: 1580, y: 160, params: {} },
+          { id: 'n6', type: 'io.save', x: 1960, y: 160, params: { outMode: 'global', customDir: '', suffix: '_表情包', exportAsFolder: 'auto', noOverwrite: 'yes' } },
         ],
         edges: [
           { id: 'e1', fromNode: 'n1', fromPort: 'media', toNode: 'n2', toPort: 'input' },
@@ -116,12 +116,12 @@
         name: 'Logo 矢量与 ICO 双路生成',
         nodes: [
           { id: 'n1', type: 'io.loadFile', x: 60, y: 180, params: { filePath: '' } },
-          { id: 'n2', type: 'feat.imageCutout', x: 380, y: 180, params: { color: '#ffffff', similarity: '0.18', blend: '0.06', format: 'png' } },
-          { id: 'n3', type: 'feat.imageToSvg', x: 700, y: 180, params: { mode: 'poster', colors: 'auto', smooth: 'medium', transparentBg: 'alpha', maxDim: '800', noiseFilter: '8', optimizeSvg: 'yes' } },
-          { id: 'n4', type: 'feat.svgOptimize', x: 1020, y: 180, params: { preset: 'default', floatPrecision: '2', keepViewBox: 'yes', stripDims: 'no' } },
-          { id: 'n5', type: 'io.save', x: 1360, y: 60, params: { outMode: 'global', customDir: '', suffix: '_矢量', exportAsFolder: 'auto', noOverwrite: 'yes' } },
-          { id: 'n6', type: 'feat.svgToRaster', x: 1360, y: 290, params: { format: 'ico', scaleMode: 'original', scale: '2', icoSize: '256', quality: 'high', bgMode: 'transparent' } },
-          { id: 'n7', type: 'io.save', x: 1680, y: 290, params: { outMode: 'global', customDir: '', suffix: '_图标', exportAsFolder: 'auto', noOverwrite: 'yes' } },
+          { id: 'n2', type: 'feat.imageCutout', x: 440, y: 180, params: { color: '#ffffff', similarity: '0.18', blend: '0.06', format: 'png' } },
+          { id: 'n3', type: 'feat.imageToSvg', x: 820, y: 150, params: { mode: 'poster', colors: 'auto', smooth: 'medium', transparentBg: 'alpha', maxDim: '800', noiseFilter: '8', optimizeSvg: 'yes' } },
+          { id: 'n4', type: 'feat.svgOptimize', x: 1200, y: 180, params: { preset: 'default', floatPrecision: '2', keepViewBox: 'yes', stripDims: 'no' } },
+          { id: 'n5', type: 'io.save', x: 1580, y: 60, params: { outMode: 'global', customDir: '', suffix: '_矢量', exportAsFolder: 'auto', noOverwrite: 'yes' } },
+          { id: 'n6', type: 'feat.svgToRaster', x: 1580, y: 310, params: { format: 'ico', scaleMode: 'original', scale: '2', icoSize: '256', quality: 'high', bgMode: 'transparent' } },
+          { id: 'n7', type: 'io.save', x: 1960, y: 310, params: { outMode: 'global', customDir: '', suffix: '_图标', exportAsFolder: 'auto', noOverwrite: 'yes' } },
         ],
         edges: [
           { id: 'e1', fromNode: 'n1', fromPort: 'media', toNode: 'n2', toPort: 'input' },
@@ -141,11 +141,11 @@
       graph: {
         name: '视频抽帧拼图工作流',
         nodes: [
-          { id: 'n1', type: 'io.loadFile', x: 60, y: 180, params: { filePath: '' } },
-          { id: 'n2', type: 'feat.snapshot', x: 380, y: 180, params: { mode: 'seq', every: '1', tStart: 0, tEnd: 0 } },
-          { id: 'n3', type: 'feat.imageStitch', x: 720, y: 180, params: { mode: 'grid', cols: '3', fit: 'cover', cellRatio: '4:3', gap: '8', format: 'jpg', bgMode: 'dark' } },
-          { id: 'n4', type: 'io.preview', x: 1060, y: 180, params: {} },
-          { id: 'n5', type: 'io.save', x: 1380, y: 180, params: { outMode: 'global', customDir: '', suffix: '_拼图', exportAsFolder: 'auto', noOverwrite: 'yes' } },
+          { id: 'n1', type: 'io.loadFile', x: 60, y: 160, params: { filePath: '' } },
+          { id: 'n2', type: 'feat.snapshot', x: 440, y: 160, params: { mode: 'seq', every: '1', tStart: 0, tEnd: 0 } },
+          { id: 'n3', type: 'feat.imageStitch', x: 820, y: 120, params: { mode: 'grid', cols: '3', fit: 'cover', cellRatio: '4:3', gap: '8', format: 'jpg', bgMode: 'dark' } },
+          { id: 'n4', type: 'io.preview', x: 1200, y: 160, params: {} },
+          { id: 'n5', type: 'io.save', x: 1580, y: 160, params: { outMode: 'global', customDir: '', suffix: '_拼图', exportAsFolder: 'auto', noOverwrite: 'yes' } },
         ],
         edges: [
           { id: 'e1', fromNode: 'n1', fromPort: 'media', toNode: 'n2', toPort: 'input' },
@@ -216,7 +216,7 @@
 
     const colNums = Array.from(cols.keys()).sort((a, b) => a - b);
     const startX = 70;
-    const colGap = 350;
+    const colGap = 384;
     const startY = 80;
     const rowGap = 36;
 

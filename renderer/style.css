@@ -28,7 +28,7 @@ body {
 
 /* ---------- 侧栏 ---------- */
 .sidebar {
-  width: 232px;
+  width: 256px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;

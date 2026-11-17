@@ -86,8 +86,10 @@
     // -----------------------------------------------------------------------
     // 编辑器状态
     // -----------------------------------------------------------------------
+    const DEFAULT_NODE_W = 336;
     let graph = { version: 1, name: '新建工作流', nodes: [], edges: [] };
     let view = { panX: 40, panY: 40, zoom: 0.92 };
+    let userAdjustedView = false;
     let selectedNodes = new Set();
     let selectedEdgeId = null;
     let nodeStates = new Map(); // nodeId -> { status, progress, payload, errorMsg, savedPaths, targetDir }
@@ -175,6 +177,7 @@
     const forceBtn = containerEl.querySelector('#wf-btn-force');
     const stopBtn = containerEl.querySelector('#wf-btn-stop');
     const minimapCanvas = containerEl.querySelector('#wf-minimap');
+    const zoomHudEl = containerEl.querySelector('.wf-zoom-hud');
     const zoomReadout = containerEl.querySelector('#wf-zoom-readout');
 
     // -----------------------------------------------------------------------
@@ -236,6 +239,7 @@
     }
 
     function zoomAt(nextZoom, clientX, clientY) {
+      userAdjustedView = true;
       const clamped = Math.min(2.2, Math.max(0.25, nextZoom));
       const r = vpEl.getBoundingClientRect();
       const px = clientX ?? (r.left + r.width / 2);
@@ -247,6 +251,20 @@
       applyViewTransform();
     }
 
+    function getGraphBounds() {
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const n of graph.nodes) {
+        const el = nodeEls.get(n.id);
+        const w = el?.offsetWidth || DEFAULT_NODE_W;
+        const h = el?.offsetHeight || 220;
+        minX = Math.min(minX, n.x);
+        minY = Math.min(minY, n.y);
+        maxX = Math.max(maxX, n.x + w);
+        maxY = Math.max(maxY, n.y + h);
+      }
+      return { minX, minY, maxX, maxY };
+    }
+
     function fitView() {
       if (!graph.nodes.length) {
         view = { panX: 40, panY: 40, zoom: 1 };
@@ -255,24 +273,80 @@
       }
       const r = vpEl.getBoundingClientRect();
       if (!r.width || !r.height) return;
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-      for (const n of graph.nodes) {
-        const el = nodeEls.get(n.id);
-        const w = el?.offsetWidth || 292;
-        const h = el?.offsetHeight || 220;
-        minX = Math.min(minX, n.x);
-        minY = Math.min(minY, n.y);
-        maxX = Math.max(maxX, n.x + w);
-        maxY = Math.max(maxY, n.y + h);
-      }
+      const { minX, minY, maxX, maxY } = getGraphBounds();
       const bw = Math.max(100, maxX - minX);
       const bh = Math.max(100, maxY - minY);
-      const pad = 70;
-      const scale = Math.min(1.15, Math.max(0.25, Math.min((r.width - pad * 2) / bw, (r.height - pad * 2) / bh)));
+      const padX = 28;
+      const padTop = 24;
+      const padBottom = 28;
+      let scale = Math.min(1.05, Math.max(0.25, Math.min((r.width - padX * 2) / bw, (r.height - padTop - padBottom) / bh)));
+      let panX = (r.width - bw * scale) / 2 - minX * scale;
+      let panY = padTop + (r.height - padTop - padBottom - bh * scale) / 2 - minY * scale;
+
+      // 避免右下角小地图/缩放栏遮挡节点
+      const hudW = (zoomHudEl?.offsetWidth || 172) + 24;
+      const hudH = (zoomHudEl?.offsetHeight || 150) + 24;
+      const rightEdge = panX + maxX * scale;
+      const bottomEdge = panY + maxY * scale;
+      if (rightEdge > r.width - hudW && bottomEdge > r.height - hudH) {
+        const maxBottom = r.height - hudH;
+        const shiftedY = maxBottom - maxY * scale;
+        if (shiftedY + minY * scale >= 16) {
+          panY = shiftedY;
+        } else {
+          const availH = Math.max(180, r.height - padTop - hudH);
+          scale = Math.min(scale, Math.max(0.25, availH / bh));
+          panX = (r.width - bw * scale) / 2 - minX * scale;
+          panY = padTop + (availH - bh * scale) / 2 - minY * scale;
+        }
+      }
+
       view.zoom = scale;
-      view.panX = (r.width - bw * scale) / 2 - minX * scale;
-      view.panY = (r.height - bh * scale) / 2 - minY * scale;
+      view.panX = panX;
+      view.panY = panY;
       applyViewTransform();
+    }
+
+    function ensureNodeVisible(node) {
+      if (!node) return;
+      const r = vpEl.getBoundingClientRect();
+      const el = nodeEls.get(node.id);
+      if (!r.width || !r.height || !el) return;
+      const nw = el.offsetWidth || DEFAULT_NODE_W;
+      const nh = el.offsetHeight || 220;
+      const hudW = (zoomHudEl?.offsetWidth || 172) + 24;
+      const hudH = (zoomHudEl?.offsetHeight || 150) + 24;
+      const pad = 20;
+
+      // 若单个节点在当前缩放下比可视区域还高/宽，自动适当缩小确保完整展示
+      const maxAvailW = Math.max(220, r.width - pad * 2);
+      const maxAvailH = Math.max(220, r.height - pad * 2);
+      if (nw * view.zoom > maxAvailW || nh * view.zoom > maxAvailH) {
+        view.zoom = Math.max(0.35, Math.min(view.zoom, maxAvailW / nw, maxAvailH / nh));
+      }
+
+      // 尽量把新节点放在视口完整可见范围内（且避开右下角 HUD）
+      const visLeft = -view.panX / view.zoom + pad / view.zoom;
+      const visTop = -view.panY / view.zoom + pad / view.zoom;
+      const visRight = (-view.panX + r.width - pad) / view.zoom;
+      const visBottom = (-view.panY + r.height - pad) / view.zoom;
+      const maxXInVis = Math.max(visLeft, visRight - nw);
+      const maxYInVis = Math.max(visTop, visBottom - nh);
+
+      node.x = Math.round(Math.min(maxXInVis, Math.max(visLeft, node.x)));
+      node.y = Math.round(Math.min(maxYInVis, Math.max(visTop, node.y)));
+
+      const screenR = node.x * view.zoom + view.panX + nw * view.zoom;
+      const screenB = node.y * view.zoom + view.panY + nh * view.zoom;
+      if (screenR > r.width - hudW && screenB > r.height - hudH) {
+        const altY = Math.round((-view.panY + r.height - hudH) / view.zoom - nh);
+        if (altY >= visTop) node.y = altY;
+      }
+
+      el.style.left = `${node.x}px`;
+      el.style.top = `${node.y}px`;
+      applyViewTransform();
+      renderWires();
     }
 
     // -----------------------------------------------------------------------
@@ -296,7 +370,7 @@
       const dot = el.querySelector(`.wf-port-dot[data-port="${portId}"][data-dir="${isOutput ? 'out' : 'in'}"]`);
       if (!dot) {
         return {
-          x: node.x + (isOutput ? (el.offsetWidth || 292) : 0),
+          x: node.x + (isOutput ? (el.offsetWidth || DEFAULT_NODE_W) : 0),
           y: node.y + 52,
         };
       }
@@ -392,10 +466,13 @@
 
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
       for (const n of graph.nodes) {
+        const el = nodeEls.get(n.id);
+        const nw = el?.offsetWidth || DEFAULT_NODE_W;
+        const nh = el?.offsetHeight || 220;
         minX = Math.min(minX, n.x);
         minY = Math.min(minY, n.y);
-        maxX = Math.max(maxX, n.x + 292);
-        maxY = Math.max(maxY, n.y + 220);
+        maxX = Math.max(maxX, n.x + nw);
+        maxY = Math.max(maxY, n.y + nh);
       }
       const vr = vpEl.getBoundingClientRect();
       const vx0 = -view.panX / view.zoom;
@@ -419,18 +496,22 @@
         const na = graph.nodes.find((n) => n.id === e.fromNode);
         const nb = graph.nodes.find((n) => n.id === e.toNode);
         if (!na || !nb) continue;
+        const naw = nodeEls.get(na.id)?.offsetWidth || DEFAULT_NODE_W;
         ctx.beginPath();
-        ctx.moveTo(tx(na.x + 292), ty(na.y + 50));
+        ctx.moveTo(tx(na.x + naw), ty(na.y + 50));
         ctx.lineTo(tx(nb.x), ty(nb.y + 50));
         ctx.stroke();
       }
 
       for (const n of graph.nodes) {
+        const el = nodeEls.get(n.id);
+        const nw = el?.offsetWidth || DEFAULT_NODE_W;
+        const nh = el?.offsetHeight || 180;
         const st = nodeStates.get(n.id)?.status;
         ctx.fillStyle = selectedNodes.has(n.id)
           ? '#22d3ee'
           : (st === 'done' ? '#34d399' : (st === 'error' ? '#f87171' : '#6366f1'));
-        ctx.fillRect(tx(n.x), ty(n.y), Math.max(6, 292 * scale), Math.max(4, 180 * scale));
+        ctx.fillRect(tx(n.x), ty(n.y), Math.max(6, nw * scale), Math.max(4, nh * scale));
       }
 
       ctx.strokeStyle = 'rgba(34,211,238,0.85)';
@@ -715,13 +796,35 @@
       }
     }
 
+    function shouldFieldSpanFull(field, totalFields) {
+      if (totalFields < 4) return true;
+      if ([
+        'wfFilePicker', 'wfBatchPicker', 'wfDirPicker',
+        'cropCanvas', 'multiSegments', 'secondFile', 'replaceSource',
+        'times', 'text', 'color',
+      ].includes(field.type)) return true;
+      if (field.type === 'chips') {
+        const opts = field.options || [];
+        const totalChars = opts.reduce((s, [, l]) => s + String(l || '').length, 0);
+        if (opts.length > 3 || totalChars > 12 || opts.some(([, l]) => String(l || '').length > 6)) return true;
+        return false;
+      }
+      if (field.type === 'select') {
+        const opts = field.options || [];
+        if (opts.some(([, l]) => String(l || '').length > 18)) return true;
+        return false;
+      }
+      return false;
+    }
+
     function renderNodeFields(node, def, body) {
       body.innerHTML = '';
       const p = node.params;
+      const totalFields = def.fields.length;
 
       for (const field of def.fields) {
         const fw = document.createElement('div');
-        fw.className = 'wf-field';
+        fw.className = 'wf-field' + (shouldFieldSpanFull(field, totalFields) ? ' wf-field-full' : '');
         if (field.key) fw.dataset.fieldKey = field.key;
         if (field.type === 'times') fw.dataset.fieldKey = '__times';
 
@@ -1324,6 +1427,7 @@
                   item.targetPort.id,
                 );
               }
+              if (created) ensureNodeVisible(created);
               closePopups();
             };
             listEl.appendChild(btn);
@@ -1649,7 +1753,7 @@
             selectedNodes.clear();
             for (const n of graph.nodes) {
               const el = nodeEls.get(n.id);
-              const nw = el?.offsetWidth || 292;
+              const nw = el?.offsetWidth || DEFAULT_NODE_W;
               const nh = el?.offsetHeight || 200;
               if (n.x + nw >= p0.x && n.x <= p1.x && n.y + nh >= p0.y && n.y <= p1.y) {
                 selectedNodes.add(n.id);
@@ -1665,6 +1769,7 @@
 
         // 左键空白处拖拽 / 中键 / Space+左键：平移画布
         if (e.button === 0 || e.button === 1 || spacePressed) {
+          userAdjustedView = true;
           selectedNodes.clear();
           selectedEdgeId = null;
           syncSelectionClasses();
@@ -1716,7 +1821,8 @@
         const pt = screenToCanvas(e.clientX, e.clientY);
         const nodeType = e.dataTransfer?.getData('application/x-vgt-node');
         if (nodeType) {
-          addNode(nodeType, pt.x - 140, pt.y - 30);
+          const created = addNode(nodeType, pt.x - DEFAULT_NODE_W / 2, pt.y - 30);
+          ensureNodeVisible(created);
           return;
         }
         const files = e.dataTransfer?.files;
@@ -1724,11 +1830,13 @@
           const paths = [...files].map((f) => window.api.getPath(f)).filter(Boolean);
           if (!paths.length) return;
           if (paths.length === 1) {
-            const node = addNode('io.loadFile', pt.x - 140, pt.y - 30);
+            const node = addNode('io.loadFile', pt.x - DEFAULT_NODE_W / 2, pt.y - 30);
             if (node) await assignSingleFileToNode(node, paths[0]);
+            ensureNodeVisible(node);
           } else {
-            const node = addNode('io.loadBatch', pt.x - 140, pt.y - 30);
+            const node = addNode('io.loadBatch', pt.x - DEFAULT_NODE_W / 2, pt.y - 30);
             if (node) await assignBatchFilesToNode(node, paths, false);
+            ensureNodeVisible(node);
           }
         }
       });
@@ -1737,12 +1845,16 @@
       minimapCanvas.addEventListener('mousedown', (e) => {
         e.stopPropagation();
         if (!graph.nodes.length) return;
+        userAdjustedView = true;
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
         for (const n of graph.nodes) {
+          const el = nodeEls.get(n.id);
+          const nw = el?.offsetWidth || DEFAULT_NODE_W;
+          const nh = el?.offsetHeight || 220;
           minX = Math.min(minX, n.x);
           minY = Math.min(minY, n.y);
-          maxX = Math.max(maxX, n.x + 292);
-          maxY = Math.max(maxY, n.y + 220);
+          maxX = Math.max(maxX, n.x + nw);
+          maxY = Math.max(maxY, n.y + nh);
         }
         const vr = vpEl.getBoundingClientRect();
         const vx0 = -view.panX / view.zoom;
@@ -1778,9 +1890,14 @@
       selectedEdgeId = null;
       nodeStates.clear();
       cacheStore.clear();
+      userAdjustedView = false;
       persistCurrent();
       renderAll();
-      setTimeout(fitView, 40);
+      fitView();
+      requestAnimationFrame(() => {
+        fitView();
+        renderWires();
+      });
       if (msg) bridge.toast(msg);
     }
 
@@ -1832,7 +1949,10 @@
 
     containerEl.querySelector('#wf-btn-tpl').onclick = openTemplates;
     containerEl.querySelector('#wf-guide-tpl').onclick = openTemplates;
-    containerEl.querySelector('#wf-guide-add-load').onclick = () => addNode('io.loadFile', 160, 160);
+    containerEl.querySelector('#wf-guide-add-load').onclick = () => {
+      const created = addNode('io.loadFile', 160, 160);
+      ensureNodeVisible(created);
+    };
     containerEl.querySelector('#wf-guide-add-demo').onclick = () => loadGraph(tplMod.WORKFLOW_TEMPLATES[0].graph, '已载入视频转 GIF 示例流');
 
     containerEl.querySelector('#wf-btn-import').onclick = async () => {
@@ -1854,9 +1974,14 @@
       const heights = new Map();
       for (const [id, el] of nodeEls.entries()) heights.set(id, el.offsetHeight || 220);
       tplMod.autoLayoutGraph(graph, heights);
+      userAdjustedView = false;
       persistCurrent();
       renderAll();
-      setTimeout(fitView, 40);
+      fitView();
+      requestAnimationFrame(() => {
+        fitView();
+        renderWires();
+      });
       bridge.toast('已自动整理画布布局');
     };
     containerEl.querySelector('#wf-btn-clear').onclick = () => {
@@ -1868,6 +1993,7 @@
       selectedEdgeId = null;
       nodeStates.clear();
       cacheStore.clear();
+      userAdjustedView = false;
       persistCurrent();
       renderAll();
     };
@@ -1890,7 +2016,11 @@
 
     containerEl.querySelector('#wf-zoom-out').onclick = () => zoomAt(view.zoom / 1.18);
     containerEl.querySelector('#wf-zoom-in').onclick = () => zoomAt(view.zoom * 1.18);
-    containerEl.querySelector('#wf-zoom-fit').onclick = fitView;
+    containerEl.querySelector('#wf-zoom-fit').onclick = () => {
+      userAdjustedView = false;
+      fitView();
+      renderWires();
+    };
 
     // -----------------------------------------------------------------------
     // 对外暴露给 app.js 的控制接口
@@ -1929,9 +2059,12 @@
           btn.innerHTML = `<span class="nav-icon">${def.icon}</span><span class="nav-name">${esc(def.name)}</span><span class="nav-add-badge">+ 添加</span>`;
           btn.onclick = () => {
             const r = vpEl.getBoundingClientRect();
-            const pt = screenToCanvas(r.left + r.width * 0.42, r.top + r.height * 0.35);
-            const offset = (graph.nodes.length % 5) * 26;
-            addNode(def.type, pt.x + offset, pt.y + offset);
+            const pt = screenToCanvas(r.left + r.width * 0.25, r.top + r.height * 0.14);
+            const idx = graph.nodes.length;
+            const colStep = (idx % 3) * 44;
+            const rowStep = (Math.floor(idx / 3) % 3) * 32;
+            const created = addNode(def.type, pt.x + colStep, pt.y + rowStep);
+            ensureNodeVisible(created);
           };
           btn.ondragstart = (e) => {
             e.dataTransfer.setData('application/x-vgt-node', def.type);
@@ -1954,15 +2087,17 @@
       if (!paths?.length) return;
       const r = vpEl.getBoundingClientRect();
       const pt = r.width
-        ? screenToCanvas(r.left + 120, r.top + 140)
+        ? screenToCanvas(r.left + 80, r.top + 80)
         : { x: 80, y: 120 };
       const offset = (graph.nodes.length % 5) * 32;
       if (paths.length === 1) {
         const n = addNode('io.loadFile', pt.x + offset, pt.y + offset);
         if (n) await assignSingleFileToNode(n, paths[0]);
+        ensureNodeVisible(n);
       } else {
         const n = addNode('io.loadBatch', pt.x + offset, pt.y + offset);
         if (n) await assignBatchFilesToNode(n, paths, false);
+        ensureNodeVisible(n);
       }
       bridge.toast(`已将 ${paths.length} 个文件载入画布节点`);
     }
@@ -2035,6 +2170,28 @@
       if (ctxMenuEl && !ctxMenuEl.contains(e.target)) closePopups();
     });
 
+    if (typeof ResizeObserver !== 'undefined') {
+      let prevW = 0;
+      let prevH = 0;
+      const ro = new ResizeObserver(() => {
+        const r = vpEl.getBoundingClientRect();
+        if (!r.width || !r.height) {
+          prevW = 0;
+          prevH = 0;
+          return;
+        }
+        const becameVisible = prevW === 0 || prevH === 0;
+        const resized = Math.abs(r.width - prevW) > 4 || Math.abs(r.height - prevH) > 4;
+        prevW = r.width;
+        prevH = r.height;
+        if ((becameVisible || (resized && !userAdjustedView)) && graph.nodes.length) {
+          fitView();
+          renderWires();
+        }
+      });
+      ro.observe(vpEl);
+    }
+
     // 初始化载入本地画布或默认示例
     bindViewportEvents();
     const saved = storageApi.loadCurrent();
@@ -2053,8 +2210,13 @@
       handleKeyDown,
       onActivated() {
         refreshCacheInfo();
+        userAdjustedView = false;
         renderAll();
-        setTimeout(fitView, 30);
+        fitView();
+        requestAnimationFrame(() => {
+          fitView();
+          renderWires();
+        });
       },
       isRunning: () => isRunning,
       cancelRunning: () => activeController?.cancel(),

@@ -1551,7 +1551,7 @@ function switchAppMode(nextMode) {
   $('single-main').classList.toggle('hidden', appMode !== 'single');
   $('workflow-main').classList.toggle('hidden', appMode !== 'workflow');
   $('nav-search').placeholder = appMode === 'workflow'
-    ? '🔍 搜索工作流节点（支持拖拽或点击添加）'
+    ? '🔍 搜索节点（点击或拖入画布）'
     : '🔍 搜索功能（gif / 图片 / svg / word / md…）';
   $('sidebar-foot').textContent = appMode === 'workflow'
     ? '滚轮缩放 · 拖线松手建节点 · Ctrl+Enter 运行'

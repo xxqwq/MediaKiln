@@ -57,7 +57,7 @@ app.whenReady().then(async () => {
       const paletteCount = document.querySelectorAll('#nav .wf-node-tpl').length;
       if (paletteCount !== 55) throw new Error('侧栏工作流节点数异常: ' + paletteCount);
 
-      // 2. 依次载入 6 套模板并校验节点、连线与自动整理
+      // 2. 依次载入 6 套模板并校验节点、连线、可视区域与 HUD 避让
       const tplCount = window.VGT.wfTemplates.WORKFLOW_TEMPLATES.length;
       if (tplCount !== 6) throw new Error('预设模板数量异常: ' + tplCount);
 
@@ -65,7 +65,8 @@ app.whenReady().then(async () => {
         window.VGT.wfController.__loadTemplate(i);
         await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
         const g = window.VGT.wfController.__getGraph();
-        const domNodes = document.querySelectorAll('#wf-nodes .wf-node').length;
+        const cards = [...document.querySelectorAll('#wf-nodes .wf-node')];
+        const domNodes = cards.length;
         const domWires = document.querySelectorAll('#wf-wire-layer .wf-wire-path').length;
         if (domNodes !== g.nodes.length) {
           throw new Error('模板 ' + i + ' 节点 DOM 数量不一致: ' + domNodes + ' vs ' + g.nodes.length);
@@ -73,13 +74,67 @@ app.whenReady().then(async () => {
         if (domWires !== g.edges.length) {
           throw new Error('模板 ' + i + ' 连线 SVG 数量不一致: ' + domWires + ' vs ' + g.edges.length);
         }
+        const vp = document.getElementById('wf-viewport').getBoundingClientRect();
+        const hud = document.querySelector('.wf-zoom-hud')?.getBoundingClientRect();
+        for (const c of cards) {
+          const r = c.getBoundingClientRect();
+          if (r.left < vp.left - 1 || r.right > vp.right + 1 || r.top < vp.top - 1 || r.bottom > vp.bottom + 1) {
+            throw new Error('模板 ' + i + ' 节点超出视口: ' + c.dataset.nodeId);
+          }
+          if (hud && !(r.right < hud.left || r.left > hud.right || r.bottom < hud.top || r.top > hud.bottom)) {
+            throw new Error('模板 ' + i + ' 节点被右下角 HUD 遮挡: ' + c.dataset.nodeId);
+          }
+        }
       }
 
-      // 3. 测试自动整理布局按钮
+      // 3. 校验侧栏节点名称无截断
+      const truncatedNav = [...document.querySelectorAll('#nav .wf-node-tpl .nav-name')]
+        .filter((el) => el.scrollWidth > el.clientWidth + 1)
+        .map((el) => el.textContent);
+      if (truncatedNav.length) {
+        throw new Error('侧栏节点名称被截断: ' + truncatedNav.join(', '));
+      }
+
+      // 4. 测试从侧栏点击高节点（GIF 压缩）完整可见不裁切
+      document.getElementById('wf-btn-clear').click();
+      document.getElementById('wf-zoom-fit').click();
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const tallBtn = [...document.querySelectorAll('#nav .wf-node-tpl')].find(
+        (b) => b.querySelector('.nav-name')?.textContent === 'GIF 压缩'
+      );
+      if (!tallBtn) throw new Error('未找到 GIF 压缩 节点按钮');
+      tallBtn.click();
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const vpAfterAdd = document.getElementById('wf-viewport').getBoundingClientRect();
+      const addedRect = document.querySelector('#wf-nodes .wf-node')?.getBoundingClientRect();
+      if (!addedRect || addedRect.left < vpAfterAdd.left - 1 || addedRect.right > vpAfterAdd.right + 1 ||
+          addedRect.top < vpAfterAdd.top - 1 || addedRect.bottom > vpAfterAdd.bottom + 1) {
+        throw new Error('新增高节点超出画布可视区域');
+      }
+
+      // 5. 校验全部 55 个节点的标题与端口标签无截断
+      document.getElementById('wf-btn-clear').click();
+      for (const btn of document.querySelectorAll('#nav .wf-node-tpl')) btn.click();
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      for (const card of document.querySelectorAll('#wf-nodes .wf-node')) {
+        const titleEl = card.querySelector('.wf-node-title');
+        if (titleEl && titleEl.scrollWidth > titleEl.clientWidth + 1) {
+          throw new Error('节点标题被截断: ' + titleEl.textContent);
+        }
+        for (const p of card.querySelectorAll('.wf-port-label')) {
+          if (p.scrollWidth > p.clientWidth + 1) {
+            throw new Error('节点端口标签被截断: ' + p.textContent);
+          }
+        }
+      }
+
+      // 6. 测试自动整理布局按钮
+      window.VGT.wfController.__loadTemplate(0);
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
       document.getElementById('wf-btn-layout').click();
       await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
 
-      // 4. 切换回单工具模式
+      // 7. 切换回单工具模式
       modeBtnSingle.click();
       await new Promise((r) => setTimeout(r, 80));
       const singleItems = document.querySelectorAll('#nav .nav-item:not(.wf-node-tpl)').length;
