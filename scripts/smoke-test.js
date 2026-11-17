@@ -1035,6 +1035,73 @@ async function test(name, feature, params, check) {
     }
   });
 
+  // 106. 转场合并 (mergeVideos xfade，自动探测时长模式 & 叠化转场)
+  await test('106. 转场合并 MP4 (xfade 叠化)', 'mergeVideos', {
+    files: [testVideo, testVideo2], mode: 'xfade', transition: 'fade', transDur: 1,
+  }, (i) => {
+    // 10s + 6s - 1s 转场重叠 ≈ 15s
+    if (!i.hasAudio) throw new Error('转场合并后应保留音轨');
+    if (Math.abs(i.duration - 15) > 0.8) throw new Error(`转场合并时长 ${i.duration} 应约 15s`);
+  });
+
+  // 107. 视频淡入淡出 MP4 (黑场 + 音画同步)
+  await test('107. 视频淡入淡出 MP4', 'videoFade', {
+    input: testVideo, fadeIn: 1, fadeOut: 1.5, color: 'black', syncAudio: 'yes',
+    hasAudio: true, totalDuration: 10,
+  }, (i) => {
+    if (!i.hasAudio) throw new Error('应保留音轨');
+    if (Math.abs(i.duration - 10) > 0.4) throw new Error(`时长应约为 10s，实际 ${i.duration}`);
+  });
+
+  // 108. GIF 淡入淡出 (白场)
+  await test('108. GIF 白场淡入淡出', 'videoFade', {
+    input: testGif, fadeIn: 0.5, fadeOut: 0.5, color: 'white', syncAudio: 'no',
+    hasAudio: false, totalDuration: 4,
+  });
+
+  // 109. 一键画面滤镜 MP4 (电影青橙 + 轻度暗角)
+  await test('109. 一键画面滤镜 MP4 (电影青橙+暗角)', 'videoFilter', {
+    input: testVideo, preset: 'cinema', vignette: 'light', sharpen: 'none', totalDuration: 10,
+  }, (i) => {
+    if (i.width !== 1280 || !i.hasAudio) throw new Error('分辨率与音轨应完整保留');
+  });
+
+  // 110a. 一键画面滤镜 GIF (复古胶片)
+  await test('110a. 一键画面滤镜 GIF (复古胶片)', 'videoFilter', {
+    input: testGif, preset: 'vintage', vignette: 'none', sharpen: 'light', totalDuration: 4,
+  });
+
+  // 110b. 一键画面滤镜 PNG (黑白+强暗角)
+  await test('110b. 一键画面滤镜 PNG (黑白+强暗角)', 'videoFilter', {
+    input: img1, preset: 'bw', vignette: 'strong', sharpen: 'none', totalDuration: 0,
+  }, (i) => {
+    if (!i.isImage || i.width <= 0) throw new Error('滤镜输出图片无效');
+  });
+
+  // 111. 视频加标题 - 胶囊底条 + 仅片头前 3 秒
+  await test('111. 视频加标题 MP4 (胶囊底条+定时)', 'videoText', {
+    input: testVideo, text: '片头标题:测试100%', style: 'pill', pos: 'bottom', size: 'medium',
+    color: 'yellow', timing: 'intro3', srcH: 720, totalDuration: 10,
+  }, (i) => {
+    if (i.width !== 1280 || i.height !== 720 || !i.hasAudio) throw new Error('尺寸或音轨异常');
+  });
+
+  // 112. 视频加标题 - 电影上下黑边模式（高度应增加）
+  await test('112. 视频加标题 MP4 (电影上下黑边)', 'videoText', {
+    input: testVideo, text: 'Cinema Title\\n第二行副标题', style: 'cinema', pos: 'bottom', size: 'large',
+    color: 'white', timing: 'all', srcH: 720, totalDuration: 10,
+  }, (i) => {
+    if (i.height <= 720) throw new Error(`电影黑边模式高度应大于 720，实际 ${i.height}`);
+  });
+
+  // 113. 视频加标题 - 顶部醒目标题栏 + 自定义时段
+  await test('113. 视频加标题 MP4 (顶部标题栏+自定义时段)', 'videoText', {
+    input: testVideo, text: '重点片段提示', style: 'banner', pos: 'top', size: 'medium',
+    color: 'cyan', timing: 'custom', start: 1, end: 4, srcH: 720, totalDuration: 10,
+  }, (i) => {
+    if (i.width !== 1280 || i.height !== 720) throw new Error('顶部标题栏尺寸应保持 1280x720');
+  });
+
   console.log(failed ? `\n❌ ${failed} 个用例失败` : '\n🎉 全部通过');
   process.exit(failed ? 1 : 0);
 })();

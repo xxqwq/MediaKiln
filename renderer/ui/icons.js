@@ -83,6 +83,9 @@
     skipFwd: '<path d="m5 4 10 8-10 8zM19 5v14"/>',
     upload2: '<path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"/><path d="M12 12v9M16 16l-4-4-4 4"/>',
     gitBranch: '<line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
+    contrast: '<circle cx="12" cy="12" r="10"/><path d="M12 18a6 6 0 0 0 0-12v12z"/>',
+    aperture: '<circle cx="12" cy="12" r="10"/><path d="m14.31 8 5.74 9.94M9.69 8h11.48M7.38 12l5.74-9.94M9.69 16 3.95 6.06M14.31 16H2.83M16.62 12l-5.74 9.94"/>',
+    typeIcon: '<polyline points="4 7 4 4 20 4 20 7"/><line x1="9" x2="15" y1="20" y2="20"/><line x1="12" x2="12" y1="4" y2="20"/>',
   };
 
   // emoji → [图标名, 语义色调]
@@ -102,7 +105,7 @@
     '💡': ['bulb', 'warn'], '📋': ['clipboard'], '↗': ['external'], '↘': ['arrowDR'], '➡': ['arrowR'],
     '⚖': ['scale'], '🔥': ['flame'], '📍': ['pin'], '📱': ['phone'], '⭐': ['star', 'warn'],
     '▶': ['play'], '⏹': ['stop'], '⏮': ['skipBack'], '⏭': ['skipFwd'], '↻': ['rotate'],
-    '↩': ['rewind'],
+    '↩': ['rewind'], '🌓': ['contrast'], '🎭': ['aperture'], '🔤': ['typeIcon'],
   };
 
   const keys = Object.keys(EMOJI).sort((a, b) => b.length - a.length)

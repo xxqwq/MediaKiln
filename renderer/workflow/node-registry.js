@@ -225,6 +225,8 @@
       case 'subtitleTool':
       case 'audioAdjust':
         return { exts: [...VIDEO_EXTS, 'srt'], isList: false };
+      case 'videoText':
+        return { exts: VIDEO_EXTS, isList: false };
       case 'splitVideo':
         return { exts: ['mp4', 'mkv', 'mov', 'webm'], isList: true };
       case 'pipSplit':
@@ -234,10 +236,12 @@
       case 'videoBlur':
       case 'aspectPad':
       case 'colorStab':
+      case 'videoFilter':
       case 'rotateFlip':
       case 'watermark':
         return { exts: [...VIDEO_EXTS, 'gif', ...IMG_EXTS], isList: false };
       case 'autoCrop':
+      case 'videoFade':
       case 'reverse':
       case 'changeSpeed':
         return { exts: [...VIDEO_EXTS, 'gif'], isList: false };
@@ -419,12 +423,13 @@
       }
       case 'trimVideo':
       case 'multiCut':
+      case 'videoText':
       case 'audioAdjust':
         return passthroughFromUpstream(VIDEO_EXTS);
       case 'splitVideo':
         return passthroughFromUpstream(VIDEO_EXTS, true);
       case 'mergeVideos':
-        return { exts: p.mode === 'compat' ? ['mp4'] : VIDEO_EXTS, typeId: 'video', isList: false };
+        return { exts: (p.mode === 'compat' || p.mode === 'xfade') ? ['mp4'] : VIDEO_EXTS, typeId: 'video', isList: false };
       case 'pipSplit':
       case 'addMusic':
         return { exts: ['mp4'], typeId: 'video', isList: upstreamIsList };
@@ -435,10 +440,12 @@
       case 'videoBlur':
       case 'aspectPad':
       case 'colorStab':
+      case 'videoFilter':
       case 'rotateFlip':
       case 'watermark':
         return passthroughFromUpstream([...VIDEO_EXTS, 'gif', ...IMG_EXTS]);
       case 'autoCrop':
+      case 'videoFade':
       case 'reverse':
       case 'changeSpeed':
         return passthroughFromUpstream([...VIDEO_EXTS, 'gif']);
@@ -489,6 +496,7 @@
     }
     // 防止默认空值执行失败
     if (feature.id === 'gifText' && !defaults.text) defaults.text = '工作流字幕';
+    if (feature.id === 'videoText' && !defaults.text) defaults.text = '精彩片段标题';
     if (feature.id === 'watermark' && !defaults.text) defaults.text = 'Watermark';
     if (feature.id === 'colorStab') defaults.contrast = '1.1';
     return defaults;
@@ -1154,6 +1162,8 @@
           return {
             files: multiItems.map((m) => m.path),
             mode: v.mode || 'fast',
+            transition: v.transition || 'fade',
+            transDur: v.transDur || '0.8',
             infos: multiItems.map((m) => m.info || {}),
           };
         case 'videoCrop': {
@@ -1223,6 +1233,38 @@
             saturation: v.saturation ?? '1',
             sharpen: v.sharpen || 'none',
             stabilize: v.stabilize || 'none',
+            totalDuration: dur,
+          };
+        case 'videoFilter':
+          return {
+            input: inputPath,
+            preset: v.preset || 'cinema',
+            vignette: v.vignette || 'light',
+            sharpen: v.sharpen || 'none',
+            totalDuration: dur,
+          };
+        case 'videoFade':
+          return {
+            input: inputPath,
+            fadeIn: v.fadeIn ?? '1',
+            fadeOut: v.fadeOut ?? '1',
+            color: v.color || 'black',
+            syncAudio: v.syncAudio || 'yes',
+            hasAudio: info.hasAudio,
+            totalDuration: dur,
+          };
+        case 'videoText':
+          return {
+            input: inputPath,
+            text: v.text,
+            style: v.style || 'pill',
+            pos: v.pos || 'bottom',
+            size: v.size || 'medium',
+            color: v.color || 'white',
+            timing: v.timing || 'all',
+            start: v.start ?? '0',
+            end: v.end ?? '5',
+            srcH: info.height,
             totalDuration: dur,
           };
         case 'rotateFlip':

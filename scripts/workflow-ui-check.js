@@ -56,7 +56,7 @@ app.whenReady().then(async () => {
       modeBtnWf.click();
       await new Promise((r) => setTimeout(r, 120));
       const paletteCount = document.querySelectorAll('#nav .wf-node-tpl').length;
-      if (paletteCount !== 58) throw new Error('侧栏工作流节点数异常: ' + paletteCount);
+      if (paletteCount !== 61) throw new Error('侧栏工作流节点数异常: ' + paletteCount);
 
       // 2. 依次载入 7 套模板并校验节点、连线、可视区域与 HUD 避让
       const tplCount = window.VGT.wfTemplates.WORKFLOW_TEMPLATES.length;
@@ -113,7 +113,7 @@ app.whenReady().then(async () => {
         throw new Error('新增高节点超出画布可视区域');
       }
 
-      // 5. 校验全部 58 个节点的标题与端口标签无截断
+      // 5. 校验全部 61 个节点的标题与端口标签无截断
       document.getElementById('wf-btn-clear').click();
       for (const btn of document.querySelectorAll('#nav .wf-node-tpl')) btn.click();
       await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
@@ -139,7 +139,7 @@ app.whenReady().then(async () => {
       modeBtnSingle.click();
       await new Promise((r) => setTimeout(r, 80));
       const singleItems = document.querySelectorAll('#nav .nav-item:not(.wf-node-tpl)').length;
-      if (singleItems !== 49) throw new Error('单工具模式导航恢复异常: ' + singleItems);
+      if (singleItems !== 52) throw new Error('单工具模式导航恢复异常: ' + singleItems);
 
       return { paletteCount, tplCount, singleItems };
     })()`);

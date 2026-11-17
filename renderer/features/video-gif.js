@@ -386,16 +386,33 @@ window.VGT.VIDEO_FEATURES = [
     },
   },
   {
-    id: 'mergeVideos', group: '剪辑', icon: '🔗', name: '视频合并', desc: '多个视频拼接：支持同规格无损或跨格式兼容合并',
+    id: 'mergeVideos', group: '剪辑', icon: '🔗', name: '视频合并', desc: '多个视频拼接：支持同规格无损、兼容合并或叠化/滑动转场拼接',
     accept: VIDEO_EXTS, multi: true,
     fields: [
       { key: 'mode', label: '合并模式', type: 'chips', def: 'fast',
-        options: [['fast', '无损极速（需同规格）'], ['compat', '兼容模式（自动统一分辨率）']] },
+        options: [['fast', '无损极速（需同规格）'], ['compat', '兼容拼接（统一分辨率）'], ['xfade', '转场拼接（叠化/滑动）']] },
+      { key: 'transition', label: '转场效果', type: 'select', def: 'fade',
+        options: [
+          ['fade', '交叉叠化（通用推荐）'],
+          ['fadeblack', '黑场过渡'],
+          ['fadewhite', '白场闪白过渡'],
+          ['slideleft', '向左滑动切换'],
+          ['slideright', '向右滑动切换'],
+          ['wiperight', '从左向右擦除'],
+          ['circleopen', '圆形扩散展开'],
+          ['dissolve', '像素溶解'],
+        ],
+        showIf: (v) => v.mode === 'xfade' },
+      { key: 'transDur', label: '转场时长（秒）', type: 'chips', def: '0.8',
+        options: [['0.4', '0.4 秒'], ['0.8', '0.8 秒（推荐）'], ['1.2', '1.2 秒'], ['1.8', '1.8 秒']],
+        showIf: (v) => v.mode === 'xfade' },
     ],
     collect(v, ctx) {
       return {
         files: ctx.files.map((f) => f.path),
         mode: v.mode,
+        transition: v.transition,
+        transDur: v.transDur,
         infos: ctx.files.map((f) => f.info),
       };
     },
@@ -515,6 +532,87 @@ window.VGT.VIDEO_FEATURES = [
         input: ctx.file.path,
         brightness: v.brightness, contrast: v.contrast, saturation: v.saturation,
         sharpen: v.sharpen, stabilize: v.stabilize,
+        totalDuration: ctx.file.info.duration,
+      };
+    },
+  },
+  {
+    id: 'videoFilter', group: '剪辑', icon: '🎭', name: '一键画面滤镜', desc: '电影青橙、复古胶片、日系清新、黑白高反差等一键色调预设与暗角（视频 / GIF / 图片通用）',
+    accept: [...VIDEO_EXTS, 'gif', ...IMG_EXTS],
+    fields: [
+      { key: 'preset', label: '滤镜风格', type: 'chips', def: 'cinema', fullWidth: true,
+        options: [
+          ['cinema', '电影青橙'],
+          ['vintage', '复古胶片'],
+          ['fresh', '日系清新'],
+          ['warm', '温暖阳光'],
+          ['cool', '清冷蓝调'],
+          ['bw', '高反差黑白'],
+          ['vivid', '鲜明通透'],
+          ['none', '仅加暗角'],
+        ] },
+      { key: 'vignette', label: '四周暗角', type: 'chips', def: 'light',
+        options: [['none', '关闭'], ['light', '轻度暗角（推荐）'], ['strong', '电影重暗角']] },
+      { key: 'sharpen', label: '细节清晰度', type: 'chips', def: 'none',
+        options: [['none', '保持原画'], ['light', '轻微锐化']] },
+    ],
+    collect(v, ctx) {
+      return {
+        input: ctx.file.path,
+        preset: v.preset, vignette: v.vignette, sharpen: v.sharpen,
+        totalDuration: ctx.file.info.duration,
+      };
+    },
+  },
+  {
+    id: 'videoFade', group: '剪辑', icon: '🌓', name: '视频淡入淡出', desc: '片头黑/白屏渐入、片尾渐出，可选音画同步淡入淡出（支持视频与 GIF）',
+    accept: [...VIDEO_EXTS, 'gif'],
+    fields: [
+      { key: 'fadeIn', label: '片头淡入（秒）', type: 'chips', def: '1',
+        options: [['0', '不淡入'], ['0.5', '0.5 秒'], ['1', '1 秒（推荐）'], ['1.5', '1.5 秒'], ['2', '2 秒'], ['3', '3 秒']] },
+      { key: 'fadeOut', label: '片尾淡出（秒）', type: 'chips', def: '1',
+        options: [['0', '不淡出'], ['0.5', '0.5 秒'], ['1', '1 秒（推荐）'], ['1.5', '1.5 秒'], ['2', '2 秒'], ['3', '3 秒']] },
+      { key: 'color', label: '过渡底色', type: 'chips', def: 'black',
+        options: [['black', '黑场渐隐（经典）'], ['white', '白场渐隐']] },
+      { key: 'syncAudio', label: '声音同步淡入淡出', type: 'chips', def: 'yes',
+        options: [['yes', '音画同步（推荐）'], ['no', '仅处理画面']] },
+    ],
+    collect(v, ctx) {
+      return {
+        input: ctx.file.path,
+        fadeIn: v.fadeIn, fadeOut: v.fadeOut, color: v.color, syncAudio: v.syncAudio,
+        hasAudio: ctx.file.info.hasAudio,
+        totalDuration: ctx.file.info.duration,
+      };
+    },
+  },
+  {
+    id: 'videoText', group: '剪辑', icon: '🔤', name: '视频加标题字幕', desc: '加胶囊底条、描边花字、电影上下黑边或顶部标题栏（支持中文与按时段显示）',
+    accept: VIDEO_EXTS,
+    fields: [
+      { key: 'text', label: '标题 / 花字内容（支持 \\n 换行）', type: 'text', def: '', placeholder: '输入要显示的标题或字幕…' },
+      { key: 'style', label: '显示样式', type: 'chips', def: 'pill', fullWidth: true,
+        options: [['pill', '胶囊底条（推荐）'], ['shadow', '描边立体字'], ['cinema', '电影黑边标题'], ['banner', '顶部醒目标题栏']] },
+      { key: 'pos', label: '显示位置', type: 'chips', def: 'bottom',
+        options: [['top', '顶部'], ['center', '居中'], ['bottom', '底部']],
+        showIf: (v) => v.style !== 'banner' },
+      { key: 'size', label: '字号大小', type: 'chips', def: 'medium',
+        options: [['small', '小'], ['medium', '中（推荐）'], ['large', '大'], ['xlarge', '特大']] },
+      { key: 'color', label: '文字颜色', type: 'chips', def: 'white',
+        options: [['white', '经典白'], ['yellow', '醒目黄'], ['cyan', '科技青'], ['coral', '活力红'], ['black', '黑字']] },
+      { key: 'timing', label: '显示时段', type: 'chips', def: 'all',
+        options: [['all', '全程显示'], ['intro3', '仅片头前 3 秒'], ['custom', '自定义时间段']] },
+      { key: 'start', label: '开始时间（秒）', type: 'number', def: '0', min: 0, step: 0.5,
+        showIf: (v) => v.timing === 'custom' },
+      { key: 'end', label: '结束时间（秒）', type: 'number', def: '5', min: 0.1, step: 0.5,
+        showIf: (v) => v.timing === 'custom' },
+    ],
+    collect(v, ctx) {
+      return {
+        input: ctx.file.path,
+        text: v.text, style: v.style, pos: v.pos, size: v.size, color: v.color,
+        timing: v.timing, start: v.start, end: v.end,
+        srcH: ctx.file.info.height,
         totalDuration: ctx.file.info.duration,
       };
     },

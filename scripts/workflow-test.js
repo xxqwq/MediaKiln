@@ -195,10 +195,10 @@ async function step(name, fn) {
   const reg = regFactory.createRegistry(features);
   const runtime = createNodeRuntime();
 
-  await step('1. 节点注册表完整性（9 个 I/O + 49 个子功能 = 58 个节点）', () => {
+  await step('1. 节点注册表完整性（9 个 I/O + 52 个子功能 = 61 个节点）', () => {
     const all = reg.getAllDefs();
-    assert.strictEqual(features.length, 49, `FEATURES 应为 49 个，实际 ${features.length}`);
-    assert.strictEqual(all.length, 58, `总节点数应为 58 个，实际 ${all.length}`);
+    assert.strictEqual(features.length, 52, `FEATURES 应为 52 个，实际 ${features.length}`);
+    assert.strictEqual(all.length, 61, `总节点数应为 61 个，实际 ${all.length}`);
     for (const def of all) {
       assert(def.type && def.name && def.group, `节点定义字段缺失: ${def.type}`);
       const dp = def.defaultParams();

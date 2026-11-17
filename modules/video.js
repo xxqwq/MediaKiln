@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 const {
   FONT,
   isImagePath,
@@ -18,6 +19,7 @@ const {
   writeRoundedMaskPgm,
 } = require('../core/utils');
 const {
+  probe,
   runFfmpeg,
   runFfmpegCapture,
   videoCodecArgs,
@@ -393,6 +395,90 @@ const builders = {
   mergeVideos(p) {
     const files = p.files || [];
     if (files.length < 2) throw new Error('请至少选择 2 个文件');
+
+    if (p.mode === 'xfade') {
+      const output = stampOutput(files[0], '转场合并', 'mp4');
+      const allowedTrans = ['fade', 'fadeblack', 'fadewhite', 'slideleft', 'slideright', 'wiperight', 'circleopen', 'dissolve'];
+      const transition = allowedTrans.includes(p.transition) ? p.transition : 'fade';
+      const reqDur = Math.min(Math.max(num(p.transDur, 0.8), 0.15), 3);
+
+      const buildXfadeArgs = (infos, outTarget) => {
+        const durs = infos.map((i) => num(i?.duration, 0));
+        const minDur = Math.min(...durs);
+        if (minDur < 0.25) {
+          throw new Error('转场拼接要求每个视频片段时长不少于 0.25 秒');
+        }
+        const T = Math.min(reqDur, Math.max(0.12, minDur * 0.4));
+        const W = even(Math.max(num(infos[0]?.width, 1280), 320));
+        const H = even(Math.max(num(infos[0]?.height, 720), 240));
+        const anyAudio = infos.some((i) => i?.hasAudio);
+
+        const inputArgs = [];
+        const fcParts = [];
+        files.forEach((f, idx) => {
+          inputArgs.push('-i', f);
+          fcParts.push(`[${idx}:v]scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=30,settb=AVTB,format=yuv420p[v${idx}]`);
+          if (anyAudio) {
+            if (infos[idx]?.hasAudio) {
+              fcParts.push(`[${idx}:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,asetpts=PTS-STARTPTS[a${idx}]`);
+            } else {
+              fcParts.push(`anullsrc=r=44100:cl=stereo:d=${durs[idx].toFixed(3)}[a${idx}]`);
+            }
+          }
+        });
+
+        let prevV = 'v0';
+        let cumDur = durs[0];
+        for (let idx = 1; idx < files.length; idx++) {
+          const offset = Math.max(0, cumDur - T);
+          const outV = idx === files.length - 1 ? 'v' : `vx${idx}`;
+          fcParts.push(`[${prevV}][v${idx}]xfade=transition=${transition}:duration=${T.toFixed(3)}:offset=${offset.toFixed(3)}[${outV}]`);
+          prevV = outV;
+          cumDur = offset + durs[idx];
+        }
+
+        if (anyAudio) {
+          let prevA = 'a0';
+          for (let idx = 1; idx < files.length; idx++) {
+            const outA = idx === files.length - 1 ? 'a' : `ax${idx}`;
+            fcParts.push(`[${prevA}][a${idx}]acrossfade=d=${T.toFixed(3)}:c1=tri:c2=tri[${outA}]`);
+            prevA = outA;
+          }
+        }
+
+        const args = [...inputArgs, '-filter_complex', fcParts.join(';'), '-map', '[v]'];
+        if (anyAudio) args.push('-map', '[a]', '-c:a', 'aac', '-b:a', '128k');
+        args.push(...videoCodecArgs(p), '-movflags', '+faststart', outTarget);
+        return { args, totalDuration: cumDur };
+      };
+
+      const provided = p.infos || [];
+      const hasAllDurs = files.every((_, idx) => num(provided[idx]?.duration, 0) > 0);
+      if (hasAllDurs) {
+        const { args, totalDuration } = buildXfadeArgs(provided, output);
+        return { output, steps: [{ args, totalDuration }] };
+      }
+
+      return {
+        output,
+        async run(taskId, onProgress) {
+          const resolvedInfos = await Promise.all(files.map(async (f, idx) => {
+            if (num(provided[idx]?.duration, 0) > 0) return provided[idx];
+            return probe(f);
+          }));
+          const ext = path.extname(output);
+          const tmpOut = `${output.slice(0, output.length - ext.length)}.tmp-${crypto.randomBytes(4).toString('hex')}${ext}`;
+          const { args, totalDuration } = buildXfadeArgs(resolvedInfos, tmpOut);
+          try {
+            await runFfmpeg(taskId, args, { totalDuration, onProgress });
+            fs.renameSync(tmpOut, output);
+            return { output };
+          } finally {
+            await fs.promises.rm(tmpOut, { force: true, maxRetries: 5, retryDelay: 200 }).catch(() => {});
+          }
+        },
+      };
+    }
 
     if (p.mode === 'compat') {
       const output = stampOutput(files[0], '合并', 'mp4');
@@ -1366,6 +1452,182 @@ const builders = {
       steps: [{
         args: ['-i', p.input, '-vf', vf, ...videoCodecArgs(p), '-c:a', 'copy', output],
         totalDuration: D,
+      }],
+    };
+  },
+
+  // 视频淡入淡出（片头/片尾黑场或白场渐隐，音画同步）
+  videoFade(p) {
+    const D = num(p.totalDuration, 0);
+    if (D <= 0) throw new Error('无法读取视频时长');
+    let fi = Math.max(0, num(p.fadeIn, 0));
+    let fo = Math.max(0, num(p.fadeOut, 0));
+    if (fi <= 0 && fo <= 0) throw new Error('请至少开启片头淡入或片尾淡出');
+    if (fi + fo > D * 0.95) {
+      const scale = (D * 0.95) / (fi + fo);
+      fi *= scale;
+      fo *= scale;
+    }
+
+    const color = p.color === 'white' ? 'white' : 'black';
+    const vfParts = [];
+    const afParts = [];
+    if (fi > 0) {
+      vfParts.push(`fade=t=in:st=0:d=${fi.toFixed(2)}:color=${color}`);
+      afParts.push(`afade=t=in:st=0:d=${fi.toFixed(2)}`);
+    }
+    if (fo > 0) {
+      const outStart = Math.max(0, D - fo);
+      vfParts.push(`fade=t=out:st=${outStart.toFixed(2)}:d=${fo.toFixed(2)}:color=${color}`);
+      afParts.push(`afade=t=out:st=${outStart.toFixed(2)}:d=${fo.toFixed(2)}`);
+    }
+
+    const ext = path.extname(p.input).slice(1).toLowerCase();
+    if (ext === 'gif') {
+      return gifPlan({
+        input: p.input,
+        output: defaultOutput(p.input, '渐隐', 'gif'),
+        colors: 256,
+        totalDuration: D,
+        vf: `format=rgb24,${vfParts.join(',')}`,
+      });
+    }
+
+    const output = defaultOutput(p.input, '渐隐', videoExt(p.input));
+    const args = ['-i', p.input, '-vf', vfParts.join(','), ...videoCodecArgs(p)];
+    if (p.hasAudio) {
+      if (p.syncAudio !== 'no' && afParts.length) {
+        args.push('-af', afParts.join(','), '-c:a', 'aac', '-b:a', '192k');
+      } else {
+        args.push('-c:a', 'copy');
+      }
+    }
+    args.push(output);
+    return {
+      output,
+      steps: [{ args, totalDuration: D }],
+    };
+  },
+
+  // 一键画面滤镜 + 暗角（支持视频 / GIF / 静态图片）
+  videoFilter(p) {
+    const isImg = isImagePath(p.input);
+    const presetMap = {
+      cinema: 'colorbalance=rs=.12:gs=-.02:bs=-.12:rm=.04:gm=0:bm=-.04:rh=.08:gh=.02:bh=-.08,eq=contrast=1.12:saturation=1.18',
+      vintage: 'colorchannelmixer=.88:.16:.04:0:.04:.86:.10:0:.02:.14:.72:0,eq=brightness=0.02:contrast=1.08:saturation=0.82',
+      fresh: 'eq=brightness=0.06:contrast=0.95:saturation=0.92:gamma=1.06,colorbalance=rs=-.04:gs=.03:bs=.08:rh=-.02:gh=.02:bh=.05',
+      warm: 'colorbalance=rs=.10:gs=.04:bs=-.08:rm=.08:gm=.02:bm=-.06,eq=brightness=0.03:saturation=1.15',
+      cool: 'colorbalance=rs=-.08:gs=0:bs=.12:rm=-.06:gm=.01:bm=.10,eq=contrast=1.06:saturation=0.95',
+      bw: 'hue=s=0,eq=contrast=1.22:brightness=-0.02',
+      vivid: 'eq=contrast=1.10:saturation=1.32:brightness=0.02,unsharp=5:5:0.4:5:5:0.0',
+    };
+    const preset = p.preset || 'cinema';
+    const vignette = p.vignette || 'none';
+    const sharpen = p.sharpen || 'none';
+
+    const vfParts = [];
+    if (presetMap[preset]) vfParts.push(presetMap[preset]);
+    if (vignette === 'light') vfParts.push('vignette=PI/5');
+    else if (vignette === 'strong') vfParts.push('vignette=PI/3.2');
+    if (sharpen === 'light') vfParts.push('unsharp=5:5:0.5:5:5:0.0');
+
+    if (!vfParts.length) throw new Error('请至少选择一种滤镜风格或开启暗角');
+    const ext = path.extname(p.input).slice(1).toLowerCase();
+    const D = num(p.totalDuration, 0);
+
+    if (isImg) {
+      const imgFmt = imageExt(p.input);
+      const output = defaultOutput(p.input, '滤镜', imgFmt);
+      const preFmt = (imgFmt === 'png' || imgFmt === 'webp') ? 'format=rgba,' : 'format=rgb24,';
+      return {
+        output,
+        steps: [{ args: ['-i', p.input, '-vf', preFmt + vfParts.join(','), ...imageCodecArgs(imgFmt, { quality: 'high' }), output], totalDuration: 0 }],
+      };
+    }
+
+    if (ext === 'gif') {
+      return gifPlan({
+        input: p.input,
+        output: defaultOutput(p.input, '滤镜', 'gif'),
+        colors: 256,
+        totalDuration: D,
+        vf: `format=rgb24,${vfParts.join(',')}`,
+      });
+    }
+
+    const output = defaultOutput(p.input, '滤镜', videoExt(p.input));
+    return {
+      output,
+      steps: [{
+        args: ['-i', p.input, '-vf', vfParts.join(','), ...videoCodecArgs(p), '-c:a', 'copy', output],
+        totalDuration: D,
+      }],
+    };
+  },
+
+  // 视频加标题 / 花字栏（胶囊底条 / 描边字 / 电影上下黑边 / 顶部标题栏）
+  videoText(p) {
+    const rawText = String(p.text || '').replace(/\\n/g, '\n').trim();
+    if (!rawText) throw new Error('请输入要添加的标题或文字');
+
+    const srcH = Math.max(num(p.srcH, 720), 64);
+    const sizeDiv = { small: 24, medium: 16, large: 11, xlarge: 8 }[p.size] || 16;
+    const fontsize = Math.max(18, even(srcH / sizeDiv));
+    const colorMap = {
+      white: '#ffffff',
+      yellow: '#fde047',
+      cyan: '#22d3ee',
+      coral: '#fb7185',
+      black: '#111827',
+    };
+    const fontColor = colorMap[p.color] || '#ffffff';
+    const isBlack = p.color === 'black';
+    const pos = ['top', 'center', 'bottom'].includes(p.pos) ? p.pos : 'bottom';
+    const style = ['pill', 'shadow', 'cinema', 'banner'].includes(p.style) ? p.style : 'pill';
+
+    let enableExpr = '';
+    if (p.timing === 'intro3') {
+      enableExpr = ":enable='between(t,0,3)'";
+    } else if (p.timing === 'custom') {
+      const s = Math.max(0, num(p.start, 0));
+      const e = Math.max(s + 0.1, num(p.end, s + 3));
+      enableExpr = `:enable='between(t,${s.toFixed(2)},${e.toFixed(2)})'`;
+    }
+
+    const textFile = path.join(os.tmpdir(), `vgt_vtext_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.txt`);
+    fs.writeFileSync(textFile, rawText, 'utf8');
+    const textFileArg = textFile.replace(/\\/g, '/').replace(/:/g, '\\:');
+
+    let vf;
+    if (style === 'cinema') {
+      const barH = even(Math.max(fontsize * 2.1, srcH * 0.14));
+      const yExpr = pos === 'top'
+        ? `(${barH}-text_h)/2`
+        : (pos === 'center' ? '(h-text_h)/2' : `h-${barH}+(${barH}-text_h)/2`);
+      const textCol = isBlack ? '#ffffff' : fontColor;
+      vf = `pad=iw:ih+${barH * 2}:0:${barH}:black,drawtext=fontfile='${FONT}':textfile='${textFileArg}':fontsize=${fontsize}:fontcolor=${textCol}:x=(w-text_w)/2:y=${yExpr}:expansion=none${enableExpr}`;
+    } else if (style === 'banner') {
+      const barH = even(Math.max(fontsize * 2.1, srcH * 0.13));
+      const boxCol = isBlack ? 'white@0.86' : '#0f172a@0.78';
+      vf = `drawbox=x=0:y=0:w=iw:h=${barH}:color=${boxCol}:t=fill${enableExpr},drawtext=fontfile='${FONT}':textfile='${textFileArg}':fontsize=${fontsize}:fontcolor=${fontColor}:x=(w-text_w)/2:y=(${barH}-text_h)/2:expansion=none${enableExpr}`;
+    } else if (style === 'shadow') {
+      const yExpr = { top: 'h*0.07', center: '(h-text_h)/2', bottom: 'h-text_h-h*0.08' }[pos];
+      const borderCol = isBlack ? 'white' : 'black';
+      vf = `drawtext=fontfile='${FONT}':textfile='${textFileArg}':fontsize=${fontsize}:fontcolor=${fontColor}:borderw=3:bordercolor=${borderCol}:shadowcolor=black@0.6:shadowx=2:shadowy=2:x=(w-text_w)/2:y=${yExpr}:expansion=none${enableExpr}`;
+    } else {
+      const yExpr = { top: 'h*0.07', center: '(h-text_h)/2', bottom: 'h-text_h-h*0.08' }[pos];
+      const boxCol = isBlack ? 'white@0.88' : 'black@0.68';
+      const padBox = Math.max(10, Math.round(fontsize * 0.42));
+      vf = `drawtext=fontfile='${FONT}':textfile='${textFileArg}':fontsize=${fontsize}:fontcolor=${fontColor}:box=1:boxcolor=${boxCol}:boxborderw=${padBox}:x=(w-text_w)/2:y=${yExpr}:expansion=none${enableExpr}`;
+    }
+
+    const output = defaultOutput(p.input, '标题', videoExt(p.input));
+    return {
+      output,
+      cleanup: [textFile],
+      steps: [{
+        args: ['-i', p.input, '-vf', vf, ...videoCodecArgs(p), '-c:a', 'copy', output],
+        totalDuration: num(p.totalDuration, 0),
       }],
     };
   },
