@@ -360,6 +360,95 @@ ipcMain.handle('copy-image', (_e, filePath) => {
   }
 });
 
+const REPLACE_IMG_EXTS = new Set(['png', 'jpg', 'jpeg', 'webp', 'bmp', 'avif', 'gif', 'tif', 'tiff']);
+
+ipcMain.handle('pick-single-image', async () => {
+  const res = await dialog.showOpenDialog(win, {
+    title: '选择用于替换的截图或图片',
+    properties: ['openFile'],
+    filters: [
+      { name: '图片文件', extensions: [...REPLACE_IMG_EXTS] },
+      { name: '所有文件', extensions: ['*'] },
+    ],
+  });
+  return res.canceled ? null : res.filePaths[0];
+});
+
+function readClipboardFilePath() {
+  try {
+    const raw = clipboard.readBuffer('FileNameW');
+    if (raw && raw.length >= 2) {
+      const decoded = raw.toString('utf16le').split('\0')[0].trim();
+      if (decoded && fs.existsSync(decoded)) return decoded;
+    }
+  } catch {}
+  try {
+    const txt = clipboard.readText().trim().replace(/^"(.*)"$/, '$1');
+    if (txt && fs.existsSync(txt) && fs.statSync(txt).isFile()) return txt;
+  } catch {}
+  return '';
+}
+
+ipcMain.handle('replace-extracted-image', (_e, opts = {}) => {
+  try {
+    const targetPath = path.resolve(String(opts.targetPath || ''));
+    if (!targetPath || !fs.existsSync(targetPath) || !fs.statSync(targetPath).isFile()) {
+      return { ok: false, error: '目标提取图片文件不存在' };
+    }
+
+    let buf = null;
+    let newExt = 'png';
+
+    if (opts.sourcePath) {
+      const srcPath = path.resolve(String(opts.sourcePath));
+      if (!fs.existsSync(srcPath) || !fs.statSync(srcPath).isFile()) {
+        return { ok: false, error: '所选替换图片不存在' };
+      }
+      const ext = path.extname(srcPath).slice(1).toLowerCase();
+      if (!REPLACE_IMG_EXTS.has(ext)) {
+        return { ok: false, error: `不支持的图片格式 (.${ext || '未知'})` };
+      }
+      buf = fs.readFileSync(srcPath);
+      newExt = ext === 'jpeg' ? 'jpg' : ext;
+    } else if (opts.fromClipboard) {
+      const clipImg = clipboard.readImage();
+      if (clipImg && !clipImg.isEmpty()) {
+        buf = clipImg.toPNG();
+        newExt = 'png';
+      } else {
+        const clipFile = readClipboardFilePath();
+        if (clipFile) {
+          const ext = path.extname(clipFile).slice(1).toLowerCase();
+          if (!REPLACE_IMG_EXTS.has(ext)) {
+            return { ok: false, error: `剪贴板中的文件不是支持的图片格式 (.${ext || '未知'})` };
+          }
+          buf = fs.readFileSync(clipFile);
+          newExt = ext === 'jpeg' ? 'jpg' : ext;
+        }
+      }
+      if (!buf || !buf.length) {
+        return { ok: false, error: '剪贴板里没有截图或图片（请先截图复制，或直接把截图拖到卡片上）' };
+      }
+    } else {
+      return { ok: false, error: '未提供替换图片来源' };
+    }
+
+    const dir = path.dirname(targetPath);
+    const stem = path.basename(targetPath, path.extname(targetPath));
+    const oldExt = path.extname(targetPath).slice(1).toLowerCase();
+    const normOldExt = oldExt === 'jpeg' ? 'jpg' : oldExt;
+    const newPath = newExt === normOldExt ? targetPath : path.join(dir, `${stem}.${newExt}`);
+
+    fs.writeFileSync(newPath, buf);
+    if (path.resolve(newPath).toLowerCase() !== path.resolve(targetPath).toLowerCase() && fs.existsSync(targetPath)) {
+      fs.unlinkSync(targetPath);
+    }
+    return { ok: true, newPath, replacedName: path.basename(newPath) };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
 const FALLBACK_DRAG_ICON = nativeImage.createFromDataURL(
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
 );

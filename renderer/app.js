@@ -991,6 +991,9 @@ async function showSuccess(res) {
   let hasVisualOut = false;
   let srcExt = '';
   let thumbPaths = [];
+  const repackSrcPath = res.extractSummary?.sourceDocx || window.__docRepackCtx?.docxPath || '';
+  const repackDocLabel = repackSrcPath.toLowerCase().endsWith('.pptx') ? 'PPT' : 'Word';
+  const canRepackDir = res.outputType === 'dir' && !!res.extractSummary?.sourceDocx;
   if (res.outputType === 'dir') {
     if (currentFeature.id !== 'splitVideo') {
       const previewExts = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'avif', 'svg']);
@@ -1005,10 +1008,13 @@ async function showSuccess(res) {
         const moreHtml = thumbPaths.length > shownThumbs.length
           ? `<div class="muted" style="font-size:12px;margin-top:6px">还有 ${thumbPaths.length - shownThumbs.length} 张未展开，可点击下方「打开文件夹」查看全部</div>`
           : '';
+        const toolbarHint = canRepackDir
+          ? `已选 ${shownThumbs.length} / ${shownThumbs.length} 张（点「🔄 换图 / 📋 贴截图」或直接把截图拖到对应卡片上即可替换，最后点下方「📥 改完放回原 ${repackDocLabel}」）`
+          : `已选 ${shownThumbs.length} / ${shownThumbs.length} 张（可直接勾选发给其他工具，或拖拽单图到外部软件）`;
         previewHtml = `
           <div class="result-preview-wrap" id="result-preview-wrap">
             <div class="result-thumb-toolbar">
-              <span class="muted" id="thumb-sel-count">已选 ${shownThumbs.length} / ${shownThumbs.length} 张（可直接勾选发给其他工具，或拖拽单图到外部软件）</span>
+              <span class="muted" id="thumb-sel-count">${toolbarHint}</span>
               <button class="batch-btn" id="thumb-sel-all">全选</button>
               <button class="batch-btn" id="thumb-sel-none">全不选</button>
               ${hasRasterThumb && hasSvgThumb ? '<button class="batch-btn" id="thumb-sel-raster">仅位图</button><button class="batch-btn" id="thumb-sel-svg">仅 SVG</button>' : ''}
@@ -1018,6 +1024,12 @@ async function showSuccess(res) {
                 const u = encodeURI('file:///' + p.replace(/\\/g, '/'));
                 const fn = escHtml(p.split(/[\\/]/).pop());
                 const isSvg = p.toLowerCase().endsWith('.svg');
+                const replaceOpsHtml = canRepackDir
+                  ? `<div class="result-thumb-ops result-thumb-ops-replace">
+                      <button class="thumb-op-btn" data-thumb-replace="${idx}" title="选择本地截图或图片直接替换此位置">🔄 换图</button>
+                      <button class="thumb-op-btn" data-thumb-paste="${idx}" title="粘贴剪贴板里的截图直接替换此位置">📋 贴截图</button>
+                    </div>`
+                  : '';
                 return `<div class="result-thumb-card selected" data-thumb-card="${idx}">
                   <input type="checkbox" class="result-thumb-check" data-thumb-check="${idx}" checked title="勾选此图" />
                   <div class="result-thumb-img-wrap" data-thumb-idx="${idx}" draggable="true" title="点击放大查看 / 拖出到外部软件：${fn}">
@@ -1029,6 +1041,7 @@ async function showSuccess(res) {
                     <button class="thumb-op-btn" data-thumb-copy="${idx}" title="复制图片到剪贴板">📋</button>
                     <button class="thumb-op-btn" data-thumb-loc="${idx}" title="在文件夹中定位">📂</button>
                   </div>
+                  ${replaceOpsHtml}
                 </div>`;
               }).join('')}
             </div>
@@ -1057,9 +1070,6 @@ async function showSuccess(res) {
     handoffFeatures = getHandoffPoolForExts(outExts, thumbPaths.length, currentFeature.id);
   }
 
-  const repackSrcPath = res.extractSummary?.sourceDocx || window.__docRepackCtx?.docxPath || '';
-  const repackDocLabel = repackSrcPath.toLowerCase().endsWith('.pptx') ? 'PPT' : 'Word';
-  const canRepackDir = res.outputType === 'dir' && !!res.extractSummary?.sourceDocx;
   const canRepackSingle = res.outputType === 'file'
     && !!window.__docRepackCtx?.docxPath
     && currentFeature.id !== 'docCompressImages'
@@ -1177,7 +1187,9 @@ async function showSuccess(res) {
       const selected = getSelectedPaths();
       const countEl = $('thumb-sel-count');
       if (countEl) {
-        countEl.textContent = `已选 ${selected.length} / ${shownThumbs.length} 张（可勾选发给其他工具，或拖拽单图到外部软件）`;
+        countEl.textContent = canRepackDir
+          ? `已选 ${selected.length} / ${shownThumbs.length} 张（点「🔄 换图 / 📋 贴截图」或拖截图到卡片上即可替换，最后点下方「📥 改完放回原 ${repackDocLabel}」）`
+          : `已选 ${selected.length} / ${shownThumbs.length} 张（可直接勾选发给其他工具，或拖拽单图到外部软件）`;
       }
       const selEl = $('handoff-feature');
       const btnEl = $('btn-handoff');
@@ -1274,6 +1286,80 @@ async function showSuccess(res) {
         if (p) window.api.showInFolder(p);
       };
     });
+
+    if (canRepackDir) {
+      const applyCardReplace = async (idx, opts) => {
+        const targetPath = shownThumbs[idx];
+        if (!targetPath) return;
+        const r = await window.api.replaceExtractedImage({ targetPath, ...opts });
+        if (!r?.ok) {
+          toast(r?.error || '替换图片失败', true);
+          return;
+        }
+        thumbPaths[idx] = r.newPath;
+        shownThumbs[idx] = r.newPath;
+        const card = wrap?.querySelector(`[data-thumb-card="${idx}"]`);
+        if (card) {
+          card.classList.add('replaced');
+          const imgEl = card.querySelector('.result-thumb-img-wrap img');
+          if (imgEl) {
+            imgEl.classList.toggle('is-svg', r.newPath.toLowerCase().endsWith('.svg'));
+            imgEl.src = `${encodeURI('file:///' + r.newPath.replace(/\\/g, '/'))}?t=${Date.now()}`;
+            imgEl.alt = r.replacedName;
+          }
+          const nameEl = card.querySelector('.result-thumb-name');
+          if (nameEl) {
+            nameEl.textContent = r.replacedName;
+            nameEl.title = r.newPath;
+          }
+          if (!card.querySelector('.result-thumb-badge')) {
+            const badge = document.createElement('span');
+            badge.className = 'result-thumb-badge';
+            badge.textContent = '已换';
+            card.appendChild(badge);
+          }
+        }
+        syncThumbSelectionUI();
+        toast(`已替换「${r.replacedName}」，最后点下方「📥 改完放回原 ${repackDocLabel}」即可写回`);
+      };
+
+      wrap?.querySelectorAll('[data-thumb-replace]').forEach((btn) => {
+        btn.onclick = async () => {
+          const idx = Number(btn.dataset.thumbReplace);
+          const srcPath = await window.api.pickSingleImage();
+          if (srcPath) await applyCardReplace(idx, { sourcePath: srcPath });
+        };
+      });
+
+      wrap?.querySelectorAll('[data-thumb-paste]').forEach((btn) => {
+        btn.onclick = async () => {
+          const idx = Number(btn.dataset.thumbPaste);
+          await applyCardReplace(idx, { fromClipboard: true });
+        };
+      });
+
+      wrap?.querySelectorAll('.result-thumb-card[data-thumb-card]').forEach((card) => {
+        const idx = Number(card.dataset.thumbCard);
+        card.addEventListener('dragover', (e) => {
+          if (!e.dataTransfer?.files?.length) return;
+          e.preventDefault();
+          e.stopPropagation();
+          card.classList.add('drag-over');
+        });
+        card.addEventListener('dragleave', () => {
+          card.classList.remove('drag-over');
+        });
+        card.addEventListener('drop', async (e) => {
+          const files = e.dataTransfer?.files;
+          if (!files?.length) return;
+          e.preventDefault();
+          e.stopPropagation();
+          card.classList.remove('drag-over');
+          const filePath = window.api.getPath(files[0]);
+          if (filePath) await applyCardReplace(idx, { sourcePath: filePath });
+        });
+      });
+    }
 
     if (handoffFeatures.length) {
       $('btn-handoff').onclick = async () => {

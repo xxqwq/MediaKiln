@@ -944,6 +944,36 @@ input[type="color"] {
 .btn-repack-word:hover {
   background: rgba(52, 211, 153, .14) !important;
 }
+.result-thumb-ops-replace .thumb-op-btn {
+  border-color: rgba(52, 211, 153, .32);
+  color: #a7f3d0;
+}
+.result-thumb-ops-replace .thumb-op-btn:hover {
+  background: rgba(52, 211, 153, .14);
+  border-color: var(--success);
+  color: #ecfdf5;
+}
+.result-thumb-card.replaced {
+  border-color: var(--success) !important;
+  background: rgba(52, 211, 153, .08);
+}
+.result-thumb-card.drag-over {
+  border-color: var(--success) !important;
+  box-shadow: 0 0 0 2px rgba(52, 211, 153, .35);
+}
+.result-thumb-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  background: rgba(16, 185, 129, .9);
+  color: #052e16;
+  pointer-events: none;
+}
 
 /* GIF 帧定格预览条 */
 .gif-scrub-box {

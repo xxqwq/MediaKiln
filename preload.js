@@ -19,6 +19,8 @@ contextBridge.exposeInMainWorld('api', {
   countDir: (dirPath) => ipcRenderer.invoke('count-dir', dirPath),
   listDir: (dirPath, limit) => ipcRenderer.invoke('list-dir', dirPath, limit),
   copyImage: (filePath) => ipcRenderer.invoke('copy-image', filePath),
+  pickSingleImage: () => ipcRenderer.invoke('pick-single-image'),
+  replaceExtractedImage: (opts) => ipcRenderer.invoke('replace-extracted-image', opts),
   startDrag: (filePath) => ipcRenderer.send('start-drag', filePath),
   // Electron 32+ 已移除 File.path，用 webUtils 拿拖入文件的磁盘路径
   getPath: (file) => webUtils.getPathForFile(file),
