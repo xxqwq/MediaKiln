@@ -1,6 +1,6 @@
 {
   "name": "video-gif-toolbox",
-  "version": "2.1.8",
+  "version": "2.1.9",
   "shellVersion": "2.1.9",
   "description": "视频 · GIF · 图片 · SVG · 文档工具箱：52 个功能，全部本地离线处理",
   "main": "main.js",
