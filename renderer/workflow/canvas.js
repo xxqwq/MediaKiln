@@ -490,7 +490,7 @@
       const tx = (x) => ox + (x - minX) * scale;
       const ty = (y) => oy + (y - minY) * scale;
 
-      ctx.strokeStyle = 'rgba(148,163,184,0.35)';
+      ctx.strokeStyle = 'rgba(255,255,255,0.14)';
       ctx.lineWidth = 1;
       for (const e of graph.edges) {
         const na = graph.nodes.find((n) => n.id === e.fromNode);
@@ -509,12 +509,12 @@
         const nh = el?.offsetHeight || 180;
         const st = nodeStates.get(n.id)?.status;
         ctx.fillStyle = selectedNodes.has(n.id)
-          ? '#22d3ee'
-          : (st === 'done' ? '#34d399' : (st === 'error' ? '#f87171' : '#6366f1'));
+          ? '#8b85ff'
+          : (st === 'done' ? 'rgba(61,214,140,0.7)' : (st === 'error' ? 'rgba(244,112,103,0.8)' : 'rgba(255,255,255,0.22)'));
         ctx.fillRect(tx(n.x), ty(n.y), Math.max(6, nw * scale), Math.max(4, nh * scale));
       }
 
-      ctx.strokeStyle = 'rgba(34,211,238,0.85)';
+      ctx.strokeStyle = 'rgba(139,133,255,0.9)';
       ctx.lineWidth = 1.2;
       ctx.strokeRect(tx(vx0), ty(vy0), (vx1 - vx0) * scale, (vy1 - vy0) * scale);
     }
@@ -622,7 +622,7 @@
       head.className = 'wf-node-head';
       head.innerHTML = `
         <span class="wf-node-accent" style="background:${groupColor}"></span>
-        <span class="wf-node-icon">${def.icon}</span>
+        <span class="wf-node-icon" style="color:${groupColor}">${def.icon}</span>
         <span class="wf-node-title" title="${esc(def.desc)}">${esc(def.name)}</span>
         <span class="wf-node-badge" data-badge>待运行</span>
         <button class="wf-node-hbtn" data-act="collapse" title="折叠 / 展开">${node.collapsed ? '▸' : '▾'}</button>
@@ -2056,7 +2056,7 @@
           btn.className = 'nav-item wf-node-tpl';
           btn.draggable = true;
           btn.title = def.desc;
-          btn.innerHTML = `<span class="nav-icon">${def.icon}</span><span class="nav-name">${esc(def.name)}</span><span class="nav-add-badge">+ 添加</span>`;
+          btn.innerHTML = `<span class="nav-icon" style="--grp:${reg.GROUP_META[def.group]?.color || '#8b8bff'}">${def.icon}</span><span class="nav-name">${esc(def.name)}</span><span class="nav-add-badge">+ 添加</span>`;
           btn.onclick = () => {
             const r = vpEl.getBoundingClientRect();
             const pt = screenToCanvas(r.left + r.width * 0.25, r.top + r.height * 0.14);

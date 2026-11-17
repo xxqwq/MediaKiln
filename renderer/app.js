@@ -1551,8 +1551,8 @@ function switchAppMode(nextMode) {
   $('single-main').classList.toggle('hidden', appMode !== 'single');
   $('workflow-main').classList.toggle('hidden', appMode !== 'workflow');
   $('nav-search').placeholder = appMode === 'workflow'
-    ? '🔍 搜索节点（点击或拖入画布）'
-    : '🔍 搜索功能（gif / 图片 / svg / word / md…）';
+    ? '搜索节点（点击或拖入画布）'
+    : '搜索功能（gif / 图片 / svg / word / md…）';
   $('sidebar-foot').textContent = appMode === 'workflow'
     ? '滚轮缩放 · 拖线松手建节点 · Ctrl+Enter 运行'
     : '本地 FFmpeg 9.0 · Ctrl+O 选文件 · 空格播放';

@@ -10,17 +10,22 @@
 <body>
   <aside class="sidebar">
     <div class="logo">
-      <div class="logo-badge">VG</div>
-      <div>
+      <div class="logo-badge" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
+          <rect x="3" y="5" width="18" height="14" rx="3.5" stroke="currentColor" stroke-width="1.9"/>
+          <path d="M10.2 9.4v5.2a.5.5 0 0 0 .76.43l4.2-2.6a.5.5 0 0 0 0-.86l-4.2-2.6a.5.5 0 0 0-.76.43z" fill="currentColor"/>
+        </svg>
+      </div>
+      <div class="logo-text">
         <div class="logo-title">视频 · GIF 工具箱</div>
-        <div class="logo-sub">本地转换 · 无需联网</div>
+        <div class="logo-sub">本地离线处理</div>
       </div>
     </div>
     <div class="mode-switch" id="mode-switch">
       <button class="mode-btn active" data-mode="single" id="mode-btn-single">🛠️ 单工具</button>
       <button class="mode-btn" data-mode="workflow" id="mode-btn-workflow">🕸️ 节点画布</button>
     </div>
-    <input type="search" id="nav-search" class="nav-search" placeholder="🔍 搜索功能（gif / 图片 / svg / word / md…）" />
+    <input type="search" id="nav-search" class="nav-search" placeholder="搜索功能（gif / 图片 / svg / word / md…）" />
     <nav id="nav"></nav>
     <div class="sidebar-foot" id="sidebar-foot">本地 FFmpeg 9.0 · Ctrl+O 选文件 · 空格播放</div>
   </aside>
@@ -61,7 +66,9 @@
     </header>
 
     <section id="dropzone" class="dropzone">
-      <div class="dz-icon">📁</div>
+      <div class="dz-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"/><path d="M12 12v9M16 16l-4-4-4 4"/></svg>
+      </div>
       <div class="dz-text">拖入文件到这里，或 <span class="link">点击选择文件</span></div>
       <div id="dz-hint" class="dz-hint muted"></div>
     </section>
@@ -100,6 +107,7 @@
   <main class="wf-main hidden" id="workflow-main"></main>
 
   <div id="toast" class="toast hidden"></div>
+  <script src="ui/icons.js"></script>
   <script src="ui/crop-canvas.js"></script>
   <script src="ui/params-panel.js"></script>
   <script src="ui/lightbox.js"></script>
