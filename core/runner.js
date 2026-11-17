@@ -88,8 +88,38 @@ function probeSvg(filePath) {
   };
 }
 
+function probePdf(filePath) {
+  const size = fs.statSync(filePath).size;
+  const buf = fs.readFileSync(filePath);
+  if (buf.subarray(0, 5).toString('ascii') !== '%PDF-') {
+    throw new Error('无效的 PDF 文件（缺少 %PDF- 文件头）');
+  }
+  const text = buf.toString('latin1');
+  const pageMatches = text.match(/\/Type\s*\/Page\b(?!s)/g);
+  return {
+    duration: 0,
+    size,
+    width: 0,
+    height: 0,
+    fps: 0,
+    isImage: false,
+    isSvg: false,
+    isDoc: true,
+    docType: 'pdf',
+    pageCount: pageMatches ? pageMatches.length : 0,
+    imageCount: 0,
+    videoCount: 0,
+    hasAudio: false,
+    hasSubtitles: false,
+    subCount: 0,
+  };
+}
+
 function probe(filePath) {
   const ext = path.extname(String(filePath || '')).slice(1).toLowerCase();
+  if (ext === 'pdf') {
+    return Promise.resolve().then(() => probePdf(filePath));
+  }
   if (isDocPath(filePath) || ext === 'doc' || ext === 'ppt') {
     return Promise.resolve().then(() => probeDoc(filePath));
   }

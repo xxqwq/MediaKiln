@@ -160,6 +160,10 @@ const FILE_FILTERS = {
   docCompressImages: { exts: ['docx', 'pptx'] },
   docExtractImages: { exts: DOC_EXT },
   docRepackImages: { exts: ['docx', 'pptx'] },
+  docCleanupMedia: { exts: ['docx', 'pptx'] },
+  docStyleImages: { exts: ['docx', 'pptx'] },
+  mdOrganizeImages: { exts: ['md', 'markdown'] },
+  imagesToPdf: { exts: IMG_EXT, multi: true },
   // 剪辑 / 工具（兼容静态图片）
   trimVideo: { exts: VIDEO_EXT },
   multiCut: { exts: VIDEO_EXT },
@@ -294,6 +298,10 @@ ipcMain.handle('task:start', async (_e, { feature, params }) => {
       ...(result.extractSummary ? { extractSummary: result.extractSummary } : {}),
       ...(result.docCompressSummary ? { docCompressSummary: result.docCompressSummary } : {}),
       ...(result.docRepackSummary ? { docRepackSummary: result.docRepackSummary } : {}),
+      ...(result.docCleanupSummary ? { docCleanupSummary: result.docCleanupSummary } : {}),
+      ...(result.docStyleSummary ? { docStyleSummary: result.docStyleSummary } : {}),
+      ...(result.mdOrganizeSummary ? { mdOrganizeSummary: result.mdOrganizeSummary } : {}),
+      ...(result.pdfSummary ? { pdfSummary: result.pdfSummary } : {}),
     };
     if (win && !win.isDestroyed() && !params?.__batchItem) win.setProgressBar(-1);
     send('task:done', payload);

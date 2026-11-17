@@ -873,6 +873,161 @@ async function test(name, feature, params, check) {
     }
   });
 
+  // 102. Word (.docx) 清理孤立冗余媒体与重复图片去重 (docCleanupMedia)
+  const dirtyDocx = path.join(TMP, 'dirty_cleanup.docx');
+  const dirtyZip = new AdmZip();
+  dirtyZip.addFile('[Content_Types].xml', Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Default Extension="png" ContentType="image/png"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/media/orphan.png" ContentType="image/png"/>
+</Types>`, 'utf8'));
+  dirtyZip.addFile('_rels/.rels', Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`, 'utf8'));
+  dirtyZip.addFile('word/_rels/document.xml.rels', Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/dup_a.png"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/dup_b.png"/>
+</Relationships>`, 'utf8'));
+  dirtyZip.addFile('word/document.xml', Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    <w:p><w:r><w:drawing r:embed="rId1"/></w:r></w:p>
+    <w:p><w:r><w:drawing r:embed="rId2"/></w:r></w:p>
+  </w:body>
+</w:document>`, 'utf8'));
+  dirtyZip.addFile('word/media/dup_a.png', fs.readFileSync(bigPng));
+  dirtyZip.addFile('word/media/dup_b.png', fs.readFileSync(bigPng));
+  dirtyZip.addFile('word/media/orphan.png', fs.readFileSync(bigPhoto));
+  dirtyZip.writeZip(dirtyDocx);
+
+  const cleanedDocx = path.join(TMP, 'dirty_已清理.docx');
+  await test('102. Word (.docx) 清理孤立冗余媒体与重复图片去重', 'docCleanupMedia', {
+    input: dirtyDocx, output: cleanedDocx, removeOrphans: true, dedupeMedia: true,
+  }, (i) => {
+    if (!i.isDoc || i.imageCount !== 1) {
+      throw new Error(`清理后应仅剩 1 份唯一有效图片，实际 ${JSON.stringify(i)}`);
+    }
+    const z = new AdmZip(cleanedDocx);
+    if (z.getEntry('word/media/orphan.png') || z.getEntry('word/media/dup_b.png') || !z.getEntry('word/media/dup_a.png')) {
+      throw new Error('清理后媒体条目不符合预期');
+    }
+    const rels = z.getEntry('word/_rels/document.xml.rels').getData().toString('utf8');
+    if (/media\/dup_b\.png/i.test(rels) || !/Id="rId2"[^>]*Target="media\/dup_a\.png"/i.test(rels)) {
+      throw new Error(`去重后 rels 未重写 rId2 -> media/dup_a.png: ${rels}`);
+    }
+    const ct = z.getEntry('[Content_Types].xml').getData().toString('utf8');
+    if (/\/word\/media\/orphan\.png/i.test(ct)) {
+      throw new Error('[Content_Types].xml 未移除已删 orphan Override');
+    }
+  });
+
+  // 103. Word (.docx) 指定章节图片统一美化（圆角边框 + 中文水印）
+  const styledDocx = path.join(TMP, 'sectioned_sec2_已美化.docx');
+  await test('103. Word (.docx) 指定章节图片统一美化（圆角边框+中文水印）', 'docStyleImages', {
+    input: secDocx, output: styledDocx,
+    frameMode: 'roundedBorder', radius: 20, borderWidth: 16, borderColor: '#ffffff',
+    wmText: '内部资料·严禁外传', wmPos: 'br', wmSize: 'medium', wmOpacity: '0.5', wmColor: 'white',
+    sectionKeyword: '第二章',
+  }, async () => {
+    const z = new AdmZip(styledDocx);
+    const sec1Data = z.getEntry('word/media/sec1.png')?.getData();
+    if (!sec1Data || !sec1Data.equals(fs.readFileSync(bigPhoto))) {
+      throw new Error('未选中的第一章图片 sec1.png 应保持原样不变');
+    }
+    const sec2Entry = z.getEntry('word/media/sec2.png');
+    if (!sec2Entry) throw new Error('美化后的 word/media/sec2.png 缺失');
+    const sec2Tmp = path.join(TMP, 'sec2_styled_check.png');
+    fs.writeFileSync(sec2Tmp, sec2Entry.getData());
+    const sec2Info = await probe(sec2Tmp);
+    // bigPng 为 1600x1000，加上 borderWidth=16 双边应为 1632x1032
+    if (sec2Info.width !== 1632 || sec2Info.height !== 1032) {
+      throw new Error(`加边框美化后 sec2 尺寸应为 1632x1032，实际 ${sec2Info.width}x${sec2Info.height}`);
+    }
+  });
+
+  // 104. Markdown 图片整理（一键本地化 + 清理资源子目录未使用图 + Base64 单文件内嵌）
+  const mdOrgDir = path.join(TMP, 'md_organize');
+  fs.mkdirSync(mdOrgDir, { recursive: true });
+  const mdSrcImg = path.join(TMP, 'md_outside_src.png');
+  fs.copyFileSync(img1, mdSrcImg);
+  const siblingKeepImg = path.join(mdOrgDir, 'sibling_keep.png');
+  fs.copyFileSync(img2, siblingKeepImg);
+  const mdOrgInput = path.join(mdOrgDir, 'doc.md');
+  fs.writeFileSync(mdOrgInput, `# 整理测试
+![外部图](../md_outside_src.png)
+<img src="data:image/png;base64,${b64Png}" alt="b64" />
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><circle cx="16" cy="16" r="14" fill="blue"/></svg>
+![远程保留](https://example.com/keep.png)
+
+\`\`\`markdown
+![代码里不要动](https://example.com/fake.png)
+\`\`\`
+`, 'utf8');
+
+  const mdLocalizedOut = path.join(mdOrgDir, 'doc_已本地化.md');
+  await test('104a. Markdown 图片整理 - 一键本地化', 'mdOrganizeImages', {
+    input: mdOrgInput, output: mdLocalizedOut, action: 'localize', assetsDirName: 'assets', remoteMode: 'skip', inlineSvgMode: 'extract',
+  }, () => {
+    const body = fs.readFileSync(mdLocalizedOut, 'utf8');
+    if (/data:image\/png;base64,/.test(body) || /<svg\b/i.test(body)) {
+      throw new Error('Base64 与内联 SVG 应已被本地化并重写路径');
+    }
+    if (!body.includes('![代码里不要动](https://example.com/fake.png)')) {
+      throw new Error('围栏代码块内容不应被误修改');
+    }
+    const assetsDir = path.join(mdOrgDir, 'assets');
+    const saved = fs.readdirSync(assetsDir);
+    if (saved.length < 3) {
+      throw new Error(`assets 目录应包含至少 3 个本地化资源文件，实际 ${JSON.stringify(saved)}`);
+    }
+  });
+
+  const orphanInAssets = path.join(mdOrgDir, 'assets', 'orphan_unused.png');
+  fs.copyFileSync(img2, orphanInAssets);
+  await test('104b. Markdown 图片整理 - 安全清理未使用图片', 'mdOrganizeImages', {
+    input: mdLocalizedOut, action: 'cleanUnused', cleanAction: 'move',
+  }, () => {
+    if (fs.existsSync(orphanInAssets)) {
+      throw new Error('assets/orphan_unused.png 应已被移入 _已清理冗余');
+    }
+    if (!fs.existsSync(siblingKeepImg)) {
+      throw new Error('同级目录中的非资源子目录图片 sibling_keep.png 不应被误删或移动');
+    }
+    const trashDir = path.join(mdOrgDir, '_已清理冗余');
+    if (!fs.existsSync(trashDir) || !fs.readdirSync(trashDir).length) {
+      throw new Error('_已清理冗余 目录应包含被移走的冗余图片');
+    }
+  });
+
+  const mdInlineOut = path.join(mdOrgDir, 'doc_内嵌图.md');
+  await test('104c. Markdown 图片整理 - 转 Base64 单文件内嵌', 'mdOrganizeImages', {
+    input: mdLocalizedOut, output: mdInlineOut, action: 'inlineBase64', remoteMode: 'skip',
+  }, () => {
+    const body = fs.readFileSync(mdInlineOut, 'utf8');
+    if (!/data:image\/png;base64,/.test(body) || !/data:image\/svg\+xml;base64,/.test(body)) {
+      throw new Error('Base64 内嵌模式未正确生成 png 与 svg+xml Data URI');
+    }
+  });
+
+  // 105. 多图合并为 PDF (imagesToPdf)
+  const outPdf = path.join(TMP, 'merged_doc.pdf');
+  await test('105. 多图合并为 PDF (A4竖向)', 'imagesToPdf', {
+    files: [img1, bigPhoto, img2], output: outPdf, pageSize: 'a4p', margin: 20, quality: 'medium', bgColor: '#ffffff',
+  }, (i) => {
+    if (!i.isDoc || i.docType !== 'pdf' || i.pageCount !== 3) {
+      throw new Error(`PDF probe 异常: ${JSON.stringify(i)}`);
+    }
+    const raw = fs.readFileSync(outPdf).toString('latin1');
+    if (!raw.startsWith('%PDF-1.4') || !raw.trim().endsWith('%%EOF')) {
+      throw new Error('生成的 PDF 文件头尾结构不完整');
+    }
+  });
+
   console.log(failed ? `\n❌ ${failed} 个用例失败` : '\n🎉 全部通过');
   process.exit(failed ? 1 : 0);
 })();

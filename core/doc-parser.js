@@ -1130,6 +1130,247 @@ function updateOoxmlImageSizesKeepWidth(zip, sizeMapByEntry) {
   return updatedContainers;
 }
 
+function findReferencedOoxmlMedia(zip, mediaPrefix = 'word/media') {
+  const prefixLower = String(mediaPrefix || 'word/media').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase() + '/';
+  const referenced = new Set();
+  for (const entry of zip.getEntries()) {
+    const entryName = String(entry.entryName || '').replace(/\\/g, '/');
+    if (entry.isDirectory || !/\.rels$/i.test(entryName)) continue;
+    const xml = entry.getData().toString('utf8');
+    const relsMap = parseRelsMap(xml, relsBaseDir(entryName));
+    for (const target of relsMap.values()) {
+      const clean = String(target || '').split(/[?#]/)[0].replace(/\\/g, '/');
+      if (clean.toLowerCase().startsWith(prefixLower)) {
+        referenced.add(clean.toLowerCase());
+      }
+    }
+  }
+  return referenced;
+}
+
+function removeDocxContentTypeOverrides(zip, deletedPaths = []) {
+  if (!deletedPaths.length) return;
+  const ctEntry = zip.getEntry('[Content_Types].xml');
+  if (!ctEntry) return;
+  const delSet = new Set(deletedPaths.map((p) => '/' + String(p || '').replace(/^\/+/, '').replace(/\\/g, '/').toLowerCase()));
+  const xml = ctEntry.getData().toString('utf8');
+  let changed = false;
+  const nextXml = xml.replace(/\s*<Override\b[^>]*>/gi, (tag) => {
+    const partMatch = tag.match(/\bPartName\s*=\s*["']([^"']+)["']/i);
+    if (partMatch && delSet.has(partMatch[1].replace(/\\/g, '/').toLowerCase())) {
+      changed = true;
+      return '';
+    }
+    return tag;
+  });
+  if (changed) {
+    zip.updateFile('[Content_Types].xml', Buffer.from(nextXml, 'utf8'));
+  }
+}
+
+function scanMarkdownForRewrite(filePath) {
+  const rawWithBom = fs.readFileSync(filePath, 'utf8');
+  const hasBom = rawWithBom.startsWith('\uFEFF');
+  const raw = hasBom ? rawWithBom.slice(1) : rawWithBom;
+  const mdDir = path.dirname(filePath);
+  const clean = blankFencedCodeBlocks(raw);
+
+  const tokens = [];
+  const occupied = [];
+  const overlaps = (start, end) => occupied.some(([a, b]) => start < b && end > a);
+
+  // 1. 参考式链接定义 [id]: url "title"（若多个 ![alt][id] 引用同一定义，更新定义行即全部生效）
+  const refDefs = new Map();
+  const defRe = /^(\s{0,3}\[([^\]]+)\]:[ \t]*)(<[^>\n]+>|[^\s]+)([ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*$/gm;
+  let dm;
+  while ((dm = defRe.exec(clean))) {
+    const id = dm[2].trim().toLowerCase();
+    const rawUrlToken = dm[3];
+    const url = parseMarkdownTarget(rawUrlToken);
+    if (!id || !url || refDefs.has(id)) continue;
+    const urlStart = dm.index + dm[1].length;
+    const urlEnd = urlStart + rawUrlToken.length;
+    const isAngle = rawUrlToken.startsWith('<') && rawUrlToken.endsWith('>');
+    const item = classifyTarget(url, id, mdDir, { source: 'md-ref-def' });
+    refDefs.set(id, { item, urlStart, urlEnd, isAngle });
+    if (item) {
+      tokens.push({
+        id: `def:${id}`,
+        replaceStart: urlStart,
+        replaceEnd: urlEnd,
+        wrapAngle: isAngle,
+        kind: item.kind,
+        source: 'md-ref-def',
+        item,
+      });
+      occupied.push([dm.index, dm.index + dm[0].length]);
+    }
+  }
+
+  // 2. 行内 Markdown 图片 ![alt](url "title")
+  let i = 0;
+  while (i < clean.length) {
+    const idx = clean.indexOf('![', i);
+    if (idx === -1) break;
+    let j = idx + 2;
+    while (j < clean.length && clean[j] !== ']') {
+      if (clean[j] === '\\' && j + 1 < clean.length) j += 2;
+      else if (clean[j] === '\n') break;
+      else j++;
+    }
+    if (j >= clean.length || clean[j] !== ']' || clean[j + 1] !== '(') {
+      i = idx + 2;
+      continue;
+    }
+    const alt = clean.slice(idx + 2, j).trim();
+    let k = j + 2;
+    let depth = 1;
+    let inAngle = false;
+    let quote = null;
+    while (k < clean.length && depth > 0) {
+      const ch = clean[k];
+      if (ch === '\n' && !quote) break;
+      if (quote) {
+        if (ch === '\\' && k + 1 < clean.length) { k += 2; continue; }
+        if (ch === quote) quote = null;
+      } else if (inAngle) {
+        if (ch === '>') inAngle = false;
+      } else {
+        if (ch === '<' && clean.slice(j + 2, k).trim() === '') inAngle = true;
+        else if (ch === '"' || ch === "'") quote = ch;
+        else if (ch === '(') depth++;
+        else if (ch === ')') depth--;
+      }
+      k++;
+    }
+    if (depth === 0) {
+      const innerStart = j + 2;
+      const inner = clean.slice(innerStart, k - 1);
+      const leadWs = inner.match(/^\s*/)[0].length;
+      const trimmed = inner.slice(leadWs).trimEnd();
+      let urlStart = innerStart + leadWs;
+      let urlEnd = urlStart;
+      let wrapAngle = false;
+      let target = '';
+      if (trimmed.startsWith('<')) {
+        const endAngle = trimmed.indexOf('>');
+        if (endAngle > 1) {
+          target = trimmed.slice(1, endAngle).trim();
+          urlEnd = urlStart + endAngle + 1;
+          wrapAngle = true;
+        }
+      } else {
+        const tm = trimmed.match(/^(\S+?)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*$/);
+        if (tm) {
+          target = tm[1];
+          urlEnd = urlStart + tm[1].length;
+        } else {
+          const sp = trimmed.split(/\s+/)[0];
+          target = sp;
+          urlEnd = urlStart + sp.length;
+        }
+      }
+      if (target && urlEnd > urlStart) {
+        const item = classifyTarget(target, alt, mdDir, { source: 'markdown' });
+        if (item) {
+          tokens.push({
+            id: `md:${idx}`,
+            replaceStart: urlStart,
+            replaceEnd: urlEnd,
+            fullStart: idx,
+            fullEnd: k,
+            wrapAngle,
+            alt,
+            kind: item.kind,
+            source: 'markdown',
+            item,
+          });
+          occupied.push([idx, k]);
+        }
+      }
+      i = k;
+    } else {
+      i = idx + 2;
+    }
+  }
+
+  // 3. HTML <img ... src="...">
+  const imgTagRe = /<img\b[^>]*>/gi;
+  let im;
+  while ((im = imgTagRe.exec(clean))) {
+    if (overlaps(im.index, im.index + im[0].length)) continue;
+    const tag = im[0];
+    const srcMatch = tag.match(/\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/i);
+    if (!srcMatch) continue;
+    const rawVal = srcMatch[1] ?? srcMatch[2] ?? srcMatch[3] ?? '';
+    const src = rawVal.trim();
+    if (!src) continue;
+    const altMatch = tag.match(/\balt\s*=\s*(?:"([^"]*)"|'([^']*)')/i);
+    const alt = (altMatch?.[1] ?? altMatch?.[2] ?? '').trim();
+    const matchInTag = srcMatch[0];
+    const quoteChar = srcMatch[1] !== undefined ? '"' : (srcMatch[2] !== undefined ? "'" : '');
+    const attrTagStart = im.index + srcMatch.index;
+    const valOffsetInMatch = quoteChar
+      ? matchInTag.indexOf(quoteChar) + 1
+      : matchInTag.indexOf('=') + 1;
+    const replaceStart = attrTagStart + valOffsetInMatch;
+    const replaceEnd = replaceStart + (quoteChar ? rawVal.length : matchInTag.slice(valOffsetInMatch).length);
+    const item = classifyTarget(src, alt, mdDir, { source: 'html-img' });
+    if (item) {
+      tokens.push({
+        id: `html:${im.index}`,
+        replaceStart,
+        replaceEnd,
+        needsQuotes: !quoteChar,
+        alt,
+        kind: item.kind,
+        source: 'html-img',
+        item,
+      });
+      occupied.push([im.index, im.index + tag.length]);
+    }
+  }
+
+  // 4. 内联 <svg ...>...</svg>
+  const svgTagRe = /<svg\b[^>]*>[\s\S]*?<\/svg>/gi;
+  let sm;
+  while ((sm = svgTagRe.exec(clean))) {
+    if (overlaps(sm.index, sm.index + sm[0].length)) continue;
+    const svgCode = raw.slice(sm.index, sm.index + sm[0].length);
+    tokens.push({
+      id: `svg:${sm.index}`,
+      replaceStart: sm.index,
+      replaceEnd: sm.index + sm[0].length,
+      alt: 'inline-svg',
+      kind: 'inlineSvg',
+      source: 'inline-svg',
+      item: {
+        kind: 'inlineSvg',
+        svgCode,
+        alt: 'inline-svg',
+        ext: 'svg',
+        source: 'inline-svg',
+      },
+    });
+  }
+
+  tokens.sort((a, b) => a.replaceStart - b.replaceStart);
+  return { raw, hasBom, mdDir, tokens };
+}
+
+function applyTextReplacements(text, patches) {
+  if (!patches.length) return text;
+  const sorted = patches.slice().sort((a, b) => b.start - a.start);
+  let out = text;
+  let lastStart = Infinity;
+  for (const p of sorted) {
+    if (p.end > lastStart) continue;
+    out = out.slice(0, p.start) + p.replacement + out.slice(p.end);
+    lastStart = p.start;
+  }
+  return out;
+}
+
 function inspectDocument(filePath) {
   const ext = path.extname(String(filePath || '')).slice(1).toLowerCase();
   if (ext === 'docx' || ext === 'doc') return inspectDocx(filePath);
@@ -1147,4 +1388,8 @@ module.exports = {
   rewriteDocxMediaTargets,
   ensureDocxContentTypes,
   updateOoxmlImageSizesKeepWidth,
+  findReferencedOoxmlMedia,
+  removeDocxContentTypeOverrides,
+  scanMarkdownForRewrite,
+  applyTextReplacements,
 };

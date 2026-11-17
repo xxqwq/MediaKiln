@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -9,9 +10,13 @@ const {
   rewriteDocxMediaTargets,
   ensureDocxContentTypes,
   updateOoxmlImageSizesKeepWidth,
+  findReferencedOoxmlMedia,
+  removeDocxContentTypeOverrides,
+  scanMarkdownForRewrite,
+  applyTextReplacements,
 } = require('../core/doc-parser');
-const { num, imageCodecArgs } = require('../core/utils');
-const { probe, runFfmpeg, defaultOutput, defaultDirOutput } = require('../core/runner');
+const { FONT, num, normalizeHexColor, imageCodecArgs, writeRoundedMaskPgm } = require('../core/utils');
+const { probe, runFfmpeg, defaultOutput, defaultDirOutput, stampOutput } = require('../core/runner');
 
 const MIME_EXT = {
   'image/png': 'png',
@@ -888,8 +893,870 @@ function docRepackImages(p) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// 4. Word / PPT 清理冗余孤立媒体与重复图片去重
+// ---------------------------------------------------------------------------
+function docCleanupMedia(p) {
+  const ext = path.extname(String(p.input || '')).slice(1).toLowerCase();
+  if (ext === 'doc') {
+    throw new Error('暂不支持旧版 .doc 二进制格式，请在 Word/WPS 中「另存为 .docx」后再清理');
+  }
+  if (ext === 'ppt') {
+    throw new Error('暂不支持旧版 .ppt 二进制格式，请在 PowerPoint/WPS 中「另存为 .pptx」后再清理');
+  }
+  const isPpt = ext === 'pptx';
+  const docLabel = isPpt ? 'PPT' : 'Word';
+  const mediaPrefix = isPpt ? 'ppt/media' : 'word/media';
+  const mediaRe = isPpt ? /^ppt\/media\//i : /^word\/media\//i;
+  const output = p.output || defaultOutput(p.input, '已清理', isPpt ? 'pptx' : 'docx');
+  const removeOrphans = p.removeOrphans !== false && p.removeOrphans !== 'no' && p.removeOrphans !== 'false';
+  const dedupeMedia = p.dedupeMedia !== false && p.dedupeMedia !== 'no' && p.dedupeMedia !== 'false';
+
+  if (!removeOrphans && !dedupeMedia) {
+    throw new Error('请至少启用“清理孤立媒体”或“重复媒体去重”中的一项');
+  }
+
+  return {
+    output,
+    async run(_taskId, onProgress) {
+      onProgress?.(0.08);
+      const AdmZip = require('adm-zip');
+      let zip;
+      try {
+        zip = new AdmZip(p.input);
+      } catch {
+        throw new Error(`无法解析该 .${isPpt ? 'pptx' : 'docx'} 文件（可能已损坏或并非标准 ${docLabel} 文档）`);
+      }
+
+      const origSize = fs.statSync(p.input).size;
+      const mediaEntries = zip.getEntries()
+        .filter((e) => !e.isDirectory && mediaRe.test(String(e.entryName || '').replace(/\\/g, '/')))
+        .sort((a, b) => String(a.entryName).localeCompare(String(b.entryName), undefined, { numeric: true, sensitivity: 'base' }));
+
+      if (!mediaEntries.length) {
+        throw new Error(`该 ${docLabel} 文档中不包含任何 ${mediaPrefix} 媒体资源`);
+      }
+
+      const referencedSet = findReferencedOoxmlMedia(zip, mediaPrefix);
+      const deletedPaths = [];
+      const renameMap = new Map();
+      const seenHashes = new Map();
+      let orphanCount = 0;
+      let dedupeCount = 0;
+      let freedBytes = 0;
+
+      for (let i = 0; i < mediaEntries.length; i++) {
+        const e = mediaEntries[i];
+        const entryName = String(e.entryName || '').replace(/\\/g, '/');
+        const buf = e.getData();
+
+        if (removeOrphans && !referencedSet.has(entryName.toLowerCase())) {
+          zip.deleteFile(e.entryName);
+          deletedPaths.push(entryName);
+          orphanCount++;
+          freedBytes += buf.length;
+        } else if (dedupeMedia) {
+          const mExt = path.posix.extname(entryName).slice(1).toLowerCase();
+          const normExt = mExt === 'jpeg' ? 'jpg' : mExt;
+          const hash = crypto.createHash('sha256').update(buf).digest('hex');
+          const key = `${hash}:${normExt}`;
+          const canonical = seenHashes.get(key);
+          if (canonical) {
+            zip.deleteFile(e.entryName);
+            deletedPaths.push(entryName);
+            renameMap.set(entryName, canonical);
+            dedupeCount++;
+            freedBytes += buf.length;
+          } else {
+            seenHashes.set(key, entryName);
+          }
+        }
+        onProgress?.(0.15 + (0.72 * (i + 1)) / mediaEntries.length);
+      }
+
+      if (renameMap.size) {
+        rewriteDocxMediaTargets(zip, renameMap);
+      }
+      if (deletedPaths.length) {
+        removeDocxContentTypeOverrides(zip, deletedPaths);
+      }
+
+      fs.mkdirSync(path.dirname(output), { recursive: true });
+      zip.writeZip(output);
+      onProgress?.(1);
+
+      const newSize = fs.statSync(output).size;
+      return {
+        output,
+        docCleanupSummary: {
+          docType: isPpt ? 'pptx' : 'docx',
+          totalBefore: mediaEntries.length,
+          totalAfter: mediaEntries.length - deletedPaths.length,
+          orphanCount,
+          dedupeCount,
+          freedBytes,
+          origSize,
+          newSize,
+        },
+      };
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 5. Word / PPT 图片统一美化（圆角 / 边框 / 文字水印，支持指定章节）
+// ---------------------------------------------------------------------------
+function docStyleImages(p) {
+  const ext = path.extname(String(p.input || '')).slice(1).toLowerCase();
+  if (ext === 'doc') {
+    throw new Error('暂不支持旧版 .doc 二进制格式，请在 Word/WPS 中「另存为 .docx」后再处理');
+  }
+  if (ext === 'ppt') {
+    throw new Error('暂不支持旧版 .ppt 二进制格式，请在 PowerPoint/WPS 中「另存为 .pptx」后再处理');
+  }
+  const isPpt = ext === 'pptx';
+  const docLabel = isPpt ? 'PPT' : 'Word';
+  const mediaPrefix = isPpt ? 'ppt/media' : 'word/media';
+  const mediaRe = isPpt ? /^ppt\/media\//i : /^word\/media\//i;
+  const output = p.output || defaultOutput(p.input, '已美化', isPpt ? 'pptx' : 'docx');
+
+  const wmText = String(p.wmText || '').trim();
+  const wmPos = ['tl', 'tr', 'bl', 'br', 'center'].includes(p.wmPos) ? p.wmPos : 'br';
+  const wmSize = ['small', 'medium', 'large'].includes(p.wmSize) ? p.wmSize : 'medium';
+  const wmOpacity = Math.min(Math.max(num(p.wmOpacity, 0.45), 0.1), 1).toFixed(2);
+  const wmColor = ['white', 'black', 'gray'].includes(p.wmColor) ? p.wmColor : 'white';
+  const frameMode = ['none', 'rounded', 'roundedBorder', 'border'].includes(p.frameMode) ? p.frameMode : 'rounded';
+  const radiusRaw = Math.min(Math.max(Math.round(num(p.radius, 24)), 2), 300);
+  const borderWidth = (frameMode === 'border' || frameMode === 'roundedBorder')
+    ? Math.min(Math.max(Math.round(num(p.borderWidth, 16)), 2), 200)
+    : 0;
+  const borderHex = normalizeHexColor(p.borderColor, 'ffffff');
+  const sectionIds = Array.isArray(p.sectionIds) ? p.sectionIds.filter(Boolean) : [];
+  const sectionKeyword = String(p.sectionKeyword || '').trim().toLowerCase();
+
+  if (!wmText && frameMode === 'none') {
+    throw new Error('请输入水印文字，或选择圆角 / 边框美化效果');
+  }
+
+  return {
+    output,
+    async run(taskId, onProgress) {
+      onProgress?.(0.05);
+      let selectedEntrySet = null;
+      let sectionFiltered = false;
+      let sectionTitlesUsed = [];
+
+      if (sectionIds.length || sectionKeyword) {
+        const parsed = inspectDocument(p.input);
+        const filtered = filterDocumentItemsBySection(parsed, sectionIds, sectionKeyword);
+        sectionFiltered = filtered.sectionFiltered;
+        sectionTitlesUsed = filtered.sectionTitlesUsed;
+        if (!filtered.items.length) {
+          throw new Error('所选章节或页面中未找到任何图片资源');
+        }
+        selectedEntrySet = new Set(
+          filtered.items
+            .map((it) => String(it.entryName || '').toLowerCase())
+            .filter(Boolean),
+        );
+      }
+
+      const AdmZip = require('adm-zip');
+      let zip;
+      try {
+        zip = new AdmZip(p.input);
+      } catch {
+        throw new Error(`无法解析该 .${isPpt ? 'pptx' : 'docx'} 文件（可能已损坏或并非标准 ${docLabel} 文档）`);
+      }
+
+      const origSize = fs.statSync(p.input).size;
+      const usedMediaSet = new Set();
+      const targets = [];
+
+      for (const e of zip.getEntries()) {
+        const entryName = String(e.entryName || '').replace(/\\/g, '/');
+        if (e.isDirectory || !mediaRe.test(entryName)) continue;
+        usedMediaSet.add(entryName.toLowerCase());
+        if (selectedEntrySet && !selectedEntrySet.has(entryName.toLowerCase())) continue;
+        const mExt = path.posix.extname(entryName).slice(1).toLowerCase();
+        if (e.header.size > 0 && RASTER_MEDIA_EXTS.has(mExt)) {
+          targets.push({ entry: e, entryName, origExt: mExt });
+        }
+      }
+
+      if (!targets.length) {
+        throw new Error(sectionFiltered
+          ? '所选章节或页面中未找到可美化的位图图片'
+          : `该 ${docLabel} 文档内未找到可美化的位图图片（可能仅含文字或 EMF/WMF 矢量图）`);
+      }
+
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vgt_doc_style_'));
+      const renameMap = new Map();
+      const sizeMapByEntry = new Map();
+      const usedExts = new Set();
+      let styledCount = 0;
+
+      let wmTextFile = '';
+      let wmTextFileArg = '';
+      if (wmText) {
+        wmTextFile = path.join(tmpDir, 'watermark.txt');
+        fs.writeFileSync(wmTextFile, wmText, 'utf8');
+        wmTextFileArg = wmTextFile.replace(/\\/g, '/').replace(/:/g, '\\:');
+      }
+
+      try {
+        for (let i = 0; i < targets.length; i++) {
+          const t = targets[i];
+          const tmpIn = path.join(tmpDir, `in_${i}.${t.origExt}`);
+          fs.writeFileSync(tmpIn, t.entry.getData());
+
+          let info;
+          try {
+            info = await probe(tmpIn);
+          } catch {
+            info = null;
+          }
+          const W = info?.width || 0;
+          const H = info?.height || 0;
+          if (W < 8 || H < 8) {
+            onProgress?.(0.08 + (0.84 * (i + 1)) / targets.length);
+            continue;
+          }
+
+          const normOrigExt = t.origExt === 'jpeg' ? 'jpg' : t.origExt;
+          const needRounded = frameMode === 'rounded' || frameMode === 'roundedBorder';
+          const needTransparentCorners = frameMode === 'rounded';
+          const origHasAlpha = normOrigExt === 'png' && isAlphaPixFmt(info.pixFmt);
+
+          let outExt;
+          if (needTransparentCorners) {
+            outExt = 'png';
+          } else if (WORD_SAFE_EXTS.has(normOrigExt)) {
+            outExt = normOrigExt;
+          } else {
+            outExt = origHasAlpha ? 'png' : 'jpg';
+          }
+
+          const outPath = path.join(tmpDir, `out_${i}.${outExt}`);
+          const extraInputs = [];
+          let chain = '[0:v]setsar=1,format=rgba[v0]';
+          let last = 'v0';
+
+          if (wmText) {
+            const sizeK = { small: 26, medium: 17, large: 11 }[wmSize] || 17;
+            const fontsize = Math.max(14, Math.min(72, Math.round(Math.min(W, H) / sizeK)));
+            const margin = Math.max(10, Math.round(fontsize * 0.6));
+            const posExpr = {
+              tl: `x=${margin}:y=${margin}`,
+              tr: `x=w-text_w-${margin}:y=${margin}`,
+              bl: `x=${margin}:y=h-text_h-${margin}`,
+              br: `x=w-text_w-${margin}:y=h-text_h-${margin}`,
+              center: 'x=(w-text_w)/2:y=(h-text_h)/2',
+            }[wmPos] || `x=w-text_w-${margin}:y=h-text_h-${margin}`;
+
+            const borderOp = Math.min(1, Number(wmOpacity) * 0.75).toFixed(2);
+            const colorArgs = wmColor === 'black'
+              ? `fontcolor=black@${wmOpacity}:borderw=1:bordercolor=white@${borderOp}`
+              : (wmColor === 'gray'
+                ? `fontcolor=#e2e8f0@${wmOpacity}:borderw=2:bordercolor=black@${borderOp}`
+                : `fontcolor=white@${wmOpacity}:borderw=2:bordercolor=black@${borderOp}`);
+
+            chain += `;[${last}]drawtext=fontfile='${FONT}':textfile='${wmTextFileArg}':fontsize=${fontsize}:${colorArgs}:${posExpr}:expansion=none[vwm]`;
+            last = 'vwm';
+          }
+
+          if (needRounded) {
+            const r = Math.min(radiusRaw, Math.floor(Math.min(W, H) / 2));
+            const maskFile = path.join(tmpDir, `mask_${i}.pgm`);
+            writeRoundedMaskPgm(maskFile, W, H, r);
+            extraInputs.push('-i', maskFile);
+            chain += `;[1:v]format=gray[msk];[${last}][msk]alphamerge[vrnd]`;
+            last = 'vrnd';
+          }
+
+          const outW = W + borderWidth * 2;
+          const outH = H + borderWidth * 2;
+          if (borderWidth > 0) {
+            chain += `;[${last}]pad=${outW}:${outH}:${borderWidth}:${borderWidth}:color=0x${borderHex}ff[vpad]`;
+            last = 'vpad';
+            // 边框模式为纯色背景，把内侧圆角透明区域也用边框色铺平，视觉如相框
+            chain += `;[${last}]format=rgba,split[__fg][__bgsrc];[__bgsrc]drawbox=x=0:y=0:w=iw:h=ih:color=0x${borderHex}@1:t=fill[__bg];[__bg][__fg]overlay=0:0:shortest=1[vflat]`;
+            last = 'vflat';
+          }
+
+          if (outExt === 'jpg' || outExt === 'bmp') {
+            chain += `;[${last}]format=rgba,split[__jfg][__jbgsrc];[__jbgsrc]drawbox=x=0:y=0:w=iw:h=ih:color=0x${borderWidth > 0 ? borderHex : 'ffffff'}@1:t=fill[__jbg];[__jbg][__jfg]overlay=0:0:shortest=1,format=rgb24[vout]`;
+          } else {
+            chain += `;[${last}]format=rgba[vout]`;
+          }
+
+          await runFfmpeg(taskId, [
+            '-i', tmpIn,
+            ...extraInputs,
+            '-filter_complex', chain,
+            '-map', '[vout]',
+            '-map_metadata', '-1',
+            ...imageCodecArgs(outExt, { quality: 'high' }),
+            outPath,
+          ], { totalDuration: 0 });
+
+          const newBuf = fs.readFileSync(outPath);
+          styledCount++;
+          usedExts.add(outExt);
+
+          if (borderWidth > 0) {
+            sizeMapByEntry.set(t.entryName.toLowerCase(), { width: outW, height: outH });
+          }
+
+          if (outExt === normOrigExt || (outExt === 'jpg' && t.origExt === 'jpeg')) {
+            zip.updateFile(t.entry.entryName, newBuf);
+          } else {
+            const oldBase = path.posix.basename(t.entryName, path.posix.extname(t.entryName));
+            usedMediaSet.delete(t.entryName.toLowerCase());
+            const newEntryName = allocUniqueMediaEntry(usedMediaSet, `${oldBase}.${outExt}`, mediaPrefix);
+            zip.deleteFile(t.entry.entryName);
+            zip.addFile(newEntryName, newBuf);
+            renameMap.set(t.entryName, newEntryName);
+          }
+
+          onProgress?.(0.08 + (0.84 * (i + 1)) / targets.length);
+        }
+
+        if (!styledCount) {
+          throw new Error('未能处理任何有效位图图片（可能图片尺寸过小或已损坏）');
+        }
+
+        if (sizeMapByEntry.size) {
+          updateOoxmlImageSizesKeepWidth(zip, sizeMapByEntry);
+        }
+        if (renameMap.size) {
+          rewriteDocxMediaTargets(zip, renameMap);
+          ensureDocxContentTypes(zip, [...usedExts], renameMap);
+        }
+
+        fs.mkdirSync(path.dirname(output), { recursive: true });
+        zip.writeZip(output);
+        onProgress?.(1);
+
+        const newSize = fs.statSync(output).size;
+        return {
+          output,
+          docStyleSummary: {
+            docType: isPpt ? 'pptx' : 'docx',
+            styledCount,
+            totalImages: targets.length,
+            watermarked: !!wmText,
+            frameMode,
+            sectionFiltered,
+            sectionTitles: sectionTitlesUsed,
+            origSize,
+            newSize,
+          },
+        };
+      } finally {
+        try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+      }
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 6. Markdown 图片整理（一键本地化 / 转 Base64 内嵌 / 清理未使用图）
+// ---------------------------------------------------------------------------
+const EXT_TO_MIME = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  webp: 'image/webp',
+  gif: 'image/gif',
+  bmp: 'image/bmp',
+  svg: 'image/svg+xml',
+  avif: 'image/avif',
+  ico: 'image/x-icon',
+  tif: 'image/tiff',
+  tiff: 'image/tiff',
+};
+
+const ASSET_IMG_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|svg|avif|ico|tiff?)$/i;
+
+function isSubPath(parentDir, childPath) {
+  const rel = path.relative(path.resolve(parentDir), path.resolve(childPath));
+  return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+function listImagesInAssetDir(rootDir) {
+  const results = [];
+  const skipDirNames = new Set(['_已清理冗余', 'output', '.git', 'node_modules']);
+  const walk = (cur) => {
+    let entries = [];
+    try { entries = fs.readdirSync(cur, { withFileTypes: true }); } catch { return; }
+    for (const ent of entries) {
+      const full = path.join(cur, ent.name);
+      if (ent.isDirectory()) {
+        if (!skipDirNames.has(ent.name) && !ent.name.startsWith('.')) walk(full);
+      } else if (ent.isFile() && ASSET_IMG_EXT_RE.test(ent.name)) {
+        results.push(path.resolve(full));
+      }
+    }
+  };
+  walk(rootDir);
+  return results;
+}
+
+function mdOrganizeImages(p) {
+  const ext = path.extname(String(p.input || '')).slice(1).toLowerCase();
+  if (ext !== 'md' && ext !== 'markdown') {
+    throw new Error('仅支持 Markdown (.md / .markdown) 文件');
+  }
+  const action = ['localize', 'inlineBase64', 'cleanUnused'].includes(p.action) ? p.action : 'localize';
+  const assetsDirName = sanitizeBase(p.assetsDirName || 'assets', 'assets').replace(/\s+/g, '_') || 'assets';
+  const remoteMode = p.remoteMode === 'skip' ? 'skip' : 'download';
+  const inlineSvgMode = p.inlineSvgMode === 'keep' ? 'keep' : 'extract';
+  const cleanAction = p.cleanAction === 'delete' ? 'delete' : 'move';
+
+  let defaultSuffix = '已本地化';
+  if (action === 'inlineBase64') defaultSuffix = '内嵌图';
+  else if (action === 'cleanUnused') defaultSuffix = '已清理';
+
+  const output = action === 'cleanUnused'
+    ? (p.output || p.input)
+    : (p.output || defaultOutput(p.input, defaultSuffix, ext));
+
+  return {
+    output,
+    async run(_taskId, onProgress) {
+      onProgress?.(0.08);
+
+      if (action === 'cleanUnused') {
+        const parsed = inspectDocument(p.input);
+        const mdDir = path.dirname(path.resolve(p.input));
+        const mdStem = path.basename(p.input, path.extname(p.input));
+
+        const referencedSet = new Set();
+        const assetRoots = new Set();
+
+        for (const item of parsed.items || []) {
+          if (item.kind === 'local' && item.exists && item.resolvedPath) {
+            const abs = path.resolve(item.resolvedPath);
+            referencedSet.add(abs.toLowerCase());
+            const itemDir = path.dirname(abs);
+            if (isSubPath(mdDir, itemDir)) {
+              const relSeg = path.relative(mdDir, itemDir).split(path.sep)[0];
+              if (relSeg && relSeg !== '_已清理冗余' && relSeg !== 'output') {
+                assetRoots.add(path.join(mdDir, relSeg));
+              }
+            }
+          }
+        }
+
+        for (const candName of ['assets', 'images', 'img', 'media', `${mdStem}.assets`, `${mdStem}_assets`]) {
+          const candDir = path.join(mdDir, candName);
+          try {
+            if (fs.existsSync(candDir) && fs.statSync(candDir).isDirectory()) {
+              assetRoots.add(path.resolve(candDir));
+            }
+          } catch {}
+        }
+
+        if (!assetRoots.size) {
+          throw new Error('未在文档同级目录发现资源子文件夹（如 assets / images / .assets），为保护同级其他文件不会扫描文档根目录');
+        }
+
+        const diskImages = [];
+        for (const root of assetRoots) {
+          diskImages.push(...listImagesInAssetDir(root));
+        }
+
+        const unused = diskImages.filter((fp) => !referencedSet.has(fp.toLowerCase()));
+        let freedBytes = 0;
+        let trashDir = '';
+        let cleanedCount = 0;
+
+        for (let i = 0; i < unused.length; i++) {
+          const src = unused[i];
+          const sz = (() => { try { return fs.statSync(src).size; } catch { return 0; } })();
+          freedBytes += sz;
+          if (cleanAction === 'delete') {
+            fs.unlinkSync(src);
+          } else {
+            if (!trashDir) {
+              trashDir = path.join(mdDir, '_已清理冗余');
+              fs.mkdirSync(trashDir, { recursive: true });
+            }
+            const stem = path.basename(src, path.extname(src));
+            const fExt = path.extname(src).slice(1);
+            const dest = allocUniquePath(trashDir, stem, fExt, new Set());
+            fs.renameSync(src, dest);
+          }
+          cleanedCount++;
+          onProgress?.(0.2 + (0.7 * (i + 1)) / Math.max(1, unused.length));
+        }
+
+        if (output !== p.input) {
+          fs.mkdirSync(path.dirname(output), { recursive: true });
+          fs.copyFileSync(p.input, output);
+        }
+        onProgress?.(1);
+
+        return {
+          output,
+          mdOrganizeSummary: {
+            action,
+            cleanAction,
+            scannedCount: diskImages.length,
+            cleanedCount,
+            freedBytes,
+            trashDir,
+          },
+        };
+      }
+
+      // action === 'localize' | 'inlineBase64'
+      const scan = scanMarkdownForRewrite(p.input);
+      const tokens = scan.tokens || [];
+      if (!tokens.length) {
+        throw new Error('该 Markdown 文档中未识别到任何图片');
+      }
+
+      const outDir = path.dirname(path.resolve(output));
+      const targetAssetsDir = path.join(outDir, assetsDirName);
+      const usedAssetNames = new Set();
+      const dedupeLocalMap = new Map();
+      const remoteCache = new Map();
+      const patches = [];
+
+      let rewrittenCount = 0;
+      let downloadedCount = 0;
+      let copiedLocalCount = 0;
+      let decodedDataCount = 0;
+      let extractedSvgCount = 0;
+      let failedRemote = 0;
+      let missingLocal = 0;
+
+      const formatPatchReplacement = (tok, nextUrl) => {
+        if (tok.kind === 'inlineSvg') {
+          return `![${tok.alt || 'inline-svg'}](${nextUrl})`;
+        }
+        if (tok.source === 'html-img' && tok.needsQuotes) {
+          return `"${nextUrl}"`;
+        }
+        if ((tok.source === 'markdown' || tok.source === 'md-ref-def') && tok.wrapAngle) {
+          return `<${nextUrl}>`;
+        }
+        return nextUrl;
+      };
+
+      for (let i = 0; i < tokens.length; i++) {
+        const tok = tokens[i];
+        const item = tok.item;
+        onProgress?.(0.1 + (0.82 * (i + 1)) / tokens.length);
+
+        let buf = null;
+        let itemExt = item.ext || 'png';
+        let mime = EXT_TO_MIME[itemExt] || 'image/png';
+
+        if (item.kind === 'local') {
+          if (!item.exists || !item.resolvedPath) {
+            missingLocal++;
+            continue;
+          }
+          if (action === 'localize') {
+            // 如果本地图已经在目标 assets 目录内，直接更新相对路径
+            if (isSubPath(targetAssetsDir, item.resolvedPath) || path.dirname(path.resolve(item.resolvedPath)).toLowerCase() === path.resolve(targetAssetsDir).toLowerCase()) {
+              const relPosix = path.relative(outDir, item.resolvedPath).replace(/\\/g, '/');
+              patches.push({
+                start: tok.replaceStart,
+                end: tok.replaceEnd,
+                replacement: formatPatchReplacement(tok, relPosix.includes(' ') && !tok.wrapAngle && tok.source !== 'html-img' ? `<${relPosix}>` : relPosix),
+              });
+              continue;
+            }
+            buf = fs.readFileSync(item.resolvedPath);
+            const cacheKey = `local:${path.resolve(item.resolvedPath).toLowerCase()}`;
+            if (dedupeLocalMap.has(cacheKey)) {
+              const cachedRel = dedupeLocalMap.get(cacheKey);
+              patches.push({ start: tok.replaceStart, end: tok.replaceEnd, replacement: formatPatchReplacement(tok, cachedRel) });
+              rewrittenCount++;
+              continue;
+            }
+          } else {
+            buf = fs.readFileSync(item.resolvedPath);
+            mime = EXT_TO_MIME[itemExt] || 'image/png';
+          }
+        } else if (item.kind === 'dataUri') {
+          if (action === 'inlineBase64') continue; // 已是 Data URI
+          buf = decodeDataUri(item);
+          decodedDataCount++;
+        } else if (item.kind === 'inlineSvg') {
+          if (action === 'localize' && inlineSvgMode === 'keep') continue;
+          buf = Buffer.from(item.svgCode, 'utf8');
+          itemExt = 'svg';
+          mime = 'image/svg+xml';
+          if (action === 'localize') extractedSvgCount++;
+        } else if (item.kind === 'remote') {
+          if (remoteMode !== 'download') continue;
+          const url = item.target;
+          if (remoteCache.has(url)) {
+            const cached = remoteCache.get(url);
+            buf = cached.buf;
+            itemExt = cached.ext;
+            mime = cached.mime;
+          } else {
+            try {
+              const dl = await downloadRemoteImage(url);
+              buf = dl.buf;
+              if (dl.extFromCt) itemExt = dl.extFromCt;
+              mime = EXT_TO_MIME[itemExt] || 'image/png';
+              remoteCache.set(url, { buf, ext: itemExt, mime });
+              downloadedCount++;
+            } catch {
+              failedRemote++;
+              continue;
+            }
+          }
+        }
+
+        if (!buf || !buf.length) continue;
+
+        if (action === 'inlineBase64') {
+          const dataUri = `data:${mime};base64,${buf.toString('base64')}`;
+          patches.push({
+            start: tok.replaceStart,
+            end: tok.replaceEnd,
+            replacement: formatPatchReplacement(tok, dataUri),
+          });
+          rewrittenCount++;
+        } else {
+          fs.mkdirSync(targetAssetsDir, { recursive: true });
+          const info = inferNameFromItem(item, i);
+          const cleanStem = sanitizeBase(info.stem, `img_${i + 1}`).replace(/\s+/g, '_') || `img_${i + 1}`;
+          const destPath = allocUniquePath(targetAssetsDir, cleanStem, itemExt, usedAssetNames);
+          fs.writeFileSync(destPath, buf);
+          if (item.kind === 'local') copiedLocalCount++;
+
+          const relPosix = path.relative(outDir, destPath).replace(/\\/g, '/');
+          if (item.kind === 'local' && item.resolvedPath) {
+            dedupeLocalMap.set(`local:${path.resolve(item.resolvedPath).toLowerCase()}`, relPosix);
+          } else if (item.kind === 'remote') {
+            dedupeLocalMap.set(`remote:${item.target}`, relPosix);
+          }
+
+          patches.push({
+            start: tok.replaceStart,
+            end: tok.replaceEnd,
+            replacement: formatPatchReplacement(tok, relPosix),
+          });
+          rewrittenCount++;
+        }
+      }
+
+      const nextBody = applyTextReplacements(scan.raw, patches);
+      fs.mkdirSync(outDir, { recursive: true });
+      fs.writeFileSync(output, (scan.hasBom ? '\uFEFF' : '') + nextBody, 'utf8');
+      onProgress?.(1);
+
+      return {
+        output,
+        mdOrganizeSummary: {
+          action,
+          totalFound: tokens.length,
+          rewrittenCount,
+          downloadedCount,
+          copiedLocalCount,
+          decodedDataCount,
+          extractedSvgCount,
+          failedRemote,
+          missingLocal,
+          assetsDir: action === 'localize' && rewrittenCount > 0 ? targetAssetsDir : '',
+        },
+      };
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 7. 多图合并为 PDF（纯 Node PDF 1.4 组装 + FFmpeg JPEG 归一化）
+// ---------------------------------------------------------------------------
+function getJpegDimensions(buf) {
+  if (!buf || buf.length < 4 || buf[0] !== 0xff || buf[1] !== 0xd8) return null;
+  let pos = 2;
+  while (pos + 4 < buf.length) {
+    while (pos < buf.length && buf[pos] !== 0xff) pos++;
+    while (pos < buf.length && buf[pos] === 0xff) pos++;
+    if (pos >= buf.length) break;
+    const marker = buf[pos++];
+    if (marker === 0x00 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd9)) continue;
+    if (pos + 2 > buf.length) break;
+    const segLen = buf.readUInt16BE(pos);
+    if (segLen < 2 || pos + segLen > buf.length) break;
+    if (marker >= 0xc0 && marker <= 0xc3 && segLen >= 7) {
+      const h = buf.readUInt16BE(pos + 3);
+      const w = buf.readUInt16BE(pos + 5);
+      if (w > 0 && h > 0) return { width: w, height: h };
+    }
+    pos += segLen;
+  }
+  return null;
+}
+
+function buildPdfFromJpegPages(pages, { pageSize = 'a4p', margin = 20 } = {}) {
+  // PDF objects: 1=Catalog, 2=Pages, per page i: (3+i*3)=Page, (4+i*3)=Contents, (5+i*3)=Image XObject
+  const n = pages.length;
+  const totalObjs = 2 + n * 3;
+  const kidsRefs = [];
+  for (let i = 0; i < n; i++) kidsRefs.push(`${3 + i * 3} 0 R`);
+
+  const chunks = [];
+  const offsets = new Array(totalObjs + 1).fill(0);
+  let byteLen = 0;
+
+  const pushBuf = (b) => {
+    chunks.push(b);
+    byteLen += b.length;
+  };
+  const pushAscii = (s) => pushBuf(Buffer.from(s, 'latin1'));
+
+  pushAscii('%PDF-1.4\n');
+  pushBuf(Buffer.from([0x25, 0xe2, 0xe3, 0xcf, 0xd3, 0x0a]));
+
+  const writeObj = (id, bodyParts) => {
+    offsets[id] = byteLen;
+    pushAscii(`${id} 0 obj\n`);
+    for (const part of bodyParts) {
+      if (Buffer.isBuffer(part)) pushBuf(part);
+      else pushAscii(part);
+    }
+    pushAscii('\nendobj\n');
+  };
+
+  writeObj(1, ['<< /Type /Catalog /Pages 2 0 R >>']);
+  writeObj(2, [`<< /Type /Pages /Kids [ ${kidsRefs.join(' ')} ] /Count ${n} >>`]);
+
+  for (let i = 0; i < n; i++) {
+    const { jpgBuf, width, height } = pages[i];
+    const pageObjId = 3 + i * 3;
+    const cntObjId = 4 + i * 3;
+    const imgObjId = 5 + i * 3;
+
+    let pageW;
+    let pageH;
+    if (pageSize === 'a4p') {
+      pageW = 595.28;
+      pageH = 841.89;
+    } else if (pageSize === 'a4l') {
+      pageW = 841.89;
+      pageH = 595.28;
+    } else {
+      pageW = width * 0.75 + margin * 2;
+      pageH = height * 0.75 + margin * 2;
+    }
+
+    const availW = Math.max(10, pageW - margin * 2);
+    const availH = Math.max(10, pageH - margin * 2);
+    const scale = Math.min(availW / width, availH / height);
+    const drawW = width * scale;
+    const drawH = height * scale;
+    const drawX = (pageW - drawW) / 2;
+    const drawY = (pageH - drawH) / 2;
+
+    const contentStr = `q\n${drawW.toFixed(2)} 0 0 ${drawH.toFixed(2)} ${drawX.toFixed(2)} ${drawY.toFixed(2)} cm\n/Im0 Do\nQ\n`;
+    const contentBuf = Buffer.from(contentStr, 'latin1');
+
+    writeObj(pageObjId, [
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageW.toFixed(2)} ${pageH.toFixed(2)}] /Resources << /XObject << /Im0 ${imgObjId} 0 R >> >> /Contents ${cntObjId} 0 R >>`,
+    ]);
+    writeObj(cntObjId, [
+      `<< /Length ${contentBuf.length} >>\nstream\n`,
+      contentBuf,
+      '\nendstream',
+    ]);
+    writeObj(imgObjId, [
+      `<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpgBuf.length} >>\nstream\n`,
+      jpgBuf,
+      '\nendstream',
+    ]);
+  }
+
+  const xrefOffset = byteLen;
+  pushAscii(`xref\n0 ${totalObjs + 1}\n0000000000 65535 f \n`);
+  for (let id = 1; id <= totalObjs; id++) {
+    pushAscii(`${String(offsets[id]).padStart(10, '0')} 00000 n \n`);
+  }
+  pushAscii(`trailer\n<< /Size ${totalObjs + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`);
+
+  return Buffer.concat(chunks);
+}
+
+function imagesToPdf(p) {
+  const files = Array.isArray(p.files) ? p.files.filter(Boolean) : [];
+  if (!files.length) throw new Error('请至少选择 1 张图片');
+
+  const pageSize = ['a4p', 'a4l', 'fit'].includes(p.pageSize) ? p.pageSize : 'a4p';
+  const margin = Math.min(Math.max(Math.round(num(p.margin, 20)), 0), 120);
+  const quality = ['high', 'medium', 'low'].includes(p.quality) ? p.quality : 'high';
+  const qv = quality === 'low' ? 9 : (quality === 'medium' ? 5 : 2);
+  const bgHex = normalizeHexColor(p.bgColor, 'ffffff');
+  const output = p.output || stampOutput(files[0], '合并文档', 'pdf');
+
+  return {
+    output,
+    async run(taskId, onProgress) {
+      onProgress?.(0.05);
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vgt_img_pdf_'));
+      try {
+        const pages = [];
+        for (let i = 0; i < files.length; i++) {
+          const src = files[i];
+          const tmpJpg = path.join(tmpDir, `page_${i}.jpg`);
+          await runFfmpeg(taskId, [
+            '-i', src,
+            '-filter_complex',
+            `[0:v]setsar=1,format=rgba,split[__fg][__bgsrc];[__bgsrc]drawbox=x=0:y=0:w=iw:h=ih:color=0x${bgHex}@1:t=fill[__bg];[__bg][__fg]overlay=0:0:shortest=1,format=yuvj420p[vout]`,
+            '-map', '[vout]',
+            '-map_metadata', '-1',
+            '-c:v', 'mjpeg',
+            '-q:v', String(qv),
+            '-update', '1',
+            '-frames:v', '1',
+            tmpJpg,
+          ], { totalDuration: 0 });
+
+          const jpgBuf = fs.readFileSync(tmpJpg);
+          let dims = getJpegDimensions(jpgBuf);
+          if (!dims) {
+            const info = await probe(tmpJpg);
+            dims = { width: info.width || 800, height: info.height || 600 };
+          }
+          pages.push({ jpgBuf, width: dims.width, height: dims.height });
+          onProgress?.(0.08 + (0.8 * (i + 1)) / files.length);
+        }
+
+        const pdfBuf = buildPdfFromJpegPages(pages, { pageSize, margin });
+        fs.mkdirSync(path.dirname(output), { recursive: true });
+        fs.writeFileSync(output, pdfBuf);
+        onProgress?.(1);
+
+        return {
+          output,
+          pdfSummary: {
+            pageCount: pages.length,
+            pageSize,
+            outputSize: pdfBuf.length,
+          },
+        };
+      } finally {
+        try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+      }
+    },
+  };
+}
+
 module.exports = {
   docExtractImages,
   docCompressImages,
   docRepackImages,
+  docCleanupMedia,
+  docStyleImages,
+  mdOrganizeImages,
+  imagesToPdf,
 };

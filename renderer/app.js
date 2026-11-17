@@ -392,10 +392,14 @@ function renderFileCard(ext) {
     parts.push(
       info.docType === 'docx'
         ? 'Word 文档 (.docx)'
-        : (info.docType === 'pptx' ? 'PPT 演示文稿 (.pptx)' : 'Markdown 文档'),
+        : (info.docType === 'pptx'
+          ? 'PPT 演示文稿 (.pptx)'
+          : (info.docType === 'pdf' ? 'PDF 文档 (.pdf)' : 'Markdown 文档')),
     );
     const st = info.docStats || {};
-    if (info.docType === 'md' && info.imageCount > 0) {
+    if (info.docType === 'pdf') {
+      parts.push(`共 ${info.pageCount || 0} 页`);
+    } else if (info.docType === 'md' && info.imageCount > 0) {
       const sub = [];
       if (st.local) sub.push(`本地 ${st.local}`);
       if (st.dataUri) sub.push(`Base64 ${st.dataUri}`);
@@ -430,7 +434,7 @@ function renderFileCard(ext) {
   const url = encodeURI('file:///' + file.path.replace(/\\/g, '/'));
   const zoomBtn = $('btn-zoom-preview');
   if (isDoc) {
-    const icon = info.docType === 'docx' ? '📘' : (info.docType === 'pptx' ? '📊' : '📝');
+    const icon = info.docType === 'docx' ? '📘' : (info.docType === 'pptx' ? '📊' : (info.docType === 'pdf' ? '📄' : '📝'));
     box.innerHTML = `<div class="no-preview">${icon}</div>`;
     zoomBtn.classList.add('hidden');
   } else if (ext === 'gif' || ext === 'webp' || ext === 'svg' || IMG_EXTS.includes(ext)) {
@@ -552,7 +556,7 @@ function renderBatchList() {
   listEl.classList.remove('hidden');
   listEl.innerHTML = '';
 
-  const showPctIds = new Set(['compressGif', 'imageConvert', 'imageCompressTarget', 'compressTarget', 'svgOptimize', 'imageToSvg', 'docCompressImages', 'docRepackImages']);
+  const showPctIds = new Set(['compressGif', 'imageConvert', 'imageCompressTarget', 'compressTarget', 'svgOptimize', 'imageToSvg', 'docCompressImages', 'docRepackImages', 'docCleanupMedia']);
 
   batchFiles.forEach((item, idx) => {
     const row = document.createElement('div');
@@ -848,7 +852,7 @@ function showBatchSummary() {
     title = `⚠️ 批量处理完成：${doneItems.length} 个成功，${errItems.length} 个失败（鼠标悬停“❌ 失败”可看原因）`;
   } else {
     title = `✅ 批量处理全部完成：共 ${doneItems.length} 个文件`;
-    if (['compressGif', 'compressTarget', 'imageConvert', 'imageCompressTarget', 'svgOptimize', 'docCompressImages'].includes(currentFeature.id)) {
+    if (['compressGif', 'compressTarget', 'imageConvert', 'imageCompressTarget', 'svgOptimize', 'docCompressImages', 'docCleanupMedia'].includes(currentFeature.id)) {
       const totalIn = doneItems.reduce((s, b) => s + (b.info?.size || 0), 0);
       const totalOut = doneItems.reduce((s, b) => s + (b.outSize || 0), 0);
       if (totalIn > 0 && totalOut > 0 && totalOut < totalIn) {
@@ -972,6 +976,58 @@ async function showSuccess(res) {
         : '';
       const resizeNote = rs.resizedCount > 0 ? `，保持原宽度并自适应 ${rs.resizedCount} 处高度` : '';
       line = `✅ 已将 ${rs.replacedCount} 张图片放回 ${docLbl} 原位（匹配 ${rs.matchedCount} 处${resizeNote}，${fmtSize(rs.origSize)} → ${fmtSize(rs.newSize)}${delta}）`;
+    } else if (res.docCleanupSummary) {
+      const cs = res.docCleanupSummary;
+      const docLbl = cs.docType === 'pptx' ? 'PPT' : 'Word';
+      const pct = cs.origSize > 0 && cs.newSize < cs.origSize
+        ? `，节省 ${Math.round((1 - cs.newSize / cs.origSize) * 100)}%`
+        : '';
+      const parts = [];
+      if (cs.orphanCount) parts.push(`移除未引用孤立媒体 ${cs.orphanCount} 项`);
+      if (cs.dedupeCount) parts.push(`去重合并重复图 ${cs.dedupeCount} 项`);
+      const detail = parts.length ? parts.join(' · ') : '未发现孤立或重复媒体，已重构整理';
+      line = `✅ ${docLbl} 清理完成：${detail}（媒体 ${cs.totalBefore} → ${cs.totalAfter} 项，${fmtSize(cs.origSize)} → ${fmtSize(cs.newSize)}${pct}）`;
+    } else if (res.docStyleSummary) {
+      const ss = res.docStyleSummary;
+      const docLbl = ss.docType === 'pptx' ? 'PPT' : 'Word';
+      const secScope = ss.sectionFiltered && ss.sectionTitles?.length
+        ? `（仅所选 ${ss.sectionTitles.length} 个章节：${escHtml(ss.sectionTitles.slice(0, 2).join('、'))}${ss.sectionTitles.length > 2 ? ' 等' : ''}）`
+        : '';
+      const tags = [];
+      if (ss.frameMode === 'rounded') tags.push('圆角');
+      else if (ss.frameMode === 'roundedBorder') tags.push('圆角+相框');
+      else if (ss.frameMode === 'border') tags.push('纯色边框');
+      if (ss.watermarked) tags.push('文字水印');
+      line = `✅ ${docLbl}${secScope} 图片美化完成：已处理 ${ss.styledCount} / ${ss.totalImages} 张图片（${tags.join(' + ')}，${fmtSize(ss.newSize)}）`;
+    } else if (res.mdOrganizeSummary) {
+      const ms = res.mdOrganizeSummary;
+      if (ms.action === 'cleanUnused') {
+        line = ms.cleanedCount > 0
+          ? `✅ Markdown 未使用图片清理完成：扫描 ${ms.scannedCount} 张，已${ms.cleanAction === 'delete' ? '删除' : '移入 _已清理冗余'} ${ms.cleanedCount} 张（释放 ${fmtSize(ms.freedBytes)}）`
+          : `✅ Markdown 资源子目录已检查（共 ${ms.scannedCount} 张图，均在正文中被引用）`;
+      } else if (ms.action === 'inlineBase64') {
+        line = `✅ Markdown 单文件内嵌完成：共将 ${ms.rewrittenCount} 处图片转为 Base64 内嵌（输出 ${fmtSize(outSize)}）`;
+        const notes = [];
+        if (ms.downloadedCount) notes.push(`网络下载 ${ms.downloadedCount} 张`);
+        if (ms.missingLocal) notes.push(`本地缺失 ${ms.missingLocal} 处`);
+        if (ms.failedRemote) notes.push(`下载失败 ${ms.failedRemote} 张`);
+        if (notes.length) line += `<br /><span class="muted" style="font-size:12px">ℹ️ ${notes.join(' · ')}</span>`;
+      } else {
+        const sub = [];
+        if (ms.copiedLocalCount) sub.push(`收集本地图 ${ms.copiedLocalCount}`);
+        if (ms.downloadedCount) sub.push(`下载网络图 ${ms.downloadedCount}`);
+        if (ms.decodedDataCount) sub.push(`还原 Base64 ${ms.decodedDataCount}`);
+        if (ms.extractedSvgCount) sub.push(`导出 SVG ${ms.extractedSvgCount}`);
+        line = `✅ Markdown 本地化完成：共重写 ${ms.rewrittenCount} 处图片引用` + (sub.length ? `（${sub.join(' · ')}）` : '');
+        const notes = [];
+        if (ms.missingLocal) notes.push(`本地路径缺失 ${ms.missingLocal} 处`);
+        if (ms.failedRemote) notes.push(`下载失败 ${ms.failedRemote} 张`);
+        if (notes.length) line += `<br /><span class="muted" style="font-size:12px">ℹ️ ${notes.join(' · ')}</span>`;
+      }
+    } else if (res.pdfSummary) {
+      const ps = res.pdfSummary;
+      const modeName = ps.pageSize === 'a4l' ? 'A4 横向' : (ps.pageSize === 'fit' ? '按原图尺寸自适应' : 'A4 竖向');
+      line = `✅ PDF 合成完成：共 ${ps.pageCount} 页（${modeName}，${fmtSize(outSize)}）`;
     } else if ((currentFeature.id === 'compressGif' || currentFeature.id === 'imageConvert' || currentFeature.id === 'svgOptimize') && file?.info.size) {
       if (outSize < file.info.size) {
         const pct = Math.round((1 - outSize / file.info.size) * 100);

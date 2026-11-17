@@ -55,7 +55,7 @@ app.whenReady().then(async () => {
       modeBtnWf.click();
       await new Promise((r) => setTimeout(r, 120));
       const paletteCount = document.querySelectorAll('#nav .wf-node-tpl').length;
-      if (paletteCount !== 50) throw new Error('侧栏工作流节点数异常: ' + paletteCount);
+      if (paletteCount !== 55) throw new Error('侧栏工作流节点数异常: ' + paletteCount);
 
       // 2. 依次载入 6 套模板并校验节点、连线与自动整理
       const tplCount = window.VGT.wfTemplates.WORKFLOW_TEMPLATES.length;
@@ -83,7 +83,7 @@ app.whenReady().then(async () => {
       modeBtnSingle.click();
       await new Promise((r) => setTimeout(r, 80));
       const singleItems = document.querySelectorAll('#nav .nav-item:not(.wf-node-tpl)').length;
-      if (singleItems < 44) throw new Error('单工具模式导航恢复异常: ' + singleItems);
+      if (singleItems !== 49) throw new Error('单工具模式导航恢复异常: ' + singleItems);
 
       return { paletteCount, tplCount, singleItems };
     })()`);

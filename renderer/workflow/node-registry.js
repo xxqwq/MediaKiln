@@ -16,8 +16,9 @@
   const SUB_EXTS = ['srt', 'ass', 'ssa', 'vtt'];
   const DOC_EXTS = ['docx', 'pptx', 'md', 'markdown'];
   const OOXML_EXTS = ['docx', 'pptx'];
+  const PDF_EXTS = ['pdf'];
   const ALL_SUPPORTED_EXTS = Array.from(new Set([
-    ...VIDEO_EXTS, 'gif', ...RASTER_OUT_EXTS, ...SVG_EXTS, ...AUDIO_EXTS, ...SUB_EXTS, ...DOC_EXTS,
+    ...VIDEO_EXTS, 'gif', ...RASTER_OUT_EXTS, ...SVG_EXTS, ...AUDIO_EXTS, ...SUB_EXTS, ...DOC_EXTS, ...PDF_EXTS,
   ]));
 
   const PORT_TYPES = {
@@ -28,6 +29,7 @@
     audio:    { id: 'audio',    label: '音频',     color: '#22d3ee', exts: AUDIO_EXTS },
     subtitle: { id: 'subtitle', label: '字幕',     color: '#a78bfa', exts: SUB_EXTS },
     doc:      { id: 'doc',      label: '文档',     color: '#60a5fa', exts: DOC_EXTS },
+    pdf:      { id: 'pdf',      label: 'PDF',      color: '#f87171', exts: PDF_EXTS },
     anim:     { id: 'anim',     label: '视频/GIF', color: '#e879f9', exts: [...VIDEO_EXTS, 'gif'] },
     visual:   { id: 'visual',   label: '视觉媒体', color: '#38bdf8', exts: [...VIDEO_EXTS, 'gif', ...IMG_EXTS] },
     any:      { id: 'any',      label: '任意媒体', color: '#94a3b8', exts: ['*'] },
@@ -64,6 +66,7 @@
     const norm = Array.from(new Set(exts.map((e) => (e === 'jpeg' ? 'jpg' : e.toLowerCase()))));
     if (norm.every((e) => e === 'gif')) return 'gif';
     if (norm.every((e) => e === 'svg')) return 'svg';
+    if (norm.every((e) => e === 'pdf')) return 'pdf';
     if (norm.every((e) => AUDIO_EXTS.includes(e))) return 'audio';
     if (norm.every((e) => SUB_EXTS.includes(e))) return 'subtitle';
     if (norm.every((e) => DOC_EXTS.includes(e))) return 'doc';
@@ -207,7 +210,13 @@
         return { exts: ['svg'], isList: false };
       case 'docCompressImages':
       case 'docRepackImages':
+      case 'docCleanupMedia':
+      case 'docStyleImages':
         return { exts: ['docx', 'pptx'], isList: false };
+      case 'mdOrganizeImages':
+        return { exts: ['md', 'markdown'], isList: false };
+      case 'imagesToPdf':
+        return { exts: ['pdf'], isList: false };
       case 'docExtractImages':
         return { exts: [...IMG_EXTS, 'gif', 'svg', ...VIDEO_EXTS, ...AUDIO_EXTS], isList: true };
       case 'trimVideo':
@@ -370,7 +379,13 @@
         return { exts: ['svg'], typeId: 'svg', isList: upstreamIsList };
       case 'docCompressImages':
       case 'docRepackImages':
+      case 'docCleanupMedia':
+      case 'docStyleImages':
         return passthroughFromUpstream(OOXML_EXTS);
+      case 'mdOrganizeImages':
+        return passthroughFromUpstream(['md', 'markdown']);
+      case 'imagesToPdf':
+        return { exts: ['pdf'], typeId: 'pdf', isList: false };
       case 'docExtractImages': {
         const exts = p.includeSvg === 'no' ? [...IMG_EXTS, 'gif'] : [...IMG_EXTS, 'gif', 'svg'];
         return { exts, typeId: inferPortTypeId(exts), isList: true };
@@ -1331,8 +1346,45 @@
           if (!replaceDir && !replaceFiles.length) {
             throw new Error('请连接「替换图片」端口或在节点内选择替换文件夹');
           }
-          return { input: inputPath, replaceDir, replaceFiles };
+          return { input: inputPath, replaceDir, replaceFiles, sizeMode: v.sizeMode || 'keepWidth' };
         }
+        case 'docCleanupMedia':
+          return {
+            input: inputPath,
+            removeOrphans: (v.removeOrphans || 'yes') !== 'no',
+            dedupeMedia: (v.dedupeMedia || 'yes') !== 'no',
+          };
+        case 'docStyleImages':
+          return {
+            input: inputPath,
+            frameMode: v.frameMode || 'rounded',
+            radius: v.radius || '24',
+            borderWidth: v.borderWidth || '16',
+            borderColor: v.borderColor || '#ffffff',
+            wmText: String(v.wmText || '').trim(),
+            wmPos: v.wmPos || 'br',
+            wmSize: v.wmSize || 'medium',
+            wmOpacity: v.wmOpacity ?? '0.45',
+            wmColor: v.wmColor || 'white',
+            sectionKeyword: v.sectionKeyword || '',
+          };
+        case 'mdOrganizeImages':
+          return {
+            input: inputPath,
+            action: v.action || 'localize',
+            assetsDirName: v.assetsDirName || 'assets',
+            remoteMode: v.remoteMode || 'download',
+            inlineSvgMode: v.inlineSvgMode || 'extract',
+            cleanAction: v.cleanAction || 'move',
+          };
+        case 'imagesToPdf':
+          return {
+            files: multiItems.map((m) => m.path),
+            pageSize: v.pageSize || 'a4p',
+            margin: v.margin ?? '20',
+            quality: v.quality || 'high',
+            bgColor: v.bgColor || '#ffffff',
+          };
         default:
           throw new Error(`未实现的节点功能：${fid}`);
       }

@@ -6,8 +6,8 @@ Windows 本地离线多媒体与文档处理桌面应用，基于 Electron + FFm
 
 ### 方式一：直接下载安装包（推荐）
 前往 [GitHub Releases](https://github.com/xxqwq/usefulTools/releases) 下载最新 Windows 安装包（无需配置 Node.js 或 FFmpeg）：
-- **便携版（免安装）**：`视频GIF工具箱-2.1.3-便携版.exe`，下载后双击即可运行。
-- **安装版**：`视频GIF工具箱-2.1.3-安装版.exe`（若便携版被杀毒软件误报，推荐使用安装版）。
+- **便携版（免安装）**：`视频GIF工具箱-2.1.4-便携版.exe`，下载后双击即可运行。
+- **安装版**：`视频GIF工具箱-2.1.4-安装版.exe`（若便携版被杀毒软件误报，推荐使用安装版）。
 
 ### 方式二：源码运行（需 Node.js 18+）
 1. 克隆仓库或下载源码 ZIP 后解压。
@@ -23,15 +23,15 @@ Windows 本地离线多媒体与文档处理桌面应用，基于 Electron + FFm
 
 - **🛠️ 单工具模式 & 🕸️ 节点画布模式**：顶部/侧栏一键切换「单工具」快速处理与「节点画布」可视化工作流编排。
 - **🕸️ 节点画布工作流**：
-  - 提供 **51 个节点**（6 个输入/输出节点 + 45 个功能节点）与 **6 套开箱即用模板**（视频转精品压缩 GIF、横屏转 9:16 配乐竖屏、Word/PPT 提取图片压缩写回原位、绿幕透明表情包流、Logo 抠图转 SVG + ICO 双路导出、视频抽帧拼图墙）。
+  - 提供 **55 个节点**（6 个输入/输出节点 + 49 个功能节点）与 **6 套开箱即用模板**（视频转精品压缩 GIF、横屏转 9:16 配乐竖屏、Word/PPT 提取图片压缩写回原位、绿幕透明表情包流、Logo 抠图转 SVG + ICO 双路导出、视频抽帧拼图墙）。
   - 支持连接类型校验、分支并排对比、节点 Bypass 旁路跳过、**增量智能缓存**（修改下游参数时上游已缓存节点秒级命中）以及工作流 JSON 导入导出。
-- **📦 批量队列处理**：除需交互框选/标段或原位回填的功能（画面裁剪、局部打码、多段剪辑、图片放回原位）及 3 个多文件合并/拼图功能外，其余 **38 个功能**均支持一次选择或拖入多个文件顺序批量处理（支持随时 `+ 添加文件`、移除队列项、独立定位输出文件与中途取消）。
+- **📦 批量队列处理**：除需交互框选/标段或原位回填的功能（画面裁剪、局部打码、多段剪辑、图片放回原位）及 4 个多文件合并/拼图/转 PDF 功能外，其余 **41 个功能**均支持一次选择或拖入多个文件顺序批量处理（支持随时 `+ 添加文件`、移除队列项、独立定位输出文件与中途取消）。
 - **🔍 放大预览与对比**：处理完成后点击预览图或「⛶ 放大对比」，支持**并排同步缩放/平移**与**卷帘对比**（支持视频、GIF、位图与 SVG 矢量 vs 位图）。
 - **⚙️ 全局输出与硬件加速**：支持设置输出位置（源文件同目录 / `output` 子目录 / 自定义文件夹）、防覆盖自动编号，以及视频硬件编码加速（CPU / 自动检测 GPU / NVIDIA NVENC / Intel QSV / AMD AMF）。
 
 ---
 
-## 功能清单（45 个，8 大类）
+## 功能清单（49 个，8 大类）
 
 ### 转换
 | 功能 | 说明 |
@@ -75,6 +75,10 @@ Windows 本地离线多媒体与文档处理桌面应用，基于 Electron + FFm
 | 🗜️ Word / PPT 一键压缩瘦身 | 自动识别 `.docx` / `.pptx` 内所有图片（含 PPT 内嵌视频），支持按指定章节/页或全篇原位压缩，完整保留文字与幻灯片排版 |
 | 📑 Word / PPT / MD 提取图片 | 识别 `.docx` / `.pptx` 内嵌媒体和 `.md` 本地引用/Base64/内联 SVG/网络图片，支持按指定章节/页提取、选图替换（含剪贴板贴截图）与单张发给其他工具 |
 | 📥 图片放回 Word / PPT 原位 | 将提取并修改/压缩/打码后的图片自动匹配放回原 `.docx` / `.pptx` 对应位置（默认保持原显示宽度按比例自适应高度防拉伸，并自动更新格式引用） |
+| 🧹 Word / PPT 清理冗余与去重 | 深度扫描所有 XML 关系，一键移除未被引用的孤立隐藏媒体，并对重复嵌入图片按 SHA-256 去重重写关系瘦身 |
+| ✨ Word / PPT 图片统一美化 | 一键为 `.docx` / `.pptx` 指定章节或全篇图片批量添加抗锯齿圆角、纯色边框或中文字体水印 |
+| 📝 Markdown 图片整理 | 将 `.md` 中的网络图/本地图/Base64/内联 SVG 一键归拢至 `assets/` 并重写相对路径、全部内嵌为单文件 Base64，或安全清理资源子目录未使用图片 |
+| 📄 多图合并为 PDF | 将多张图片离线合成为单份 PDF 1.4 文档，支持 A4 竖向 / A4 横向 / 按每张图片原尺寸自适应与三档画质 |
 
 ### 剪辑
 | 功能 | 说明 |
@@ -117,8 +121,8 @@ Windows 本地离线多媒体与文档处理桌面应用，基于 Electron + FFm
 ```bash
 npm install                    # 安装依赖并自动从 bin/*.exe.br 解压 FFmpeg
 npm start                      # 启动 Electron 应用
-node scripts/smoke-test.js     # 冒烟测试（自动生成素材，101 用例覆盖全部功能）
-node scripts/workflow-test.js  # 工作流引擎与真实媒体流水线端到端测试（7 项）
+node scripts/smoke-test.js     # 冒烟测试（自动生成素材，105 用例覆盖全部功能）
+node scripts/workflow-test.js  # 工作流引擎与真实媒体流水线端到端测试（8 项）
 npm run dist                   # 打包便携版 + 安装版到 release/
 npm run release                # 一键发布（支持 -Bump patch/minor/major）
 ```
@@ -133,16 +137,16 @@ ffmpeg.js               统一门面：组合 core 与 modules，保持 IPC 调�
 启动工具箱.bat          Windows 源码一键启动脚本（自动清理 ELECTRON_RUN_AS_NODE 并在缺依赖时安装）
 core/
   ├── ffmpeg-bin.js     内置 FFmpeg 路径解析、Brotli 自动解压与 SHA-256 校验
-  ├── runner.js         ffprobe / ffmpeg / SVG / 文档探测与任务执行器
-  ├── doc-parser.js     DOCX / PPTX / MD 媒体解析与回填
+  ├── runner.js         ffprobe / ffmpeg / SVG / PDF / 文档探测与任务执行器
+  ├── doc-parser.js     DOCX / PPTX / MD 媒体解析、冗余关系扫描与安全替换回填
   └── utils.js          滤镜拼装、GIF 调色板、PGM 圆角遮罩等公共工具
 modules/                功能实现：video.js、image.js、svg.js、document.js
 preload.js              contextBridge 安全桥接（含 webUtils.getPathForFile 拖拽路径获取）
 renderer/
   ├── app.js            单工具主界面、批量队列与交互编排
-  ├── features/         45 个功能注册表（video-gif.js、image.js、svg.js、document.js）
+  ├── features/         49 个功能注册表（video-gif.js、image.js、svg.js、document.js）
   ├── ui/               参数面板、裁剪画布、放大对比弹窗
-  └── workflow/         节点画布、拓扑执行引擎、51 节点注册表与 6 套预设模板
+  └── workflow/         节点画布、拓扑执行引擎、55 节点注册表与 6 套预设模板
 bin/                    内置 FFmpeg 9.0.2（gyan.dev）：仓库内置 .br 压缩包（每件 ~28MB）与 binaries.json；安装/启动自动解压，打包时经 extraResources 释放
 scripts/                ensure-ffmpeg.js、smoke-test.js、workflow-test.js、workflow-ui-check.js、webp-check.js、release.ps1
 ```

@@ -162,10 +162,10 @@ async function step(name, fn) {
   const reg = regFactory.createRegistry(features);
   const runtime = createNodeRuntime();
 
-  await step('1. 节点注册表完整性（6 个 I/O + 45 个子功能 = 51 个节点）', () => {
+  await step('1. 节点注册表完整性（6 个 I/O + 49 个子功能 = 55 个节点）', () => {
     const all = reg.getAllDefs();
-    assert.strictEqual(features.length, 45, `FEATURES 应为 45 个，实际 ${features.length}`);
-    assert.strictEqual(all.length, 51, `总节点数应为 51 个，实际 ${all.length}`);
+    assert.strictEqual(features.length, 49, `FEATURES 应为 49 个，实际 ${features.length}`);
+    assert.strictEqual(all.length, 55, `总节点数应为 55 个，实际 ${all.length}`);
     for (const def of all) {
       assert(def.type && def.name && def.group, `节点定义字段缺失: ${def.type}`);
       const dp = def.defaultParams();
@@ -350,6 +350,54 @@ async function step(name, fn) {
     assert.strictEqual(info.width, 320, `裁剪+旁路后宽度应为 320，实际 ${info.width}`);
     assert.strictEqual(info.height, 180, `裁剪+旁路后高度应为 180，实际 ${info.height}`);
     assert(Math.abs(info.duration - 7) < 0.8, `合并后总时长应约 7s，实际 ${info.duration}`);
+  });
+
+  await step('8. 真实流水线 4（多图合成 PDF + Word 清理冗余→图片美化）', async () => {
+    const imgB = path.join(TMP, 'small_page.png');
+    runFfmpegSync(['-f', 'lavfi', '-i', 'color=c=blue:s=320x240:d=0.1', '-frames:v', '1', imgB]);
+
+    const flowPdf = tplMod.normalizeGraphData({
+      name: '多图转PDF',
+      nodes: [
+        { id: 'p1', type: 'io.loadBatch', x: 0, y: 0, params: { filterKind: 'image', filePaths: [bigPng, imgB] } },
+        { id: 'p2', type: 'feat.imagesToPdf', x: 300, y: 0, params: { pageSize: 'fit', margin: '10', quality: 'medium', bgColor: '#ffffff' } },
+        { id: 'p3', type: 'io.save', x: 600, y: 0, params: { outMode: 'custom', customDir: OUT_DIR, suffix: '_wf_pdf', exportAsFolder: 'flat', noOverwrite: 'no' } },
+      ],
+      edges: [
+        { id: 'pe1', fromNode: 'p1', fromPort: 'media', toNode: 'p2', toPort: 'files' },
+        { id: 'pe2', fromNode: 'p2', fromPort: 'out', toNode: 'p3', toPort: 'media' },
+      ],
+    }, reg);
+
+    const { promise: pdfProm } = runner.execute(flowPdf, runtime, { hwAccel: 'cpu' });
+    const pdfRes = await pdfProm;
+    const outPdf = pdfRes.summary.exportedFiles[0];
+    assert(fs.existsSync(outPdf) && outPdf.endsWith('.pdf'), '应成功导出 PDF 文件');
+    const pdfInfo = await probe(outPdf);
+    assert.strictEqual(pdfInfo.docType, 'pdf');
+    assert.strictEqual(pdfInfo.pageCount, 2, `PDF 应有 2 页，实际 ${pdfInfo.pageCount}`);
+
+    const flowDocStyle = tplMod.normalizeGraphData({
+      name: 'Word清理与美化',
+      nodes: [
+        { id: 'ds1', type: 'io.loadFile', x: 0, y: 0, params: { filePath: testDocx } },
+        { id: 'ds2', type: 'feat.docCleanupMedia', x: 300, y: 0, params: { removeOrphans: 'yes', dedupeMedia: 'yes' } },
+        { id: 'ds3', type: 'feat.docStyleImages', x: 600, y: 0, params: { frameMode: 'roundedBorder', radius: '16', borderWidth: '12', borderColor: '#ffffff', wmText: '工作流测试' } },
+        { id: 'ds4', type: 'io.save', x: 900, y: 0, params: { outMode: 'custom', customDir: OUT_DIR, suffix: '_wf_styled', exportAsFolder: 'flat', noOverwrite: 'no' } },
+      ],
+      edges: [
+        { id: 'dse1', fromNode: 'ds1', fromPort: 'media', toNode: 'ds2', toPort: 'input' },
+        { id: 'dse2', fromNode: 'ds2', fromPort: 'out', toNode: 'ds3', toPort: 'input' },
+        { id: 'dse3', fromNode: 'ds3', fromPort: 'out', toNode: 'ds4', toPort: 'media' },
+      ],
+    }, reg);
+
+    const { promise: docProm } = runner.execute(flowDocStyle, runtime, { hwAccel: 'cpu' });
+    const docRes = await docProm;
+    const outStyledDocx = docRes.summary.exportedFiles[0];
+    assert(fs.existsSync(outStyledDocx) && outStyledDocx.endsWith('.docx'), '应成功导出美化后的 docx');
+    const docInfo = await probe(outStyledDocx);
+    assert.strictEqual(docInfo.imageCount, 1);
   });
 
   // 清理测试素材与中间缓存

@@ -12,7 +12,7 @@
     'mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'ts', 'm4v',
     'gif', 'jpg', 'jpeg', 'png', 'webp', 'bmp', 'avif', 'ico',
     'svg', 'mp3', 'm4a', 'wav', 'flac', 'aac', 'ogg', 'srt',
-    'docx', 'pptx', 'md', 'markdown',
+    'docx', 'pptx', 'md', 'markdown', 'pdf',
   ]);
 
   function extOf(p) {
@@ -408,7 +408,7 @@
                 originPath: upPayload.originPath,
               };
             } else {
-              // ---------- 2. 43 个功能节点 ----------
+              // ---------- 2. 功能节点 ----------
               const primaryPort = def.inputs[0];
               const primaryEdges = inEdgesByPort.get(primaryPort.id) || [];
               if (!primaryEdges.length) {
