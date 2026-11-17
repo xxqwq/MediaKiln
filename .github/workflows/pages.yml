@@ -1,6 +1,6 @@
 name: Deploy Website (GitHub Pages)
 
-# 官网当前由 Cloudflare Pages 托管（见 website/README.md），此工作流默认保留为手动触发。
+# 官网当前由腾讯云 EdgeOne Pages 托管（见 website/README.md），此工作流默认保留为手动触发。
 # 如需改用 GitHub Pages 自动部署，取消下方 push / release 触发器的注释，
 # 并在仓库 Settings → Pages 中将 Source 设为 GitHub Actions。
 on:

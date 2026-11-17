@@ -1,10 +1,10 @@
 // 用 Electron 渲染官网并分段截图，便于自检视觉效果（参数用环境变量传递：Electron 会拦截命令行里的 URL 参数）
-// 用法: $env:SHOOT_URL='http://localhost:4321/usefulTools/'; $env:SHOOT_OUT='...'; $env:SHOOT_W='1440'; electron website/scripts/dev/shoot-site.cjs
+// 用法: $env:SHOOT_URL='http://localhost:4321/'; $env:SHOOT_OUT='...'; $env:SHOOT_W='1440'; electron website/scripts/dev/shoot-site.cjs
 const { app, BrowserWindow } = require('electron');
 const fs = require('fs');
 const path = require('path');
 
-const target = process.env.SHOOT_URL || 'http://localhost:4321/usefulTools/';
+const target = process.env.SHOOT_URL || 'http://localhost:4321/';
 const outDir = process.env.SHOOT_OUT || path.join(__dirname, 'shots');
 const w = process.env.SHOOT_W || '1440';
 // 独立 userData，避免与正在运行的其他 Electron 实例争用缓存目录

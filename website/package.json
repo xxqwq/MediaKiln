@@ -9,9 +9,10 @@
     "dev": "npm run extract && astro dev",
     "build": "npm run extract && astro build",
     "preview": "astro preview",
+    "deploy:eo": "node scripts/deploy-edgeone.mjs",
     "deploy:cf": "node scripts/deploy-cloudflare.mjs"
   },
   "dependencies": {
-    "astro": "^7.4.12"
+    "astro": "^5.18.2"
   }
 }
