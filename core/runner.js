@@ -3,7 +3,8 @@
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const { isImagePath, isSvgPath, parseSvgDims } = require('./utils');
+const { isImagePath, isSvgPath, isDocPath, parseSvgDims } = require('./utils');
+const { inspectDocument } = require('./doc-parser');
 
 // 使用项目自带的新版 ffmpeg（gyan 9.0.2）。
 // 不用 ffmpeg-static：其内置的 ffmpeg 6.1 存在动画 WebP 编码缺陷（输出文件损坏）。
@@ -22,8 +23,30 @@ function assertBinaries() {
 }
 
 // ---------------------------------------------------------------------------
-// ffprobe：读取媒体信息（SVG 通过 XML / Resvg 直接读取）
+// ffprobe：读取媒体信息（SVG 通过 XML/Resvg 读取，DOCX/MD 通过文档解析读取）
 // ---------------------------------------------------------------------------
+
+function probeDoc(filePath) {
+  const size = fs.statSync(filePath).size;
+  const parsed = inspectDocument(filePath);
+  return {
+    duration: 0,
+    size,
+    width: 0,
+    height: 0,
+    fps: 0,
+    isImage: false,
+    isSvg: false,
+    isDoc: true,
+    docType: parsed.docType,
+    imageCount: parsed.stats.imageCount ?? parsed.stats.total,
+    videoCount: parsed.stats.videoCount || 0,
+    docStats: parsed.stats,
+    hasAudio: false,
+    hasSubtitles: false,
+    subCount: 0,
+  };
+}
 
 function probeSvg(filePath) {
   const text = fs.readFileSync(filePath, 'utf8');
@@ -58,6 +81,10 @@ function probeSvg(filePath) {
 }
 
 function probe(filePath) {
+  const ext = path.extname(String(filePath || '')).slice(1).toLowerCase();
+  if (isDocPath(filePath) || ext === 'doc' || ext === 'ppt') {
+    return Promise.resolve().then(() => probeDoc(filePath));
+  }
   if (isSvgPath(filePath)) {
     return Promise.resolve().then(() => probeSvg(filePath));
   }
@@ -97,6 +124,7 @@ function probe(filePath) {
           fps: isImg ? 0 : Math.round(fps * 100) / 100,
           isImage: isImg,
           isSvg: false,
+          pixFmt: video?.pix_fmt || '',
           hasAudio: !isImg && (info.streams || []).some((s) => s.codec_type === 'audio'),
           hasSubtitles: subCount > 0,
           subCount,

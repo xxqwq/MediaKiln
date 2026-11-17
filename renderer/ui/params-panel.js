@@ -71,7 +71,8 @@ function createParamsController(appCtx) {
     const file = getFile();
 
     window.__crop = null;
-    window.__secondFile = null;
+    window.__secondFile = window.__pendingSecondFile || null;
+    window.__pendingSecondFile = null;
     window.__secondInfo = null;
     window.__segments = [];
     const box = $('params');
@@ -173,6 +174,17 @@ function createParamsController(appCtx) {
           <div class="second-file">
             <button class="btn btn-ghost btn-sm" id="pick-second" data-kind="${field.kind || 'audioFile'}">📁 选择${field.label}</button>
             <span class="muted second-name" id="second-name">${field.placeholder || '未选择'}</span>
+          </div>`;
+      } else if (field.type === 'replaceSource') {
+        const cur = window.__secondFile;
+        const curText = cur?.files?.length
+          ? `已选 ${cur.files.length} 张替换图片（${cur.files.map((p) => p.split(/[\\/]/).pop()).slice(0, 3).join('、')}${cur.files.length > 3 ? '…' : ''}）`
+          : (cur?.dir ? `已选文件夹：${cur.dir}` : (field.placeholder || '未选择'));
+        wrap.innerHTML = `<label>${field.label}</label>
+          <div class="second-file">
+            <button class="btn btn-ghost btn-sm" id="pick-replace-dir">📁 选择图片文件夹</button>
+            <button class="btn btn-ghost btn-sm" id="pick-replace-files">🖼️ 选择替换图片</button>
+            <span class="${cur ? '' : 'muted '}second-name" id="second-name" title="${cur?.dir || (cur?.files || []).join('\n')}">${curText}</span>
           </div>`;
       } else if (field.type === 'cropCanvas') {
         const dur = file?.info.duration || 0;
@@ -424,6 +436,33 @@ function createParamsController(appCtx) {
             if (res.ok) window.__secondInfo = res.info;
           }
         }
+      };
+    }
+
+    const pickReplaceDir = box.querySelector('#pick-replace-dir');
+    if (pickReplaceDir) {
+      pickReplaceDir.onclick = async () => {
+        const dir = await window.api.pickDir();
+        if (!dir) return;
+        window.__secondFile = { dir, files: [] };
+        const name = $('second-name');
+        name.textContent = `已选文件夹：${dir}`;
+        name.title = dir;
+        name.classList.remove('muted');
+      };
+    }
+
+    const pickReplaceFiles = box.querySelector('#pick-replace-files');
+    if (pickReplaceFiles) {
+      pickReplaceFiles.onclick = async () => {
+        const picked = await window.api.pickFile(currentFeature.id, 'replaceImageFiles');
+        const list = Array.isArray(picked) ? picked : (picked ? [picked] : []);
+        if (!list.length) return;
+        window.__secondFile = { dir: '', files: list };
+        const name = $('second-name');
+        name.textContent = `已选 ${list.length} 张替换图片（${list.map((p) => p.split(/[\\/]/).pop()).slice(0, 3).join('、')}${list.length > 3 ? '…' : ''}）`;
+        name.title = list.join('\n');
+        name.classList.remove('muted');
       };
     }
 

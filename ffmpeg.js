@@ -4,11 +4,13 @@ const runner = require('./core/runner');
 const videoBuilders = require('./modules/video');
 const imageBuilders = require('./modules/image');
 const svgBuilders = require('./modules/svg');
+const documentBuilders = require('./modules/document');
 
 const builders = {
   ...videoBuilders,
   ...imageBuilders,
   ...svgBuilders,
+  ...documentBuilders,
 };
 
 const executeTask = runner.createExecutor(builders);

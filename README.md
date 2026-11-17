@@ -2,7 +2,7 @@
 
 Windows 桌面小工具，全部处理在本地完成，无需联网、不上传文件。基于 Electron + FFmpeg 9.0（自带二进制，无需安装）。
 
-## 功能（40 个，7 大类）
+## 功能（43 个，8 大类）
 
 ### 转换
 | 功能 | 说明 |
@@ -38,6 +38,13 @@ Windows 桌面小工具，全部处理在本地完成，无需联网、不上传
 | ⚡ SVG 压缩优化 | 基于 SVGO 清理冗余元数据、注释、空组与多余小数位，保留矢量清晰度大幅瘦身 |
 | ✒️ 图片转 SVG 矢量 | 基于轮廓描摹与色彩量化（ImageTracerJS + SVGO）将位图转为可无限放大的 SVG（黑白剪影/扁平色块/多彩插画/像素风） |
 
+### 文档
+| 功能 | 说明 |
+|---|---|
+| 🗜️ Word / PPT 一键压缩瘦身 | 自动识别 `.docx` / `.pptx` 内所有图片（含 PPT 内嵌视频）并按画质与分辨率上限原位压缩，完整保留文字与幻灯片排版 |
+| 📑 Word / PPT / MD 提取图片 | 识别 `.docx` / `.pptx` 内嵌媒体和 `.md` 本地引用/Base64/内联 SVG/网络图片并按序导出，支持勾选/单张发送、复制与拖出到外部软件 |
+| 📥 图片放回 Word / PPT 原位 | 将提取并修改/压缩/打码后的图片自动匹配放回原 `.docx` / `.pptx` 对应位置（支持格式变更自动同步修复文档引用） |
+
 ### 剪辑
 | 功能 | 说明 |
 |---|---|
@@ -72,7 +79,7 @@ Windows 桌面小工具，全部处理在本地完成，无需联网、不上传
 | 🛡️ 清除隐私元数据 | 无损剥离视频/音频/图片中的设备型号、GPS 定位等 EXIF/Metadata |
 | 🎞️ 图片合成视频 | 多张图片（可不同尺寸）合成 GIF 或 MP4，自动黑边居中对齐 |
 
-- **批量处理**：除需交互框选/标段的「画面裁剪 / 局部打码 / 多段保留与删片段」和合并/拼图类功能外，其余全部 **34 个功能**均支持一次选择或拖入多个文件顺序批量处理（支持随时 `+ 添加文件`、移除队列项、独立定位输出文件与中途取消）。
+- **批量处理**：除需交互框选/标段的「画面裁剪 / 局部打码 / 多段保留与删片段」和合并/拼图类功能外，其余全部 **35 个功能**均支持一次选择或拖入多个文件顺序批量处理（支持随时 `+ 添加文件`、移除队列项、独立定位输出文件与中途取消）。
 - **放大预览与对比**：处理完成后支持点击预览图或「⛶ 放大对比」，支持**并排同步缩放/平移**与**卷帘对比**（同样支持 SVG 矢量 vs 位图）。
 - **全局输出与加速设置**：顶部栏可切换输出目录（源文件同目录 / `output` 子目录 / 自定义文件夹）与视频硬件加速（CPU / 自动检测 GPU / NVIDIA NVENC / Intel QSV / AMD AMF），自动记忆偏好。
 
@@ -88,7 +95,7 @@ Windows 桌面小工具，全部处理在本地完成，无需联网、不上传
 ```bash
 npm install          # 建议配置 ELECTRON_MIRROR 等 npmmirror 镜像
 npm start            # 运行
-node scripts/smoke-test.js   # 冒烟测试（自动生成素材，86 用例覆盖全部功能）
+node scripts/smoke-test.js   # 冒烟测试（自动生成素材，93 用例覆盖全部功能）
 npm run dist         # 打包便携版 + 安装版到 release/
 ```
 
@@ -97,8 +104,8 @@ npm run dist         # 打包便携版 + 安装版到 release/
 ```
 main.js            Electron 主进程：窗口、IPC（文件/目录对话框、硬件编码探测、首帧提取、批量探测）
 ffmpeg.js          统一门面：组合 core 与 modules，保持 IPC 调用接口兼容
-core/              基础设施：runner.js（ffprobe/ffmpeg 执行器、SVG 探测、硬件加速探测）与 utils.js（通用滤镜/编码参数）
-modules/           功能模块：video.js（视频/GIF/音频）、image.js（位图转换/压缩/拼图/切图/抠图/边框）、svg.js（SVG 渲染/压缩/描摹）
+core/              基础设施：runner.js（ffprobe/ffmpeg/SVG/文档探测与执行器）、doc-parser.js（DOCX/PPTX/MD 解析）与 utils.js
+modules/           功能模块：video.js、image.js、svg.js、document.js
 preload.js         contextBridge 安全桥接（含 webUtils.getPathForFile 处理拖拽路径）
 renderer/          界面：features/（功能注册表）+ ui/（参数面板/裁剪画布/放大对比弹窗）+ app.js（队列与交互编排）
 bin/               ffmpeg.exe / ffprobe.exe（gyan 9.0.2，打包时经 extraResources 释放）

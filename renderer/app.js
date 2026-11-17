@@ -1,8 +1,13 @@
 'use strict';
 
 const IMG_EXTS = window.VGT.IMG_EXTS;
-const FEATURES = [...window.VGT.VIDEO_FEATURES, ...window.VGT.IMAGE_FEATURES, ...(window.VGT.SVG_FEATURES || [])];
-const GROUP_ORDER = ['转换', 'GIF 编辑', '图片', 'SVG', '剪辑', '音频', '工具'];
+const FEATURES = [
+  ...window.VGT.VIDEO_FEATURES,
+  ...window.VGT.IMAGE_FEATURES,
+  ...(window.VGT.SVG_FEATURES || []),
+  ...(window.VGT.DOC_FEATURES || []),
+];
+const GROUP_ORDER = ['转换', 'GIF 编辑', '图片', 'SVG', '文档', '剪辑', '音频', '工具'];
 
 // ---------------------------------------------------------------------------
 // 状态
@@ -347,19 +352,45 @@ function prefillTimes(info) {
 
 function renderFileCard(ext) {
   const info = file.info;
-  const isImg = info.isImage || ext === 'svg' || IMG_EXTS.includes(ext);
+  const isDoc = !!info.isDoc;
+  const isImg = !isDoc && (info.isImage || ext === 'svg' || IMG_EXTS.includes(ext));
   $('dropzone').classList.add('hidden');
   $('file-card').classList.remove('hidden');
   $('file-name').textContent = file.path.split(/[\\/]/).pop();
   $('file-name').title = file.path;
 
   const parts = [];
-  if (info.isSvg) parts.push('SVG 矢量图');
-  if (info.width) parts.push(`分辨率 ${info.width}×${info.height}`);
-  if (!isImg && info.duration > 0) parts.push(`时长 ${fmtDur(info.duration)}`);
-  if (!isImg && info.fps > 0) parts.push(`${Math.round(info.fps)} fps`);
+  if (isDoc) {
+    parts.push(
+      info.docType === 'docx'
+        ? 'Word 文档 (.docx)'
+        : (info.docType === 'pptx' ? 'PPT 演示文稿 (.pptx)' : 'Markdown 文档'),
+    );
+    const st = info.docStats || {};
+    if (info.docType === 'md' && info.imageCount > 0) {
+      const sub = [];
+      if (st.local) sub.push(`本地 ${st.local}`);
+      if (st.dataUri) sub.push(`Base64 ${st.dataUri}`);
+      if (st.inlineSvg) sub.push(`SVG ${st.inlineSvg}`);
+      if (st.remote) sub.push(`网络 ${st.remote}`);
+      if (st.missing) sub.push(`路径缺失 ${st.missing}`);
+      parts.push(`识别到 ${info.imageCount} 处图片${sub.length ? `（${sub.join(' · ')}）` : ''}`);
+    } else if (info.docType === 'pptx') {
+      const extra = [];
+      if (st.videoCount) extra.push(`视频 ${st.videoCount}`);
+      if (st.audioCount) extra.push(`音频 ${st.audioCount}`);
+      parts.push(`识别到 ${info.imageCount || 0} 张图片${extra.length ? ` · ${extra.join(' · ')}` : ''}`);
+    } else {
+      parts.push(`识别到 ${info.imageCount || 0} 张图片`);
+    }
+  } else {
+    if (info.isSvg) parts.push('SVG 矢量图');
+    if (info.width) parts.push(`分辨率 ${info.width}×${info.height}`);
+    if (!isImg && info.duration > 0) parts.push(`时长 ${fmtDur(info.duration)}`);
+    if (!isImg && info.fps > 0) parts.push(`${Math.round(info.fps)} fps`);
+  }
   parts.push(`大小 ${fmtSize(info.size)}`);
-  if (!isImg && !['mp3', 'm4a', 'wav', 'flac'].includes(ext)) {
+  if (!isDoc && !isImg && !['mp3', 'm4a', 'wav', 'flac'].includes(ext)) {
     parts.push(info.hasAudio ? '含音轨' : '无音轨');
   }
   $('file-info').textContent = parts.join(' · ');
@@ -369,7 +400,11 @@ function renderFileCard(ext) {
   box.style.display = '';
   const url = encodeURI('file:///' + file.path.replace(/\\/g, '/'));
   const zoomBtn = $('btn-zoom-preview');
-  if (ext === 'gif' || ext === 'webp' || ext === 'svg' || IMG_EXTS.includes(ext)) {
+  if (isDoc) {
+    const icon = info.docType === 'docx' ? '📘' : (info.docType === 'pptx' ? '📊' : '📝');
+    box.innerHTML = `<div class="no-preview">${icon}</div>`;
+    zoomBtn.classList.add('hidden');
+  } else if (ext === 'gif' || ext === 'webp' || ext === 'svg' || IMG_EXTS.includes(ext)) {
     box.innerHTML = `<img${ext === 'svg' ? ' class="is-svg"' : ''} src="${url}" alt="预览" />`;
     zoomBtn.classList.remove('hidden');
   } else if (['mp4', 'webm', 'mkv', 'mov', 'm4v'].includes(ext)) {
@@ -488,7 +523,7 @@ function renderBatchList() {
   listEl.classList.remove('hidden');
   listEl.innerHTML = '';
 
-  const showPctIds = new Set(['compressGif', 'imageConvert', 'imageCompressTarget', 'compressTarget', 'svgOptimize', 'imageToSvg']);
+  const showPctIds = new Set(['compressGif', 'imageConvert', 'imageCompressTarget', 'compressTarget', 'svgOptimize', 'imageToSvg', 'docCompressImages', 'docRepackImages']);
 
   batchFiles.forEach((item, idx) => {
     const row = document.createElement('div');
@@ -502,6 +537,7 @@ function renderBatchList() {
     row.appendChild(nameEl);
 
     const metaParts = [];
+    if (item.info?.isDoc) metaParts.push(`${item.info.imageCount || 0} 张图`);
     if (item.info?.width) metaParts.push(`${item.info.width}×${item.info.height}`);
     if (item.info?.duration > 0) metaParts.push(fmtDur(item.info.duration));
     metaParts.push(fmtSize(item.info?.size));
@@ -518,7 +554,9 @@ function renderBatchList() {
     } else if (item.status === 'done') {
       statusEl.classList.add('ok');
       if (item.outputType === 'dir') {
-        statusEl.textContent = '✅ 已导出';
+        statusEl.textContent = item.extractSummary
+          ? `✅ 提取 ${item.extractSummary.savedCount} 张图`
+          : '✅ 已导出';
       } else if (showPctIds.has(currentFeature.id) && item.info?.size && item.outSize) {
         const pct = Math.round((1 - item.outSize / item.info.size) * 100);
         statusEl.textContent = pct > 0
@@ -700,6 +738,7 @@ async function runBatchTask() {
         item.outSize = item.outputType === 'dir' ? 0 : await window.api.statFile(res.output);
         item.targetReached = res.targetReached;
         item.targetMB = res.targetMB;
+        item.extractSummary = res.extractSummary;
       } else {
         item.status = 'error';
         item.error = res.error || '处理失败';
@@ -725,6 +764,45 @@ async function runBatchTask() {
   }
 }
 
+window.__docRepackCtx = null;
+
+async function copyImageToClipboard(filePath) {
+  const r = await window.api.copyImage(filePath);
+  if (r?.ok) toast(r.mode === 'svg-text' ? '已复制 SVG 代码到剪贴板' : '已复制图片到剪贴板，可直接粘贴');
+  else toast(r?.error || '复制失败', true);
+}
+
+async function sendPathsToFeature(paths, featureId, keepDocCtx = true) {
+  if (running) return toast('有任务正在进行中', true);
+  const target = FEATURES.find((f) => f.id === featureId);
+  if (!target) return;
+  const matched = (paths || []).filter((p) => target.accept.includes(p.split('.').pop().toLowerCase()));
+  if (!matched.length) return toast('所选图片格式与目标功能不兼容', true);
+  const savedCtx = keepDocCtx ? window.__docRepackCtx : null;
+  selectFeature(target, { forceClear: true });
+  window.__docRepackCtx = savedCtx;
+  await useFiles(matched);
+  toast(`已发送 ${matched.length} 张图片至「${target.name}」`);
+}
+
+async function jumpToDocRepack({ docxPath, files: repFiles = [], dir = '' }) {
+  if (running) return toast('有任务正在进行中', true);
+  const target = FEATURES.find((f) => f.id === 'docRepackImages');
+  if (!target || !docxPath) return;
+  const docLabel = docxPath.toLowerCase().endsWith('.pptx') ? 'PPT' : 'Word';
+  window.__pendingSecondFile = { dir, files: repFiles };
+  selectFeature(target, { forceClear: true });
+  await useFile(docxPath);
+  toast(`已载入原 ${docLabel} 与替换图，点击「开始转换」即可写回`);
+}
+
+function getHandoffPoolForExts(extsSet, count, excludeId) {
+  const prio = (g) => (g === '图片' ? 0 : (g === 'SVG' ? 1 : 2));
+  return FEATURES
+    .filter((f) => (!f.noBatch || count === 1) && !(f.multi && count < 2) && f.id !== excludeId && f.accept.some((e) => extsSet.has(e)))
+    .sort((a, b) => prio(a.group) - prio(b.group));
+}
+
 function showBatchSummary() {
   const doneItems = batchFiles.filter((b) => b.status === 'done');
   const errItems = batchFiles.filter((b) => b.status === 'error');
@@ -741,7 +819,7 @@ function showBatchSummary() {
     title = `⚠️ 批量处理完成：${doneItems.length} 个成功，${errItems.length} 个失败（鼠标悬停“❌ 失败”可看原因）`;
   } else {
     title = `✅ 批量处理全部完成：共 ${doneItems.length} 个文件`;
-    if (['compressGif', 'compressTarget', 'imageConvert', 'imageCompressTarget', 'svgOptimize'].includes(currentFeature.id)) {
+    if (['compressGif', 'compressTarget', 'imageConvert', 'imageCompressTarget', 'svgOptimize', 'docCompressImages'].includes(currentFeature.id)) {
       const totalIn = doneItems.reduce((s, b) => s + (b.info?.size || 0), 0);
       const totalOut = doneItems.reduce((s, b) => s + (b.outSize || 0), 0);
       if (totalIn > 0 && totalOut > 0 && totalOut < totalIn) {
@@ -755,7 +833,18 @@ function showBatchSummary() {
   const openBtnHtml = firstOut
     ? `<button class="btn btn-ghost btn-sm" id="btn-open">打开输出目录</button>`
     : '';
-  showResult(kind, `${title}<div class="result-actions">${openBtnHtml}<button class="btn btn-ghost btn-sm" id="btn-again">重新准备</button></div>`);
+  const canRepack = doneItems.length
+    && window.__docRepackCtx?.docxPath
+    && currentFeature.id !== 'docCompressImages'
+    && currentFeature.id !== 'docRepackImages'
+    && doneItems.every((d) => d.outputType !== 'dir' && ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'avif', 'gif'].includes(String(d.output || '').split('.').pop().toLowerCase()));
+  const repackDocName = canRepack ? window.__docRepackCtx.docxPath.split(/[\\/]/).pop() : '';
+  const repackDocLabel = canRepack && window.__docRepackCtx.docxPath.toLowerCase().endsWith('.pptx') ? 'PPT' : 'Word';
+  const repackBtnHtml = canRepack
+    ? `<button class="btn btn-ghost btn-sm btn-repack-word" id="btn-repack-word">📥 将这 ${doneItems.length} 张结果放回原 ${repackDocLabel} (${escHtml(repackDocName)})</button>`
+    : '';
+
+  showResult(kind, `${title}<div class="result-actions">${openBtnHtml}<button class="btn btn-ghost btn-sm" id="btn-again">重新准备</button>${repackBtnHtml}</div>`);
 
   if (firstOut) {
     $('btn-open').onclick = () =>
@@ -766,6 +855,14 @@ function showBatchSummary() {
   $('btn-again').onclick = () => {
     useFiles(batchFiles.map((b) => b.path)).then(() => {});
   };
+  if (canRepack && $('btn-repack-word')) {
+    $('btn-repack-word').onclick = () => {
+      jumpToDocRepack({
+        docxPath: window.__docRepackCtx.docxPath,
+        files: doneItems.map((d) => d.output),
+      });
+    };
+  }
 }
 
 function renderMediaTag(filePath, ext) {
@@ -783,14 +880,56 @@ async function showSuccess(res) {
   const outExt = res.output.split('.').pop().toLowerCase();
   let line;
   let outSize = 0;
+
+  if (currentFeature.id === 'docExtractImages') {
+    window.__docRepackCtx = res.extractSummary?.sourceDocx
+      ? { docxPath: res.extractSummary.sourceDocx, extractDir: res.output }
+      : null;
+  }
+
   if (res.outputType === 'dir') {
     const count = await window.api.countDir(res.output);
     const unitLabel = currentFeature.id === 'splitVideo' ? '个片段' : (currentFeature.id === 'imageSplit' ? '张切图' : '张图片');
     line = `✅ 已导出 ${count} ${unitLabel}到文件夹`;
+    if (res.extractSummary) {
+      const es = res.extractSummary;
+      const details = [];
+      if (es.docxCount) details.push(`Word 内嵌 ${es.docxCount}`);
+      if (es.pptxCount) details.push(`PPT 图片 ${es.pptxCount}`);
+      if (es.pptAvCount) details.push(`PPT 音视频 ${es.pptAvCount}`);
+      if (es.localCount) details.push(`本地文件 ${es.localCount}`);
+      if (es.dataUriCount) details.push(`Base64 ${es.dataUriCount}`);
+      if (es.inlineSvgCount) details.push(`内联 SVG ${es.inlineSvgCount}`);
+      if (es.remoteDownloaded) details.push(`网络下载 ${es.remoteDownloaded}`);
+      line = `✅ 已从文档识别并导出 ${es.savedCount} 个媒体文件` + (details.length ? `（${details.join(' · ')}）` : '');
+      const notes = [];
+      if (es.remoteSkipped) notes.push(`跳过网络图 ${es.remoteSkipped} 张`);
+      if (es.missingLocal) notes.push(`本地路径不存在 ${es.missingLocal} 处`);
+      if (es.failedRemote) notes.push(`下载失败 ${es.failedRemote} 张`);
+      if (es.pptAvSkipped) notes.push(`未提取 PPT 音视频 ${es.pptAvSkipped} 个`);
+      if (notes.length) line += `<br /><span class="muted" style="font-size:12px">ℹ️ ${notes.join(' · ')}</span>`;
+    }
   } else {
     outSize = await window.api.statFile(res.output);
     line = `✅ 完成：${escHtml(name)}（${fmtSize(outSize)}）`;
-    if ((currentFeature.id === 'compressGif' || currentFeature.id === 'imageConvert' || currentFeature.id === 'svgOptimize') && file?.info.size) {
+    if (res.docCompressSummary) {
+      const ds = res.docCompressSummary;
+      const docLbl = ds.docType === 'pptx' ? 'PPT' : 'Word';
+      const vNote = ds.videoCompressedCount ? `，含视频 ${ds.videoCompressedCount} 个` : '';
+      if (ds.newSize < ds.origSize) {
+        const pct = Math.round((1 - ds.newSize / ds.origSize) * 100);
+        line = `✅ ${docLbl} 压缩完成：${fmtSize(ds.origSize)} → ${fmtSize(ds.newSize)}，节省 ${pct}%（已压缩 ${ds.compressedCount}/${ds.totalMedia} 项媒体${vNote}）`;
+      } else {
+        line = `✅ ${docLbl} 处理完成：${fmtSize(ds.origSize)} → ${fmtSize(ds.newSize)}（文档内媒体已接近最优，尝试降低分辨率上限或切换“极限瘦身”）`;
+      }
+    } else if (res.docRepackSummary) {
+      const rs = res.docRepackSummary;
+      const docLbl = rs.docType === 'pptx' ? 'PPT' : 'Word';
+      const delta = rs.newSize < rs.origSize
+        ? `，节省 ${Math.round((1 - rs.newSize / rs.origSize) * 100)}%`
+        : '';
+      line = `✅ 已将 ${rs.replacedCount} 张图片放回 ${docLbl} 原位（匹配 ${rs.matchedCount} 处，${fmtSize(rs.origSize)} → ${fmtSize(rs.newSize)}${delta}）`;
+    } else if ((currentFeature.id === 'compressGif' || currentFeature.id === 'imageConvert' || currentFeature.id === 'svgOptimize') && file?.info.size) {
       if (outSize < file.info.size) {
         const pct = Math.round((1 - outSize / file.info.size) * 100);
         line = `✅ 处理完成：${fmtSize(file.info.size)} → ${fmtSize(outSize)}，节省 ${pct}%`;
@@ -818,16 +957,47 @@ async function showSuccess(res) {
   let thumbPaths = [];
   if (res.outputType === 'dir') {
     if (currentFeature.id !== 'splitVideo') {
-      thumbPaths = (await window.api.listDir(res.output, 16))
-        .filter((p) => ['png', 'jpg', 'jpeg', 'webp'].includes(p.split('.').pop().toLowerCase()));
+      const previewExts = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'avif', 'svg']);
+      const rawList = res.extractSummary?.files?.length
+        ? res.extractSummary.files
+        : await window.api.listDir(res.output, 200);
+      thumbPaths = rawList.filter((p) => previewExts.has(p.split('.').pop().toLowerCase()));
       if (thumbPaths.length) {
-        previewHtml = `<div class="result-preview-wrap" id="result-preview-wrap"><div class="result-thumb-strip">${
-          thumbPaths.slice(0, 9).map((p, idx) => {
-            const u = encodeURI('file:///' + p.replace(/\\/g, '/'));
-            const fn = escHtml(p.split(/[\\/]/).pop());
-            return `<img src="${u}" data-thumb-idx="${idx}" title="点击放大查看：${fn}" alt="${fn}" />`;
-          }).join('')
-        }</div></div>`;
+        const shownThumbs = thumbPaths.slice(0, 60);
+        const hasSvgThumb = shownThumbs.some((p) => p.toLowerCase().endsWith('.svg'));
+        const hasRasterThumb = shownThumbs.some((p) => !p.toLowerCase().endsWith('.svg'));
+        const moreHtml = thumbPaths.length > shownThumbs.length
+          ? `<div class="muted" style="font-size:12px;margin-top:6px">还有 ${thumbPaths.length - shownThumbs.length} 张未展开，可点击下方「打开文件夹」查看全部</div>`
+          : '';
+        previewHtml = `
+          <div class="result-preview-wrap" id="result-preview-wrap">
+            <div class="result-thumb-toolbar">
+              <span class="muted" id="thumb-sel-count">已选 ${shownThumbs.length} / ${shownThumbs.length} 张（可直接勾选发给其他工具，或拖拽单图到外部软件）</span>
+              <button class="batch-btn" id="thumb-sel-all">全选</button>
+              <button class="batch-btn" id="thumb-sel-none">全不选</button>
+              ${hasRasterThumb && hasSvgThumb ? '<button class="batch-btn" id="thumb-sel-raster">仅位图</button><button class="batch-btn" id="thumb-sel-svg">仅 SVG</button>' : ''}
+            </div>
+            <div class="result-thumb-grid">
+              ${shownThumbs.map((p, idx) => {
+                const u = encodeURI('file:///' + p.replace(/\\/g, '/'));
+                const fn = escHtml(p.split(/[\\/]/).pop());
+                const isSvg = p.toLowerCase().endsWith('.svg');
+                return `<div class="result-thumb-card selected" data-thumb-card="${idx}">
+                  <input type="checkbox" class="result-thumb-check" data-thumb-check="${idx}" checked title="勾选此图" />
+                  <div class="result-thumb-img-wrap" data-thumb-idx="${idx}" draggable="true" title="点击放大查看 / 拖出到外部软件：${fn}">
+                    <img${isSvg ? ' class="is-svg"' : ''} src="${u}" alt="${fn}" draggable="false" />
+                  </div>
+                  <div class="result-thumb-name" title="${escHtml(p)}">${fn}</div>
+                  <div class="result-thumb-ops">
+                    <button class="thumb-op-btn primary" data-thumb-send="${idx}" title="只发送这张图到下方选中的工具">↗ 发此图</button>
+                    <button class="thumb-op-btn" data-thumb-copy="${idx}" title="复制图片到剪贴板">📋</button>
+                    <button class="thumb-op-btn" data-thumb-loc="${idx}" title="在文件夹中定位">📂</button>
+                  </div>
+                </div>`;
+              }).join('')}
+            </div>
+            ${moreHtml}
+          </div>`;
       }
     }
   } else {
@@ -843,17 +1013,36 @@ async function showSuccess(res) {
     }
   }
 
-  const handoffFeatures = res.outputType === 'file'
-    ? FEATURES.filter((f) => !f.multi && f.id !== currentFeature.id && f.accept.includes(outExt))
-    : [];
+  let handoffFeatures = [];
+  if (res.outputType === 'file') {
+    handoffFeatures = FEATURES.filter((f) => !f.multi && f.id !== currentFeature.id && f.accept.includes(outExt));
+  } else if (thumbPaths.length) {
+    const outExts = new Set(thumbPaths.map((p) => p.split('.').pop().toLowerCase()));
+    handoffFeatures = getHandoffPoolForExts(outExts, thumbPaths.length, currentFeature.id);
+  }
+
+  const repackSrcPath = res.extractSummary?.sourceDocx || window.__docRepackCtx?.docxPath || '';
+  const repackDocLabel = repackSrcPath.toLowerCase().endsWith('.pptx') ? 'PPT' : 'Word';
+  const canRepackDir = res.outputType === 'dir' && !!res.extractSummary?.sourceDocx;
+  const canRepackSingle = res.outputType === 'file'
+    && !!window.__docRepackCtx?.docxPath
+    && currentFeature.id !== 'docCompressImages'
+    && currentFeature.id !== 'docRepackImages'
+    && ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'avif', 'gif'].includes(outExt);
+
   const handoffHtml = handoffFeatures.length
-    ? `<div class="result-handoff">
-         <span class="muted" style="font-size:12px">➡️ 继续处理此结果：</span>
+    ? `<div class="result-handoff" id="result-handoff">
+         <span class="muted" id="handoff-label" style="font-size:12px">${res.outputType === 'dir' ? `➡️ 发送所选 ${thumbPaths.length} 张图片到：` : '➡️ 继续处理此结果：'}</span>
          <select id="handoff-feature">
            ${handoffFeatures.map((f) => `<option value="${f.id}">${f.icon} ${escHtml(f.name)}</option>`).join('')}
          </select>
-         <button class="btn btn-ghost btn-sm" id="btn-handoff">发送处理</button>
+         <button class="btn btn-ghost btn-sm" id="btn-handoff">${res.outputType === 'dir' ? `批量发送 (${thumbPaths.length})` : '发送处理'}</button>
+         ${canRepackDir ? `<button class="btn btn-ghost btn-sm btn-repack-word" id="btn-repack-dir" title="如果你已在文件夹里修改/压缩了图片，点此一键放回原 ${repackDocLabel}">📥 改完放回原 ${repackDocLabel}</button>` : ''}
        </div>`
+    : '';
+
+  const repackSingleBtn = canRepackSingle
+    ? `<button class="btn btn-ghost btn-sm btn-repack-word" id="btn-repack-single">📥 放回原 ${repackDocLabel} (${escHtml(window.__docRepackCtx.docxPath.split(/[\\/]/).pop())})</button>`
     : '';
 
   const compareBtnHtml = canCompare
@@ -866,6 +1055,7 @@ async function showSuccess(res) {
   showResult('ok', `${line}<div class="result-path">${escHtml(res.output)}</div>${previewHtml}<div class="result-actions">
     <button class="btn btn-ghost btn-sm" id="btn-open">${res.outputType === 'dir' ? '打开文件夹' : '打开所在文件夹'}</button>
     ${compareBtnHtml}
+    ${repackSingleBtn}
     <button class="btn btn-ghost btn-sm" id="btn-again">再来一次</button></div>${handoffHtml}`);
 
   $('btn-open').onclick = () =>
@@ -874,12 +1064,32 @@ async function showSuccess(res) {
     if (currentFeature.multi || !file?.path) return clearFile();
     useFile(file.path).then(() => {});
   };
+  if ($('btn-repack-single')) {
+    $('btn-repack-single').onclick = () => {
+      jumpToDocRepack({ docxPath: window.__docRepackCtx.docxPath, files: [res.output] });
+    };
+  }
+  if ($('btn-repack-dir')) {
+    $('btn-repack-dir').onclick = () => {
+      jumpToDocRepack({ docxPath: res.extractSummary.sourceDocx, dir: res.output });
+    };
+  }
 
   const openSingleLightbox = (idx = 0) => {
     if (thumbPaths.length) {
+      const allSinglePool = getHandoffPoolForExts(
+        new Set(thumbPaths.map((p) => p.split('.').pop().toLowerCase())),
+        1,
+        currentFeature.id,
+      );
       window.VGT.lightbox?.openSingle({
         list: thumbPaths.map((p) => ({ path: p, label: p.split(/[\\/]/).pop() })),
         index: idx,
+        handoff: {
+          features: allSinglePool,
+          onSend: (p, fid) => sendPathsToFeature([p], fid, true),
+          onCopy: copyImageToClipboard,
+        },
       });
     } else if (hasVisualOut) {
       window.VGT.lightbox?.openSingle({
@@ -903,15 +1113,133 @@ async function showSuccess(res) {
     });
   };
 
+  if (thumbPaths.length) {
+    const shownThumbs = thumbPaths.slice(0, 60);
+    const getSelectedPaths = () => {
+      const checks = [...document.querySelectorAll('.result-thumb-check')];
+      return checks.filter((c) => c.checked).map((c) => shownThumbs[Number(c.dataset.thumbCheck)]).filter(Boolean);
+    };
+
+    const syncThumbSelectionUI = () => {
+      const checks = [...document.querySelectorAll('.result-thumb-check')];
+      checks.forEach((c) => {
+        const card = c.closest('.result-thumb-card');
+        if (card) card.classList.toggle('selected', c.checked);
+      });
+      const selected = getSelectedPaths();
+      const countEl = $('thumb-sel-count');
+      if (countEl) {
+        countEl.textContent = `已选 ${selected.length} / ${shownThumbs.length} 张（可勾选发给其他工具，或拖拽单图到外部软件）`;
+      }
+      const selEl = $('handoff-feature');
+      const btnEl = $('btn-handoff');
+      const lblEl = $('handoff-label');
+      if (selEl && btnEl && lblEl) {
+        const prevVal = selEl.value;
+        const extsSet = new Set((selected.length ? selected : shownThumbs).map((p) => p.split('.').pop().toLowerCase()));
+        const pool = getHandoffPoolForExts(extsSet, selected.length || shownThumbs.length, currentFeature.id);
+        selEl.innerHTML = pool.map((f) => `<option value="${f.id}">${f.icon} ${escHtml(f.name)}</option>`).join('');
+        if (pool.some((f) => f.id === prevVal)) selEl.value = prevVal;
+        if (selected.length === 1) {
+          lblEl.textContent = '➡️ 发送所选 1 张图片到：';
+          btnEl.textContent = '发送这 1 张';
+          btnEl.disabled = !pool.length;
+        } else if (selected.length > 1) {
+          lblEl.textContent = `➡️ 发送所选 ${selected.length} 张图片到：`;
+          btnEl.textContent = `批量发送 (${selected.length})`;
+          btnEl.disabled = !pool.length;
+        } else {
+          lblEl.textContent = '➡️ 请先勾选上方图片：';
+          btnEl.textContent = '发送处理 (0)';
+          btnEl.disabled = true;
+        }
+      }
+    };
+
+    document.querySelectorAll('.result-thumb-check').forEach((chk) => {
+      chk.onchange = syncThumbSelectionUI;
+    });
+    if ($('thumb-sel-all')) {
+      $('thumb-sel-all').onclick = () => {
+        document.querySelectorAll('.result-thumb-check').forEach((c) => { c.checked = true; });
+        syncThumbSelectionUI();
+      };
+    }
+    if ($('thumb-sel-none')) {
+      $('thumb-sel-none').onclick = () => {
+        document.querySelectorAll('.result-thumb-check').forEach((c) => { c.checked = false; });
+        syncThumbSelectionUI();
+      };
+    }
+    if ($('thumb-sel-raster')) {
+      $('thumb-sel-raster').onclick = () => {
+        document.querySelectorAll('.result-thumb-check').forEach((c) => {
+          const p = shownThumbs[Number(c.dataset.thumbCheck)] || '';
+          c.checked = !p.toLowerCase().endsWith('.svg');
+        });
+        syncThumbSelectionUI();
+      };
+    }
+    if ($('thumb-sel-svg')) {
+      $('thumb-sel-svg').onclick = () => {
+        document.querySelectorAll('.result-thumb-check').forEach((c) => {
+          const p = shownThumbs[Number(c.dataset.thumbCheck)] || '';
+          c.checked = p.toLowerCase().endsWith('.svg');
+        });
+        syncThumbSelectionUI();
+      };
+    }
+
+    const wrap = $('result-preview-wrap');
+    wrap?.querySelectorAll('[data-thumb-idx]').forEach((el) => {
+      const idx = Number(el.dataset.thumbIdx) || 0;
+      el.onclick = () => openSingleLightbox(idx);
+      el.ondragstart = (e) => {
+        e.preventDefault();
+        if (shownThumbs[idx]) window.api.startDrag(shownThumbs[idx]);
+      };
+    });
+    wrap?.querySelectorAll('[data-thumb-send]').forEach((btn) => {
+      btn.onclick = () => {
+        const p = shownThumbs[Number(btn.dataset.thumbSend)];
+        if (!p) return;
+        const ext = p.split('.').pop().toLowerCase();
+        const chosenId = $('handoff-feature')?.value;
+        const chosenFeat = FEATURES.find((f) => f.id === chosenId);
+        let fid = chosenId;
+        if (!chosenFeat || !chosenFeat.accept.includes(ext) || (chosenFeat.multi)) {
+          const fallback = getHandoffPoolForExts(new Set([ext]), 1, currentFeature.id)[0];
+          fid = fallback?.id;
+        }
+        if (fid) sendPathsToFeature([p], fid, true);
+      };
+    });
+    wrap?.querySelectorAll('[data-thumb-copy]').forEach((btn) => {
+      btn.onclick = () => {
+        const p = shownThumbs[Number(btn.dataset.thumbCopy)];
+        if (p) copyImageToClipboard(p);
+      };
+    });
+    wrap?.querySelectorAll('[data-thumb-loc]').forEach((btn) => {
+      btn.onclick = () => {
+        const p = shownThumbs[Number(btn.dataset.thumbLoc)];
+        if (p) window.api.showInFolder(p);
+      };
+    });
+
+    if (handoffFeatures.length) {
+      $('btn-handoff').onclick = async () => {
+        const selected = getSelectedPaths();
+        if (!selected.length) return toast('请至少勾选 1 张图片', true);
+        await sendPathsToFeature(selected, $('handoff-feature').value, true);
+      };
+    }
+    syncThumbSelectionUI();
+  }
+
   const bindPreviewClicks = (comparing) => {
     const wrap = $('result-preview-wrap');
-    if (!wrap) return;
-    if (thumbPaths.length) {
-      wrap.querySelectorAll('img[data-thumb-idx]').forEach((img) => {
-        img.onclick = () => openSingleLightbox(Number(img.dataset.thumbIdx) || 0);
-      });
-      return;
-    }
+    if (!wrap || thumbPaths.length) return;
     wrap.querySelectorAll('.result-media-card img').forEach((img) => {
       img.title = comparing ? '点击放大对比细节（支持滚轮缩放与卷帘对比）' : '点击放大查看细节';
       img.onclick = () => (comparing ? openCompareLightbox('side') : openSingleLightbox(0));
@@ -945,14 +1273,10 @@ async function showSuccess(res) {
     };
   }
 
-  if (handoffFeatures.length) {
+  if (!thumbPaths.length && handoffFeatures.length && $('btn-handoff')) {
     $('btn-handoff').onclick = async () => {
       if (running) return toast('有任务正在进行中', true);
-      const target = FEATURES.find((f) => f.id === $('handoff-feature').value);
-      if (!target) return;
-      selectFeature(target, { forceClear: true });
-      await useFile(res.output);
-      toast(`已将结果发送至「${target.name}」`);
+      await sendPathsToFeature([res.output], $('handoff-feature').value, true);
     };
   }
 }

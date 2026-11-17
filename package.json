@@ -1,7 +1,7 @@
 {
   "name": "video-gif-toolbox",
   "version": "2.1.0",
-  "description": "视频 · GIF · 图片 · SVG 工具箱：40 个功能，全部本地离线处理",
+  "description": "视频 · GIF · 图片 · SVG · 文档工具箱：43 个功能，全部本地离线处理",
   "main": "main.js",
   "author": "user",
   "license": "MIT",
@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@resvg/resvg-js": "^2.6.2",
+    "adm-zip": "^0.6.1",
     "imagetracerjs": "^1.2.6",
     "svgo": "^4.1.0"
   },
@@ -56,10 +57,5 @@
       "oneClick": true,
       "artifactName": "视频GIF工具箱-${version}-安装版.exe"
     }
-  },
-  "dependencies": {
-    "@resvg/resvg-js": "^2.6.2",
-    "imagetracerjs": "^1.2.6",
-    "svgo": "^4.1.0"
   }
 }

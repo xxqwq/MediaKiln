@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu, Notification } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, Notification, clipboard, nativeImage } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
@@ -110,6 +110,7 @@ const ALL_VISUAL_EXT = [...ALL_MEDIA_EXT, 'jpg', 'jpeg', 'png', 'webp', 'bmp', '
 const AUDIO_EXT = ['mp3', 'm4a', 'wav', 'flac'];
 const IMG_EXT = ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'avif'];
 const SVG_EXT = ['svg'];
+const DOC_EXT = ['docx', 'pptx', 'md', 'markdown'];
 
 // 各功能对应的文件选择过滤器（multi: 是否允许多选）
 const FILE_FILTERS = {
@@ -133,6 +134,10 @@ const FILE_FILTERS = {
   svgToRaster: { exts: SVG_EXT },
   svgOptimize: { exts: SVG_EXT },
   imageToSvg: { exts: IMG_EXT },
+  // 文档模块
+  docCompressImages: { exts: ['docx', 'pptx'] },
+  docExtractImages: { exts: DOC_EXT },
+  docRepackImages: { exts: ['docx', 'pptx'] },
   // 剪辑 / 工具（兼容静态图片）
   trimVideo: { exts: VIDEO_EXT },
   multiCut: { exts: VIDEO_EXT },
@@ -156,9 +161,10 @@ const FILE_FILTERS = {
   contactSheet: { exts: VIDEO_EXT },
   stripMeta: { exts: [...ALL_MEDIA_EXT, ...AUDIO_EXT, ...IMG_EXT] },
   imagesTo: { exts: IMG_EXT, multi: true },
-  // 第二文件（背景音乐 / 水印图片 / 分屏副视频 / 外挂字幕）
+  // 第二文件（背景音乐 / 水印图片 / 分屏副视频 / 外挂字幕 / 替换图片）
   audioFile: { exts: ['mp3', 'wav', 'm4a', 'flac', 'aac', 'ogg'] },
   imageFile: { exts: ['png', 'jpg', 'jpeg', 'webp', 'bmp'] },
+  replaceImageFiles: { exts: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'avif', 'gif', 'tif', 'tiff'], multi: true },
   videoGifFile: { exts: ALL_MEDIA_EXT },
   subFile: { exts: ['srt', 'ass', 'ssa', 'vtt'] },
 };
@@ -256,6 +262,9 @@ ipcMain.handle('task:start', async (_e, { feature, params }) => {
       outputType: result.outputType || 'file',
       targetReached: result.targetReached,
       targetMB: result.targetMB,
+      ...(result.extractSummary ? { extractSummary: result.extractSummary } : {}),
+      ...(result.docCompressSummary ? { docCompressSummary: result.docCompressSummary } : {}),
+      ...(result.docRepackSummary ? { docRepackSummary: result.docRepackSummary } : {}),
     };
     if (win && !win.isDestroyed() && !params?.__batchItem) win.setProgressBar(-1);
     send('task:done', payload);
@@ -316,4 +325,37 @@ ipcMain.handle('list-dir', (_e, dirPath, limit = 6) => {
   } catch {
     return [];
   }
+});
+
+ipcMain.handle('copy-image', (_e, filePath) => {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) return { ok: false, error: '文件不存在' };
+    const ext = path.extname(filePath).slice(1).toLowerCase();
+    if (ext === 'svg') {
+      clipboard.writeText(fs.readFileSync(filePath, 'utf8'));
+      return { ok: true, mode: 'svg-text' };
+    }
+    const img = nativeImage.createFromPath(filePath);
+    if (!img.isEmpty()) {
+      clipboard.writeImage(img);
+      return { ok: true, mode: 'image' };
+    }
+    return { ok: false, error: '当前图片格式暂不支持直接复制位图' };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+const FALLBACK_DRAG_ICON = nativeImage.createFromDataURL(
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+);
+
+ipcMain.on('start-drag', (e, filePath) => {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) return;
+    let icon = nativeImage.createFromPath(filePath);
+    if (icon.isEmpty()) icon = FALLBACK_DRAG_ICON;
+    else icon = icon.resize({ width: 64, quality: 'good' });
+    e.sender.startDrag({ file: filePath, icon });
+  } catch {}
 });

@@ -314,9 +314,36 @@
       `;
       if (state.isImageLike) bindPanZoom();
       attachSingleMetaLoader();
-      footer.textContent = state.isImageLike
-        ? `提示：滚轮缩放 · 拖拽平移 · Esc 关闭${state.list?.length > 1 ? ' · ←/→ 切换图片' : ''}`
-        : '提示：按 Esc 关闭预览';
+      if (state.isImageLike && state.handoff) {
+        const ext = extOf(state.srcPath);
+        const compatible = (state.handoff.features || []).filter((f) => f.accept?.includes(ext));
+        const optsHtml = compatible.map((f) => `<option value="${f.id}">${f.icon} ${esc(f.name)}</option>`).join('');
+        footer.innerHTML = `
+          <div class="lb-footer-row">
+            <span class="lb-footer-tip">滚轮缩放 · 拖拽平移 · Esc 关闭${state.list?.length > 1 ? ' · ←/→ 切换' : ''}</span>
+            <div class="lb-footer-actions">
+              <button class="lb-btn" id="lb-copy-img">📋 复制图片</button>
+              ${compatible.length ? `<select class="lb-select" id="lb-handoff-sel">${optsHtml}</select><button class="lb-btn active" id="lb-handoff-btn">↗ 发送此图到工具</button>` : ''}
+            </div>
+          </div>`;
+        const copyBtn = footer.querySelector('#lb-copy-img');
+        if (copyBtn) copyBtn.onclick = () => state.handoff.onCopy?.(state.srcPath);
+        const sendBtn = footer.querySelector('#lb-handoff-btn');
+        const sel = footer.querySelector('#lb-handoff-sel');
+        if (sendBtn && sel) {
+          const handoffRef = state.handoff;
+          const capturedPath = state.srcPath;
+          sendBtn.onclick = () => {
+            const fid = sel.value;
+            close();
+            handoffRef.onSend?.(capturedPath, fid);
+          };
+        }
+      } else {
+        footer.textContent = state.isImageLike
+          ? `提示：滚轮缩放 · 拖拽平移 · Esc 关闭${state.list?.length > 1 ? ' · ←/→ 切换图片' : ''}`
+          : '提示：按 Esc 关闭预览';
+      }
     }
 
     applyTransform();
@@ -452,7 +479,7 @@
   }
 
   window.VGT.lightbox = {
-    openSingle({ path, label, meta = '', list = null, index = 0 }) {
+    openSingle({ path, label, meta = '', list = null, index = 0, handoff = null }) {
       ensureModal();
       const target = list?.[index] || { path, label, meta };
       const ext = extOf(target.path);
@@ -464,6 +491,7 @@
         srcMeta: target.meta || '',
         list,
         index,
+        handoff,
         isImageLike: IMG_LIKE.has(ext),
         zoom: 1,
         panX: 0,

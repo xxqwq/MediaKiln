@@ -9,6 +9,7 @@ const FONT = 'C\\:/Windows/Fonts/msyh.ttc';
 
 const IMG_EXTS = ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'avif'];
 const SVG_EXTS = ['svg'];
+const DOC_EXTS = ['docx', 'pptx', 'md', 'markdown'];
 const VIDEO_EXTS = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'ts', 'm4v'];
 
 function isImagePath(filePath) {
@@ -19,6 +20,11 @@ function isImagePath(filePath) {
 function isSvgPath(filePath) {
   const ext = path.extname(String(filePath || '')).slice(1).toLowerCase();
   return ext === 'svg';
+}
+
+function isDocPath(filePath) {
+  const ext = path.extname(String(filePath || '')).slice(1).toLowerCase();
+  return DOC_EXTS.includes(ext);
 }
 
 function parseSvgDims(svgText) {
@@ -180,9 +186,11 @@ module.exports = {
   FONT,
   IMG_EXTS,
   SVG_EXTS,
+  DOC_EXTS,
   VIDEO_EXTS,
   isImagePath,
   isSvgPath,
+  isDocPath,
   parseSvgDims,
   num,
   even,

@@ -557,6 +557,217 @@ async function test(name, feature, params, check) {
     if (!i.isSvg || i.width !== 400) throw new Error(`多彩描摹 SVG 信息异常: ${JSON.stringify(i)}`);
   });
 
+  // 文档提取图片测试（Word .docx & Markdown .md）
+  const AdmZip = require('adm-zip');
+  const testDocx = path.join(TMP, 'sample.docx');
+  const docZip = new AdmZip();
+  docZip.addFile('[Content_Types].xml', Buffer.from('<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>', 'utf8'));
+  docZip.addFile('word/_rels/document.xml.rels', Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/second.jpg"/>
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/first.png"/>
+</Relationships>`, 'utf8'));
+  docZip.addFile('word/document.xml', Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body><w:p><w:r><w:drawing r:embed="rId2"/></w:r><w:r><w:drawing r:embed="rId1"/></w:r></w:p></w:body>
+</w:document>`, 'utf8'));
+  docZip.addFile('word/media/first.png', fs.readFileSync(img1));
+  docZip.addFile('word/media/second.jpg', fs.readFileSync(bigPhoto));
+  docZip.writeZip(testDocx);
+
+  const docxProbe = await probe(testDocx);
+  if (!docxProbe.isDoc || docxProbe.docType !== 'docx' || docxProbe.imageCount !== 2) {
+    throw new Error(`DOCX probe 异常: ${JSON.stringify(docxProbe)}`);
+  }
+
+  await test('87. Word (.docx) 识别并按文档顺序提取图片', 'docExtractImages', {
+    input: testDocx, naming: 'order', remoteMode: 'skip', includeSvg: true, dedupe: true,
+  }, () => {
+    const dir = path.join(TMP, 'sample_提取图片');
+    const files = fs.readdirSync(dir).filter((f) => !f.startsWith('.')).sort();
+    if (files.length !== 2 || !files[0].startsWith('01_second') || !files[1].startsWith('02_first')) {
+      throw new Error(`DOCX 提取顺序异常: ${JSON.stringify(files)}`);
+    }
+    if (!fs.existsSync(path.join(dir, '.vgt-manifest.json'))) {
+      throw new Error('缺少 .vgt-manifest.json 映射文件');
+    }
+  });
+
+  const mdAsset = path.join(TMP, 'md space asset.png');
+  fs.copyFileSync(alphaImg, mdAsset);
+  const b64Png = fs.readFileSync(img1).toString('base64');
+  const testMd = path.join(TMP, 'notes.md');
+  fs.writeFileSync(testMd, `# 测试文档
+![本地图1](./img1.png)
+![含空格本地图](<./md space asset.png> "title")
+<img src="data:image/png;base64,${b64Png}" alt="b64_chart" />
+![参考图][refimg]
+![远程图](https://example.com/remote.png)
+<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" fill="red"/></svg>
+
+\`\`\`markdown
+![代码里的示例图不该被误识别](fake.png)
+\`\`\`
+
+[refimg]: ./img2.png
+`, 'utf8');
+
+  const mdProbe = await probe(testMd);
+  if (!mdProbe.isDoc || mdProbe.docType !== 'md' || mdProbe.docStats.local !== 3 || mdProbe.docStats.dataUri !== 1 || mdProbe.docStats.inlineSvg !== 1 || mdProbe.docStats.remote !== 1) {
+    throw new Error(`MD probe 异常: ${JSON.stringify(mdProbe)}`);
+  }
+
+  await test('88. Markdown (.md) 识别并提取本地/Base64/内联SVG图片', 'docExtractImages', {
+    input: testMd, naming: 'order', remoteMode: 'skip', includeSvg: true, dedupe: true,
+  }, () => {
+    const dir = path.join(TMP, 'notes_提取图片');
+    const files = fs.readdirSync(dir).filter((f) => !f.startsWith('.')).sort();
+    if (files.length !== 5) {
+      throw new Error(`MD 应导出 5 张图，实际 ${files.length}: ${JSON.stringify(files)}`);
+    }
+  });
+
+  // 89. Word 一键压缩瘦身 (docCompressImages)
+  const bigPng = path.join(TMP, 'big_screen.png');
+  run(['-f', 'lavfi', '-i', 'testsrc2=size=1600x1000:duration=0.1', '-frames:v', '1', bigPng]);
+  const heavyDocx = path.join(TMP, 'heavy.docx');
+  const heavyZip = new AdmZip();
+  heavyZip.addFile('[Content_Types].xml', Buffer.from('<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/></Types>', 'utf8'));
+  heavyZip.addFile('word/_rels/document.xml.rels', Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/screen.png"/>
+</Relationships>`, 'utf8'));
+  heavyZip.addFile('word/document.xml', Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body><w:p><w:r><w:drawing r:embed="rId1"/></w:r></w:p></w:body>
+</w:document>`, 'utf8'));
+  heavyZip.addFile('word/media/screen.png', fs.readFileSync(bigPng));
+  heavyZip.writeZip(heavyDocx);
+
+  await test('89. Word (.docx) 一键压缩瘦身并放回原位', 'docCompressImages', {
+    input: heavyDocx, preset: 'balanced', maxSide: '1280', formatMode: 'auto',
+  }, (i) => {
+    const outDocx = path.join(TMP, 'heavy_已压缩.docx');
+    const origSz = fs.statSync(heavyDocx).size;
+    const newSz = fs.statSync(outDocx).size;
+    if (!i.isDoc || i.imageCount !== 1 || newSz >= origSz) {
+      throw new Error(`Word 压缩未有效减小体积: ${origSz} -> ${newSz}, probe=${JSON.stringify(i)}`);
+    }
+    const checkZip = new AdmZip(outDocx);
+    const relsXml = checkZip.getEntry('word/_rels/document.xml.rels').getData().toString('utf8');
+    if (!/media\/screen\.jpg/i.test(relsXml)) {
+      throw new Error(`格式转 JPG 后 rels 未同步更新: ${relsXml}`);
+    }
+  });
+
+  // 90. 提取图片处理后放回 Word 原位 (docRepackImages)
+  const extractDir = path.join(TMP, 'sample_提取图片');
+  const editedImg = path.join(extractDir, '01_second_压缩.jpg');
+  fs.copyFileSync(img2, editedImg);
+  await test('90. 提取后修改的图片放回 Word 原位', 'docRepackImages', {
+    input: testDocx, replaceDir: extractDir,
+  }, (i) => {
+    const repackedDocx = path.join(TMP, 'sample_已回填.docx');
+    if (!i.isDoc || i.imageCount !== 2) {
+      throw new Error(`回填后 DOCX probe 异常: ${JSON.stringify(i)}`);
+    }
+    const z = new AdmZip(repackedDocx);
+    const embedded = z.getEntry('word/media/second.jpg')?.getData();
+    if (!embedded || !embedded.equals(fs.readFileSync(img2))) {
+      throw new Error('回填后的 word/media/second.jpg 内容未更新为修改版图片');
+    }
+  });
+
+  // 91. PPT (.pptx) 按幻灯片顺序提取图片
+  const testPptx = path.join(TMP, 'deck.pptx');
+  const heavyClipMov = path.join(TMP, 'clip.mov');
+  run(['-f', 'lavfi', '-i', 'testsrc2=size=1280x720:rate=25:duration=2', '-c:v', 'mjpeg', '-q:v', '2', heavyClipMov]);
+  const pptZip = new AdmZip();
+  pptZip.addFile('[Content_Types].xml', Buffer.from('<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Default Extension="jpg" ContentType="image/jpeg"/><Default Extension="mov" ContentType="video/quicktime"/></Types>', 'utf8'));
+  pptZip.addFile('ppt/_rels/presentation.xml.rels', Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide2.xml"/>
+</Relationships>`, 'utf8'));
+  pptZip.addFile('ppt/presentation.xml', Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
+<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <p:sldIdLst><p:sldId id="256" r:id="rId1"/><p:sldId id="257" r:id="rId2"/></p:sldIdLst>
+</p:presentation>`, 'utf8'));
+  pptZip.addFile('ppt/slides/_rels/slide1.xml.rels', Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/pic_b.png"/>
+</Relationships>`, 'utf8'));
+  pptZip.addFile('ppt/slides/slide1.xml', Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <p:cSld><p:spTree><p:pic><p:blipFill><a:blip r:embed="rId1"/></p:blipFill></p:pic></p:spTree></p:cSld>
+</p:sld>`, 'utf8'));
+  pptZip.addFile('ppt/slides/_rels/slide2.xml.rels', Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/pic_a.jpg"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/video" Target="../media/clip.mov"/>
+</Relationships>`, 'utf8'));
+  pptZip.addFile('ppt/slides/slide2.xml', Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <p:cSld><p:spTree><p:pic><p:blipFill><a:blip r:embed="rId1"/><a:videoFile r:link="rId2"/></p:blipFill></p:pic></p:spTree></p:cSld>
+</p:sld>`, 'utf8'));
+  pptZip.addFile('ppt/media/pic_a.jpg', fs.readFileSync(img2));
+  pptZip.addFile('ppt/media/pic_b.png', fs.readFileSync(bigPng));
+  pptZip.addFile('ppt/media/clip.mov', fs.readFileSync(heavyClipMov));
+  pptZip.writeZip(testPptx);
+
+  const pptxProbe = await probe(testPptx);
+  if (!pptxProbe.isDoc || pptxProbe.docType !== 'pptx' || pptxProbe.imageCount !== 2 || pptxProbe.videoCount !== 1) {
+    throw new Error(`PPTX probe 异常: ${JSON.stringify(pptxProbe)}`);
+  }
+
+  await test('91. PPT (.pptx) 按幻灯片顺序提取图片', 'docExtractImages', {
+    input: testPptx, naming: 'order', pptMedia: 'images', remoteMode: 'skip', includeSvg: true, dedupe: true,
+  }, () => {
+    const dir = path.join(TMP, 'deck_提取图片');
+    const files = fs.readdirSync(dir).filter((f) => !f.startsWith('.')).sort();
+    if (files.length !== 2 || !files[0].startsWith('01_pic_b') || !files[1].startsWith('02_pic_a')) {
+      throw new Error(`PPTX 提取顺序异常: ${JSON.stringify(files)}`);
+    }
+    if (!fs.existsSync(path.join(dir, '.vgt-manifest.json'))) {
+      throw new Error('PPT 提取缺少 .vgt-manifest.json');
+    }
+  });
+
+  // 92. PPT (.pptx) 一键压缩瘦身（图片 + 内嵌视频）
+  await test('92. PPT (.pptx) 一键压缩瘦身（图片+视频）', 'docCompressImages', {
+    input: testPptx, preset: 'balanced', maxSide: '1280', formatMode: 'auto', videoMode: 'compress',
+  }, (i) => {
+    const outPptx = path.join(TMP, 'deck_已压缩.pptx');
+    const origSz = fs.statSync(testPptx).size;
+    const newSz = fs.statSync(outPptx).size;
+    if (!i.isDoc || i.docType !== 'pptx' || i.imageCount !== 2 || newSz >= origSz) {
+      throw new Error(`PPT 压缩未有效减小体积: ${origSz} -> ${newSz}, probe=${JSON.stringify(i)}`);
+    }
+    const z = new AdmZip(outPptx);
+    const r1 = z.getEntry('ppt/slides/_rels/slide1.xml.rels').getData().toString('utf8');
+    const r2 = z.getEntry('ppt/slides/_rels/slide2.xml.rels').getData().toString('utf8');
+    if (!/\.\.\/media\/pic_b\.jpg/i.test(r1) || !/\.\.\/media\/clip\.mp4/i.test(r2)) {
+      throw new Error(`PPT 压缩后 rels 未同步更新: r1=${r1} r2=${r2}`);
+    }
+  });
+
+  // 93. 提取图片修改后放回 PPT 原位
+  const pptExtractDir = path.join(TMP, 'deck_提取图片');
+  fs.copyFileSync(img2, path.join(pptExtractDir, '01_pic_b_已改.jpg'));
+  await test('93. 提取后修改的图片放回 PPT 原位', 'docRepackImages', {
+    input: testPptx, replaceDir: pptExtractDir,
+  }, (i) => {
+    const repackedPptx = path.join(TMP, 'deck_已回填.pptx');
+    if (!i.isDoc || i.docType !== 'pptx' || i.imageCount !== 2) {
+      throw new Error(`回填后 PPTX probe 异常: ${JSON.stringify(i)}`);
+    }
+    const z = new AdmZip(repackedPptx);
+    const embedded = z.getEntry('ppt/media/pic_b.jpg')?.getData();
+    if (!embedded || !embedded.equals(fs.readFileSync(img2))) {
+      throw new Error('回填后的 ppt/media/pic_b.jpg 内容未更新为修改版图片');
+    }
+  });
+
   console.log(failed ? `\n❌ ${failed} 个用例失败` : '\n🎉 全部通过');
   process.exit(failed ? 1 : 0);
 })();
