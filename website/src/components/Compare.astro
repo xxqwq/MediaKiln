@@ -1,0 +1,141 @@
+---
+import fs from 'node:fs';
+import path from 'node:path';
+import { data, url, hasAsset, readPublicJson, fmtBytes } from '../lib/site';
+
+interface Item { id: string; title: string; before: string; after: string; beforeBytes?: number; afterBytes?: number; feature?: string; note?: string }
+
+// 文件大小在构建时直接从真实文件读取，保证展示数字与素材一致
+const sizeOf = (p: string) => {
+  try { return fs.statSync(path.resolve(process.cwd(), 'public', p)).size; } catch { return 0; }
+};
+const featureName = (id?: string) => data.features.find((f) => f.id === id)?.name || id;
+
+const items = readPublicJson<Item[]>('compare/meta.json', [])
+  .map((it) => {
+    const before = it.before.replace(/^\/?(compare\/)?/, 'compare/');
+    const after = it.after.replace(/^\/?(compare\/)?/, 'compare/');
+    return { ...it, before, after, beforeBytes: sizeOf(before), afterBytes: sizeOf(after), feature: featureName(it.feature) };
+  })
+  .filter((it) => hasAsset(it.before) && hasAsset(it.after));
+
+const pct = (a?: number, b?: number) => (a && b ? Math.round((1 - b / a) * 100) : null);
+---
+
+{items.length > 0 && (
+  <section class="section" id="compare">
+    <div class="container">
+      <div class="section-head reveal">
+        <div class="eyebrow">真实效果</div>
+        <h2 class="h2">拖动滑块，<span class="grad-text">看看处理前后的区别</span></h2>
+        <p class="lead">以下素材都由本软件实际处理生成，没有任何后期修饰。文件大小均为真实字节数。</p>
+      </div>
+
+      <div class="cmp-tabs reveal" role="tablist" aria-label="对比示例">
+        {items.map((it, i) => (
+          <button class="chip" role="tab" aria-selected={i === 0 ? 'true' : 'false'} id={`cmp-tab-${it.id}`} aria-controls={`cmp-${it.id}`} data-cmp={it.id}>{it.title}</button>
+        ))}
+      </div>
+
+      {items.map((it, i) => {
+        const saved = pct(it.beforeBytes, it.afterBytes);
+        return (
+          <div class="cmp-panel reveal" id={`cmp-${it.id}`} role="tabpanel" aria-labelledby={`cmp-tab-${it.id}`} hidden={i !== 0}>
+            <div class="cmp-frame" style="--pos: 50%">
+              <img class="cmp-img cmp-before" src={url(it.before)} alt={`${it.title}：处理前`} loading="lazy" draggable="false" />
+              <img class="cmp-img cmp-after" src={url(it.after)} alt={`${it.title}：处理后`} loading="lazy" draggable="false" />
+              <span class="cmp-label l">处理前</span>
+              <span class="cmp-label r">处理后</span>
+              <div class="cmp-handle" aria-hidden="true"><span>⟷</span></div>
+              <input class="cmp-range" type="range" min="0" max="100" value="50" aria-label={`${it.title} 对比滑块`} />
+            </div>
+            <div class="cmp-meta">
+              {it.feature && <span class="tag">使用功能：{it.feature}</span>}
+              {it.beforeBytes > 0 && it.afterBytes > 0 && it.afterBytes < it.beforeBytes && (
+                <span class="cmp-size">
+                  <span>{fmtBytes(it.beforeBytes)}</span>
+                  <span class="arrow">→</span>
+                  <strong>{fmtBytes(it.afterBytes)}</strong>
+                  {saved !== null && saved > 0 && <span class="saved">体积 −{saved}%</span>}
+                </span>
+              )}
+              {it.note && <span class="cmp-note">{it.note}</span>}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  </section>
+)}
+
+<style>
+  .cmp-tabs { display: flex; justify-content: center; flex-wrap: wrap; gap: 8px; margin-bottom: 26px; }
+  .cmp-panel { max-width: 960px; margin: 0 auto; }
+  .cmp-frame {
+    position: relative; display: grid;
+    border-radius: 16px; overflow: hidden;
+    border: 1px solid var(--border-2);
+    box-shadow: var(--shadow-pop);
+    background-color: #1a1b21;
+    background-image:
+      linear-gradient(45deg, #23242b 25%, transparent 25%), linear-gradient(-45deg, #23242b 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #23242b 75%), linear-gradient(-45deg, transparent 75%, #23242b 75%);
+    background-size: 22px 22px;
+    background-position: 0 0, 0 11px, 11px -11px, -11px 0;
+    user-select: none;
+    touch-action: pan-y;
+  }
+  .cmp-img { grid-area: 1 / 1; width: 100%; height: 100%; max-height: 560px; object-fit: contain; pointer-events: none; }
+  /* 两张图互补裁切：处理后的透明区域不会透出底下的原图，而是显示棋盘格 */
+  .cmp-before { clip-path: inset(0 calc(100% - var(--pos)) 0 0); }
+  .cmp-after { clip-path: inset(0 0 0 var(--pos)); }
+  .cmp-handle {
+    position: absolute; top: 0; bottom: 0; left: var(--pos); width: 2px; margin-left: -1px;
+    background: #fff; box-shadow: 0 0 12px rgba(0, 0, 0, .5); pointer-events: none;
+  }
+  .cmp-handle span {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    width: 40px; height: 40px; border-radius: 50%;
+    display: grid; place-items: center;
+    background: #fff; color: #222; font-size: 18px; font-weight: 700;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, .4);
+  }
+  .cmp-range {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    opacity: 0; cursor: ew-resize; margin: 0;
+  }
+  .cmp-range:focus-visible + * { outline: none; }
+  .cmp-frame:has(.cmp-range:focus-visible) { outline: 2px solid var(--accent-ring); outline-offset: 3px; }
+  .cmp-label {
+    position: absolute; top: 14px; padding: 4px 10px; border-radius: 8px;
+    font-size: 12.5px; background: rgba(0, 0, 0, .55); backdrop-filter: blur(6px); color: #fff;
+    pointer-events: none;
+  }
+  .cmp-label.l { left: 14px; }
+  .cmp-label.r { right: 14px; }
+
+  .cmp-meta { margin-top: 18px; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 12px 20px; font-size: 14px; color: var(--text-2); }
+  .cmp-size { display: inline-flex; align-items: center; gap: 8px; font-variant-numeric: tabular-nums; }
+  .cmp-size strong { color: var(--text); }
+  .cmp-size .arrow { color: var(--text-3); }
+  .saved { color: var(--success); font-weight: 600; background: rgba(61, 214, 140, .1); padding: 2px 8px; border-radius: 6px; }
+  .cmp-note { color: var(--text-3); }
+</style>
+
+<script>
+  document.querySelectorAll<HTMLElement>('.cmp-frame').forEach((frame) => {
+    const range = frame.querySelector<HTMLInputElement>('.cmp-range')!;
+    const update = () => frame.style.setProperty('--pos', `${range.value}%`);
+    range.addEventListener('input', update);
+    update();
+  });
+
+  const tabs = document.querySelectorAll<HTMLButtonElement>('.cmp-tabs [data-cmp]');
+  tabs.forEach((tab) => tab.addEventListener('click', () => {
+    tabs.forEach((t) => t.setAttribute('aria-selected', String(t === tab)));
+    document.querySelectorAll<HTMLElement>('.cmp-panel').forEach((p) => {
+      p.hidden = p.id !== `cmp-${tab.dataset.cmp}`;
+      if (!p.hidden) p.classList.add('in');
+    });
+  }));
+</script>

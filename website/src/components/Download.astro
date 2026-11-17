@@ -1,0 +1,107 @@
+---
+import { app, assetUrl, assetName, assetSize, releasesUrl, repoUrl, dlVersion, release, fmtBytes } from '../lib/site';
+---
+
+<section class="section dl-section" id="download">
+  <div class="container">
+    <div class="dl-card reveal">
+      <div class="dl-glow" aria-hidden="true"></div>
+      <div class="section-head">
+        <div class="eyebrow">免费下载</div>
+        <h2 class="h2">现在就开始，<span class="grad-text">不注册、不联网</span></h2>
+        <p class="lead">
+          最新版本 <strong data-rel-version>v{dlVersion}</strong><span data-rel-date></span>
+          <br />安装包已内置 FFmpeg {app.ffmpeg}，无需另行配置
+        </p>
+      </div>
+
+      <div class="dl-options">
+        <a class="dl-option primary" href={assetUrl('setup')} data-dl="setup">
+          <span class="dl-badge">推荐</span>
+          <span class="dl-ico" aria-hidden="true">💿</span>
+          <span class="dl-title">安装版</span>
+          <span class="dl-desc">一键安装，自动创建开始菜单和桌面快捷方式。如果便携版被杀毒软件误报，请使用这个版本。</span>
+          <span class="dl-file"><span data-dl-name="setup">{assetName('setup')}</span><span data-dl-size="setup">{assetSize('setup') ? fmtBytes(assetSize('setup')) : ''}</span></span>
+          <span class="btn btn-primary">下载安装版</span>
+        </a>
+        <a class="dl-option" href={assetUrl('portable')} data-dl="portable">
+          <span class="dl-ico" aria-hidden="true">🎒</span>
+          <span class="dl-title">便携版</span>
+          <span class="dl-desc">免安装，下载后双击即可运行，可以放在 U 盘里随身携带。</span>
+          <span class="dl-file"><span data-dl-name="portable">{assetName('portable')}</span><span data-dl-size="portable">{assetSize('portable') ? fmtBytes(assetSize('portable')) : ''}</span></span>
+          <span class="btn btn-ghost">下载便携版</span>
+        </a>
+      </div>
+
+      <ul class="dl-req">
+        <li><span>系统</span>Windows 10 / 11（64 位）</li>
+        <li><span>体积</span>约 130 MB（含 FFmpeg）</li>
+        <li><span>网络</span>完全不需要</li>
+        <li><span>价格</span>免费 · MIT 开源</li>
+      </ul>
+
+      <div class="dl-more">
+        <a href={releasesUrl} target="_blank" rel="noopener">历史版本与更新日志 →</a>
+        <a href={repoUrl} target="_blank" rel="noopener">从源码运行（Node.js 18+）→</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .dl-card {
+    position: relative; overflow: hidden;
+    padding: 72px 48px 48px;
+    border-radius: 28px;
+    background: linear-gradient(180deg, rgba(124, 116, 255, .10), rgba(255, 255, 255, .02) 60%);
+    border: 1px solid rgba(124, 116, 255, .25);
+  }
+  .dl-glow {
+    position: absolute; width: 700px; height: 400px; left: 50%; top: -240px; transform: translateX(-50%);
+    background: radial-gradient(closest-side, rgba(124, 116, 255, .45), transparent); filter: blur(40px);
+    pointer-events: none;
+  }
+  .dl-card .section-head { position: relative; margin-bottom: 40px; }
+  .lead strong { color: var(--text); }
+  .dl-options { position: relative; display: grid; grid-template-columns: 1fr 1fr; gap: 18px; max-width: 860px; margin: 0 auto; }
+  .dl-option {
+    min-width: 0;
+    position: relative; display: flex; flex-direction: column; gap: 8px;
+    padding: 28px; border-radius: 20px;
+    background: rgba(11, 12, 16, .6); border: 1px solid var(--border-2);
+    transition: border-color .2s, transform .2s var(--ease);
+  }
+  .dl-option:hover { border-color: var(--border-3); transform: translateY(-2px); }
+  .dl-option.primary { border-color: rgba(124, 116, 255, .45); }
+  .dl-badge {
+    position: absolute; top: 20px; right: 20px; font-size: 12px; font-weight: 600;
+    padding: 3px 10px; border-radius: 999px; background: var(--accent); color: #fff;
+  }
+  .dl-ico { font-size: 28px; }
+  .dl-title { font-size: 20px; font-weight: 700; }
+  .dl-desc { color: var(--text-2); font-size: 14.5px; flex: 1; }
+  .dl-file {
+    display: flex; justify-content: space-between; gap: 10px;
+    font-family: var(--mono); font-size: 12px; color: var(--text-3);
+    padding: 8px 10px; border-radius: 8px; background: rgba(255, 255, 255, .03); border: 1px solid var(--border);
+    overflow: hidden;
+  }
+  .dl-file > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dl-option .btn { margin-top: 10px; width: 100%; }
+
+  .dl-req {
+    position: relative; list-style: none; margin: 36px auto 0; max-width: 860px;
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;
+  }
+  .dl-req li { font-size: 14px; display: flex; flex-direction: column; gap: 2px; padding: 12px 16px; border-left: 2px solid var(--border-2); }
+  .dl-req li span { font-size: 12px; color: var(--text-3); }
+  .dl-more { position: relative; margin-top: 30px; display: flex; justify-content: center; gap: 28px; flex-wrap: wrap; font-size: 14px; }
+  .dl-more a { color: var(--accent-hi); }
+  .dl-more a:hover { text-decoration: underline; }
+
+  @media (max-width: 760px) {
+    .dl-card { padding: 52px 18px 32px; border-radius: 22px; }
+    .dl-options { grid-template-columns: 1fr; }
+    .dl-req { grid-template-columns: 1fr 1fr; }
+  }
+</style>

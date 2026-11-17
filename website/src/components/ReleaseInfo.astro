@@ -1,0 +1,51 @@
+---
+// 运行时从 GitHub API 获取最新 Release，自动更新页面上的版本号、下载直链与文件大小。
+// 请求失败（离线 / 限流）时保留构建时写入的版本信息，下载按钮仍然可用。
+import { app } from '../lib/site';
+---
+
+<script is:inline define:vars={{ repo: app.repo }}>
+  (async () => {
+    const CACHE_KEY = 'vgt-latest-release';
+    const TTL = 30 * 60 * 1000;
+    let rel = null;
+    try {
+      const cached = JSON.parse(sessionStorage.getItem(CACHE_KEY) || 'null');
+      if (cached && Date.now() - cached.t < TTL) rel = cached.v;
+    } catch {}
+    if (!rel) {
+      try {
+        const res = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, { headers: { Accept: 'application/vnd.github+json' } });
+        if (!res.ok) return;
+        const j = await res.json();
+        rel = {
+          tag: j.tag_name,
+          date: j.published_at,
+          assets: (j.assets || []).map((a) => ({ name: a.name, size: a.size, url: a.browser_download_url })),
+        };
+        sessionStorage.setItem(CACHE_KEY, JSON.stringify({ t: Date.now(), v: rel }));
+      } catch {
+        return;
+      }
+    }
+    if (!rel || !rel.tag) return;
+
+    const ver = rel.tag.replace(/^v/, '');
+    document.querySelectorAll('[data-rel-version]').forEach((el) => { el.textContent = rel.tag; });
+    document.querySelectorAll('[data-rel-version-num]').forEach((el) => { el.textContent = ver; });
+    if (rel.date) {
+      const d = new Date(rel.date);
+      const txt = `· ${d.getFullYear()} 年 ${d.getMonth() + 1} 月 ${d.getDate()} 日发布`;
+      document.querySelectorAll('[data-rel-date]').forEach((el) => { el.textContent = txt; });
+    }
+
+    const mb = (n) => `${(n / 1024 / 1024).toFixed(0)} MB`;
+    for (const kind of ['setup', 'portable']) {
+      const asset = rel.assets.find((a) => new RegExp(`-${kind}\\.exe$`, 'i').test(a.name));
+      if (!asset) continue;
+      document.querySelectorAll(`[data-dl="${kind}"]`).forEach((a) => { a.href = asset.url; });
+      document.querySelectorAll(`[data-dl-name="${kind}"]`).forEach((el) => { el.textContent = asset.name; });
+      document.querySelectorAll(`[data-dl-size="${kind}"]`).forEach((el) => { el.textContent = mb(asset.size); });
+    }
+  })();
+</script>

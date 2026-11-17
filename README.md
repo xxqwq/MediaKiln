@@ -149,6 +149,7 @@ renderer/
   └── workflow/         节点画布、拓扑执行引擎、58 节点注册表与 7 套预设模板
 bin/                    内置 FFmpeg 9.0.2（gyan.dev）：仓库内置 .br 压缩包（每件 ~28MB）与 binaries.json；安装/启动自动解压，打包时经 extraResources 释放
 scripts/                ensure-ffmpeg.js、smoke-test.js、workflow-test.js、workflow-ui-check.js、webp-check.js、release.ps1
+website/                产品官网（Astro 静态站点，构建时自动读取功能/节点/模板注册表；见 website/README.md）
 ```
 
 ## 技术备注

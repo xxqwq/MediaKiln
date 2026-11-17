@@ -1,0 +1,187 @@
+---
+import { app, data, url, hasAsset, assetUrl, releasesUrl, dlVersion, release } from '../lib/site';
+
+const shots = [
+  { id: 'single', label: '🛠️ 单工具模式', file: 'screenshots/single-video-to-gif.webp', alt: '单工具模式：视频转 GIF 界面，左侧为 8 大类功能导航，右侧为预览与参数面板' },
+  { id: 'workflow', label: '🕸️ 节点画布模式', file: 'screenshots/workflow-canvas.webp', alt: '节点画布模式：视频截取、加水印、转 GIF、压缩并分支对比的工作流' },
+  { id: 'compare', label: '⛶ 放大对比', file: 'screenshots/single-result-compare.webp', alt: '处理完成后的放大对比弹窗，支持并排同步缩放与卷帘对比' },
+].filter((s) => hasAsset(s.file));
+
+const s = data.stats;
+---
+
+<section class="hero" id="hero">
+  <div class="hero-bg" aria-hidden="true">
+    <div class="glow g1"></div>
+    <div class="glow g2"></div>
+    <div class="grid"></div>
+  </div>
+
+  <div class="container hero-inner">
+    <a class="badge fade-up" style="--d:0ms" href={releasesUrl} target="_blank" rel="noopener">
+      <span class="badge-dot"></span>
+      <span data-rel-version>v{dlVersion}</span> {release ? '已发布' : '最新版本'}
+      <span class="badge-sep"></span>
+      <span class="muted">查看更新日志 →</span>
+    </a>
+
+    <h1 class="hero-title fade-up" style="--d:60ms">
+      视频、GIF、图片与文档<br />
+      <span class="grad-text">在你自己的电脑上一站搞定</span>
+    </h1>
+
+    <p class="hero-sub fade-up" style="--d:120ms">
+      {s.features} 个本地处理功能，加上 {s.nodes} 个节点的可视化工作流画布。<br />内置 FFmpeg {app.ffmpeg}，<strong>不联网、不上传文件</strong>，下载即用，免费开源。
+    </p>
+
+    <div class="hero-cta fade-up" style="--d:180ms">
+      <a class="btn btn-primary btn-stack" href={assetUrl('setup')} data-dl="setup">
+        <span>
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true" style="display:inline;vertical-align:-3px;margin-right:6px"><path d="M3 5.5 10.5 4.5v7H3v-6Zm8.5-1.15L21 3v8.5h-9.5V4.35ZM3 12.5h7.5v7L3 18.5v-6Zm8.5 0H21V21l-9.5-1.35V12.5Z"/></svg>下载 Windows 安装版
+        </span>
+        <span class="sub">v<span data-rel-version-num>{dlVersion}</span> · Win10 / 11 x64</span>
+      </a>
+      <a class="btn btn-ghost btn-stack" href={assetUrl('portable')} data-dl="portable">
+        <span>便携版（免安装）</span>
+        <span class="sub">单个 exe，双击即用</span>
+      </a>
+    </div>
+
+    <ul class="hero-points fade-up" style="--d:240ms" aria-label="核心卖点">
+      <li><span class="ck">✓</span>100% 本地离线</li>
+      <li><span class="ck">✓</span>{s.batchFeatures} 个功能支持批量</li>
+      <li><span class="ck">✓</span>NVENC / QSV / AMF 硬件加速</li>
+      <li><span class="ck">✓</span>MIT 开源</li>
+    </ul>
+
+    {shots.length > 0 && (
+      <div class="hero-shot fade-up" style="--d:320ms">
+        {shots.length > 1 && (
+          <div class="shot-tabs" role="tablist" aria-label="界面预览">
+            {shots.map((sh, i) => (
+              <button class="chip" role="tab" id={`shot-tab-${sh.id}`} aria-controls={`shot-${sh.id}`} aria-selected={i === 0 ? 'true' : 'false'} data-shot={sh.id}>{sh.label}</button>
+            ))}
+          </div>
+        )}
+        <div class="window">
+          <div class="window-bar">
+            <span class="dots"><i></i><i></i><i></i></span>
+            <span class="title">{app.name}</span>
+          </div>
+          <div class="window-body shot-stack">
+            {shots.map((sh, i) => (
+              <img
+                id={`shot-${sh.id}`}
+                role="tabpanel"
+                aria-labelledby={`shot-tab-${sh.id}`}
+                src={url(sh.file)}
+                alt={sh.alt}
+                width="1440"
+                height="900"
+                loading={i === 0 ? 'eager' : 'lazy'}
+                fetchpriority={i === 0 ? 'high' : 'auto'}
+                class:list={['shot', { active: i === 0 }]}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+    )}
+  </div>
+</section>
+
+<style>
+  .hero { position: relative; padding: calc(var(--nav-h) + 72px) 0 40px; overflow: hidden; }
+  .hero-bg { position: absolute; inset: 0; pointer-events: none; }
+  .glow { position: absolute; border-radius: 50%; filter: blur(90px); opacity: .55; }
+  .g1 { width: 720px; height: 520px; left: 50%; top: -220px; transform: translateX(-60%); background: radial-gradient(closest-side, rgba(124, 116, 255, .55), transparent); }
+  .g2 { width: 520px; height: 420px; left: 58%; top: 40px; background: radial-gradient(closest-side, rgba(103, 199, 230, .28), transparent); }
+  .grid {
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(rgba(255, 255, 255, .035) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 255, 255, .035) 1px, transparent 1px);
+    background-size: 56px 56px;
+    mask-image: radial-gradient(ellipse 70% 55% at 50% 20%, #000 30%, transparent 75%);
+    -webkit-mask-image: radial-gradient(ellipse 70% 55% at 50% 20%, #000 30%, transparent 75%);
+  }
+
+  .hero-inner { position: relative; text-align: center; display: flex; flex-direction: column; align-items: center; }
+
+  .badge {
+    display: inline-flex; align-items: center; gap: 10px;
+    height: 34px; padding: 0 14px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, .04);
+    border: 1px solid var(--border-2);
+    font-size: 13px;
+    transition: border-color .2s, background .2s;
+  }
+  .badge:hover { border-color: var(--accent-ring); background: var(--accent-soft); }
+  .badge-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 4px rgba(61, 214, 140, .18); }
+  .badge-sep { width: 1px; height: 14px; background: var(--border-3); }
+  .muted { color: var(--text-2); }
+
+  .hero-title {
+    margin-top: 28px;
+    font-family: var(--font-display);
+    font-size: clamp(38px, 6.4vw, 72px);
+    line-height: 1.12;
+    font-weight: 800;
+    letter-spacing: -.02em;
+  }
+  .hero-sub { margin-top: 22px; max-width: 680px; font-size: clamp(16px, 1.6vw, 19px); color: var(--text-2); text-wrap: balance; }
+  .hero-sub strong { color: var(--text); font-weight: 600; white-space: nowrap; }
+
+  .hero-cta { margin-top: 36px; display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; }
+  .hero-cta .btn { min-width: 220px; }
+
+  .hero-points {
+    list-style: none; margin-top: 26px;
+    display: flex; flex-wrap: wrap; justify-content: center; gap: 10px 26px;
+    font-size: 14px; color: var(--text-2);
+  }
+  .hero-points li { display: flex; align-items: center; gap: 7px; }
+  .ck { color: var(--success); font-weight: 700; }
+
+  .hero-shot { margin-top: 64px; width: 100%; max-width: 1120px; perspective: 1600px; }
+  .shot-tabs { display: flex; justify-content: center; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
+  .hero-shot .window { position: relative; }
+  .hero-shot .window::after {
+    content: ""; position: absolute; inset: auto 0 0 0; height: 30%;
+    background: linear-gradient(transparent, rgba(11, 12, 16, .55));
+    pointer-events: none;
+  }
+  .shot-stack { display: grid; }
+  .shot { grid-area: 1 / 1; opacity: 0; transition: opacity .45s var(--ease); }
+  .shot.active { opacity: 1; }
+
+  @media (max-width: 640px) {
+    .hero { padding-top: calc(var(--nav-h) + 48px); }
+    .hero-title br, .hero-sub br { display: none; }
+    .hero-cta { width: 100%; }
+    .hero-cta .btn { width: 100%; }
+    .hero-shot { margin-top: 44px; }
+  }
+</style>
+
+<script>
+  const tabs = document.querySelectorAll<HTMLButtonElement>('.shot-tabs [data-shot]');
+  let timer: number | undefined;
+  const select = (id: string) => {
+    tabs.forEach((t) => t.setAttribute('aria-selected', String(t.dataset.shot === id)));
+    document.querySelectorAll('.shot-stack .shot').forEach((img) => img.classList.toggle('active', img.id === `shot-${id}`));
+  };
+  tabs.forEach((t) => t.addEventListener('click', () => {
+    window.clearInterval(timer);
+    select(t.dataset.shot!);
+  }));
+  // 自动轮播，用户点击后停止
+  if (tabs.length > 1 && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    let i = 0;
+    timer = window.setInterval(() => {
+      i = (i + 1) % tabs.length;
+      select(tabs[i].dataset.shot!);
+    }, 5000);
+  }
+</script>

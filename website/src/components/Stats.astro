@@ -1,0 +1,73 @@
+---
+import { data } from '../lib/site';
+const s = data.stats;
+const items = [
+  { n: s.features, unit: '个', label: '本地处理功能' },
+  { n: s.nodes, unit: '个', label: '工作流节点' },
+  { n: s.batchFeatures, unit: '个', label: '功能支持批量' },
+  { n: s.formats, unit: '种', label: '输入格式' },
+  { n: 0, unit: '字节', label: '上传到云端', zero: true },
+];
+---
+
+<section class="stats" aria-label="数据概览">
+  <div class="container">
+    <ul class="stats-row reveal">
+      {items.map((it) => (
+        <li class:list={{ zero: it.zero }}>
+          <span class="num"><span data-count={it.n}>{it.n}</span><small>{it.unit}</small></span>
+          <span class="label">{it.label}</span>
+        </li>
+      ))}
+    </ul>
+  </div>
+</section>
+
+<style>
+  .stats { padding: 40px 0 8px; }
+  .stats-row {
+    list-style: none;
+    display: grid; grid-template-columns: repeat(5, 1fr);
+    border: 1px solid var(--border); border-radius: var(--radius-lg);
+    background: rgba(255, 255, 255, .02);
+  }
+  .stats-row li { padding: 26px 20px; text-align: center; display: flex; flex-direction: column; gap: 4px; }
+  .stats-row li + li { border-left: 1px solid var(--border); }
+  .num { font-family: var(--font-display); font-size: 38px; font-weight: 750; line-height: 1.1; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+  .num small { font-size: 14px; font-weight: 500; color: var(--text-3); margin-left: 4px; letter-spacing: 0; }
+  .zero .num { color: var(--success); }
+  .label { font-size: 13.5px; color: var(--text-2); }
+  @media (max-width: 760px) {
+    .stats-row { grid-template-columns: repeat(2, 1fr); }
+    .stats-row li { border-left: 0 !important; border-top: 1px solid var(--border); }
+    .stats-row li:nth-child(-n+2) { border-top: 0; }
+    .stats-row li:nth-child(even) { border-left: 1px solid var(--border) !important; }
+    .stats-row li:last-child { grid-column: span 2; border-left: 0 !important; }
+    .num { font-size: 30px; }
+  }
+</style>
+
+<script>
+  // 数字滚动动画
+  const els = document.querySelectorAll<HTMLElement>('[data-count]');
+  if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    const io = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        if (!e.isIntersecting) continue;
+        const el = e.target as HTMLElement;
+        const target = Number(el.dataset.count);
+        io.unobserve(el);
+        if (!target) continue;
+        const start = performance.now();
+        const step = (t: number) => {
+          const p = Math.min(1, (t - start) / 1100);
+          el.textContent = String(Math.round(target * (1 - Math.pow(1 - p, 3))));
+          if (p < 1) requestAnimationFrame(step);
+        };
+        el.textContent = '0';
+        requestAnimationFrame(step);
+      }
+    }, { threshold: 0.4 });
+    els.forEach((el) => io.observe(el));
+  }
+</script>

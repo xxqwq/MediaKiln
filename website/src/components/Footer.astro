@@ -1,0 +1,56 @@
+---
+import { app, data, repoUrl, releasesUrl } from '../lib/site';
+import Logo from './Logo.astro';
+const year = new Date().getFullYear();
+---
+
+<footer class="footer">
+  <div class="container foot-inner">
+    <div class="foot-brand">
+      <div class="fb-row"><Logo size={28} /><strong>{app.name}</strong></div>
+      <p>Windows 本地离线多媒体与文档处理工具箱。<br />{data.stats.features} 个功能 · {data.stats.nodes} 个工作流节点 · 文件永不上传。</p>
+    </div>
+    <div class="foot-cols">
+      <div>
+        <h4>产品</h4>
+        <a href="#features">功能亮点</a>
+        <a href="#workflow">节点工作流</a>
+        <a href="#all-features">功能清单</a>
+        <a href="#download">下载</a>
+      </div>
+      <div>
+        <h4>开源</h4>
+        <a href={repoUrl} target="_blank" rel="noopener">GitHub 仓库</a>
+        <a href={releasesUrl} target="_blank" rel="noopener">更新日志</a>
+        <a href={`${repoUrl}/issues`} target="_blank" rel="noopener">问题反馈</a>
+      </div>
+      <div>
+        <h4>技术栈</h4>
+        <span>Electron {app.electron.split('.')[0]}</span>
+        <span>FFmpeg {app.ffmpeg}</span>
+        <span>Resvg · SVGO</span>
+      </div>
+    </div>
+  </div>
+  <div class="container foot-bottom">
+    <span>© {year} {app.name} · 基于 {app.license} 协议开源</span>
+    <span>FFmpeg 是 FFmpeg 项目的商标，本软件内置的二进制文件来自 gyan.dev 构建。</span>
+  </div>
+</footer>
+
+<style>
+  .footer { border-top: 1px solid var(--border); padding: 56px 0 32px; margin-top: 40px; background: var(--bg-elev); }
+  .foot-inner { display: flex; justify-content: space-between; gap: 48px; flex-wrap: wrap; }
+  .fb-row { display: flex; align-items: center; gap: 10px; font-size: 16px; }
+  .foot-brand p { margin-top: 14px; color: var(--text-3); font-size: 14px; max-width: 360px; }
+  .foot-cols { display: flex; gap: 64px; flex-wrap: wrap; }
+  .foot-cols div { display: flex; flex-direction: column; gap: 8px; font-size: 14px; }
+  .foot-cols h4 { font-size: 13px; color: var(--text); margin-bottom: 4px; font-weight: 600; }
+  .foot-cols a, .foot-cols span { color: var(--text-3); }
+  .foot-cols a:hover { color: var(--text); }
+  .foot-bottom {
+    margin-top: 44px; padding-top: 22px; border-top: 1px solid var(--border);
+    display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+    font-size: 12.5px; color: var(--text-3);
+  }
+</style>

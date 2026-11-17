@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.astro/
+# 截图脚本的临时输出
+scripts/capture/tmp/
+scripts/capture/out/
+scripts/dev/shots/
+scripts/dev/*.log
+scripts/dev/*.err
+
+# 构建时由 scripts/extract-app-data.mjs 自动生成
+src/data/app-data.json

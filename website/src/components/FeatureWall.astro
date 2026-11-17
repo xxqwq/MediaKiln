@@ -1,0 +1,177 @@
+---
+import { data } from '../lib/site';
+
+const groups = data.groupOrder.filter((g) => data.features.some((f) => f.group === g));
+const groupMeta = data.groupMeta as Record<string, { color: string; icon: string }>;
+const countOf = (g: string) => data.features.filter((f) => f.group === g).length;
+
+const fmtAccept = (acc: string[]) => {
+  const uniq = Array.from(new Set(acc.map((e) => (e === 'jpeg' ? 'jpg' : e === 'markdown' ? 'md' : e))));
+  return uniq.length > 6 ? `${uniq.slice(0, 6).join(' · ')} 等 ${uniq.length} 种` : uniq.join(' · ');
+};
+
+const hotWords = ['GIF', '压缩', 'PPT', '抠图', 'SVG', '水印', '字幕', '微信'];
+---
+
+<section class="section" id="all-features">
+  <div class="container">
+    <div class="section-head reveal">
+      <div class="eyebrow">完整功能清单</div>
+      <h2 class="h2">{data.stats.features} 个功能，<span class="grad-text">{groups.length} 大分类</span></h2>
+      <p class="lead">清单直接取自软件的功能注册表，软件更新后这里也会自动同步。</p>
+    </div>
+
+    <div class="fw-toolbar reveal">
+      <div class="fw-search">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
+        <input id="fw-q" type="search" placeholder="搜索功能，例如：GIF、PPT、抠图、微信…" autocomplete="off" aria-label="搜索功能" />
+        <kbd>/</kbd>
+      </div>
+      <div class="fw-hot" aria-label="热门搜索">
+        {hotWords.map((w) => <button class="fw-hot-btn" data-q={w}>{w}</button>)}
+      </div>
+      <div class="fw-groups" role="group" aria-label="按分类筛选">
+        <button class="chip" aria-pressed="true" data-group="">全部 <span class="count">{data.features.length}</span></button>
+        {groups.map((g) => (
+          <button class="chip" aria-pressed="false" data-group={g}>
+            {groupMeta[g]?.icon} {g} <span class="count">{countOf(g)}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+
+    <div class="fw-grid" id="fw-grid">
+      {data.features.map((f) => (
+        <article
+          class="fw-card"
+          data-group={f.group}
+          data-search={`${f.name} ${f.desc} ${f.group} ${f.accept.join(' ')}`.toLowerCase()}
+          style={`--gc: ${groupMeta[f.group]?.color || '#94a3b8'}`}
+        >
+          <div class="fw-head">
+            <span class="fw-icon">{f.icon}</span>
+            <h3 class="fw-name">{f.name}</h3>
+          </div>
+          <p class="fw-desc">{f.desc}</p>
+          <div class="fw-foot">
+            <span class="fw-group">{f.group}</span>
+            {f.batch && <span class="tag t-batch" title="支持多文件批量队列">批量</span>}
+            {f.multi && <span class="tag t-multi" title="多个文件合并为一个输出">多文件合成</span>}
+            {f.noBatch && <span class="tag" title="需要在预览图上交互操作">交互</span>}
+            <span class="fw-ext" title={f.accept.join(', ')}>{fmtAccept(f.accept)}</span>
+          </div>
+        </article>
+      ))}
+    </div>
+    <p class="fw-empty" id="fw-empty" hidden>没有找到匹配的功能，换个关键词试试？</p>
+    <div class="fw-more" id="fw-more-wrap">
+      <button class="btn btn-ghost" id="fw-more" aria-controls="fw-grid" aria-expanded="false">展开全部 {data.features.length} 个功能 ↓</button>
+    </div>
+  </div>
+</section>
+
+<style>
+  .fw-toolbar { display: flex; flex-direction: column; align-items: center; gap: 16px; margin-bottom: 34px; }
+  .fw-search {
+    width: 100%; max-width: 560px; height: 52px;
+    display: flex; align-items: center; gap: 12px; padding: 0 16px;
+    border-radius: 14px; background: var(--surface); border: 1px solid var(--border-2);
+    color: var(--text-3);
+    transition: border-color .2s, box-shadow .2s;
+  }
+  .fw-search:focus-within { border-color: var(--accent-ring); box-shadow: 0 0 0 4px rgba(124, 116, 255, .12); }
+  .fw-search input { flex: 1; min-width: 0; height: 100%; background: none; border: 0; outline: none; font-size: 15.5px; color: var(--text); }
+  .fw-search input::placeholder { color: var(--text-3); }
+  .fw-search kbd {
+    font-family: var(--mono); font-size: 12px; padding: 2px 7px; border-radius: 6px;
+    border: 1px solid var(--border-2); color: var(--text-3);
+  }
+  .fw-hot { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 14px; font-size: 13px; color: var(--text-3); }
+  .fw-hot-btn { color: var(--text-3); padding: 2px 4px; border-radius: 6px; transition: color .2s; }
+  .fw-hot-btn:hover { color: var(--accent-hi); }
+  .fw-hot-btn::before { content: "#"; opacity: .5; margin-right: 2px; }
+  .fw-groups { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+
+  .fw-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 14px; }
+  .fw-card {
+    position: relative; padding: 20px 20px 16px; border-radius: 14px;
+    background: var(--surface); border: 1px solid var(--border);
+    display: flex; flex-direction: column;
+    transition: border-color .2s, transform .2s var(--ease), background .2s;
+  }
+  .fw-card::before {
+    content: ""; position: absolute; left: 20px; right: 20px; top: 0; height: 2px; border-radius: 2px;
+    background: var(--gc); opacity: .55;
+  }
+  .fw-card:hover { border-color: var(--border-3); transform: translateY(-2px); background: var(--surface-2); }
+  .fw-card[hidden] { display: none; }
+  .fw-head { display: flex; align-items: center; gap: 10px; }
+  .fw-icon { font-size: 20px; width: 34px; height: 34px; display: grid; place-items: center; border-radius: 10px; background: rgba(255, 255, 255, .04); flex-shrink: 0; }
+  .fw-name { font-size: 15.5px; font-weight: 650; line-height: 1.35; }
+  .fw-desc { margin-top: 10px; font-size: 13.5px; color: var(--text-2); line-height: 1.6; flex: 1; }
+  .fw-foot { margin-top: 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .fw-group { font-size: 12px; color: var(--gc); margin-right: 2px; }
+  .fw-foot .tag { height: 20px; font-size: 11.5px; padding: 0 7px; }
+  .t-batch { color: #b9f5d6; border-color: rgba(61, 214, 140, .3); background: rgba(61, 214, 140, .08); }
+  .t-multi { color: #d6d3ff; border-color: rgba(124, 116, 255, .3); background: var(--accent-soft); }
+  .fw-ext { margin-left: auto; font-size: 11.5px; color: var(--text-3); font-family: var(--mono); text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .fw-empty { text-align: center; color: var(--text-3); padding: 40px 0; }
+  .fw-more { position: relative; display: flex; justify-content: center; margin-top: -60px; padding-top: 90px; background: linear-gradient(transparent, var(--bg) 70%); }
+  .fw-more[hidden] { display: none; }
+</style>
+
+<script>
+  const q = document.getElementById('fw-q') as HTMLInputElement;
+  const cards = Array.from(document.querySelectorAll<HTMLElement>('.fw-card'));
+  const groupBtns = document.querySelectorAll<HTMLButtonElement>('.fw-groups [data-group]');
+  const empty = document.getElementById('fw-empty')!;
+  const moreWrap = document.getElementById('fw-more-wrap')!;
+  const moreBtn = document.getElementById('fw-more')!;
+  const COLLAPSED = 12;
+  let group = '';
+  let expanded = false;
+
+  const apply = () => {
+    const terms = q.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    // 只有“全部 + 无搜索”时折叠，筛选或搜索时直接展示全部结果
+    const collapsible = !group && !terms.length && !expanded;
+    let shown = 0;
+    for (const c of cards) {
+      const okGroup = !group || c.dataset.group === group;
+      const okText = terms.every((t) => c.dataset.search!.includes(t));
+      const match = okGroup && okText;
+      c.hidden = !match || (collapsible && shown >= COLLAPSED);
+      if (match) shown++;
+    }
+    empty.hidden = shown > 0;
+    moreWrap.hidden = !collapsible;
+  };
+  moreBtn.addEventListener('click', () => {
+    expanded = true;
+    moreBtn.setAttribute('aria-expanded', 'true');
+    apply();
+  });
+  apply();
+
+  groupBtns.forEach((b) => b.addEventListener('click', () => {
+    group = b.dataset.group || '';
+    groupBtns.forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+    apply();
+  }));
+  q.addEventListener('input', apply);
+  document.querySelectorAll<HTMLButtonElement>('.fw-hot-btn').forEach((b) => b.addEventListener('click', () => {
+    q.value = b.dataset.q || '';
+    apply();
+    q.focus();
+  }));
+
+  // 按 / 快速聚焦搜索框
+  document.addEventListener('keydown', (e) => {
+    const t = e.target as HTMLElement;
+    if (e.key === '/' && !['INPUT', 'TEXTAREA'].includes(t.tagName)) {
+      e.preventDefault();
+      q.focus();
+      q.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+  });
+</script>

@@ -1,0 +1,66 @@
+---
+import '../styles/global.css';
+import { app, url, dlVersion } from '../lib/site';
+
+interface Props {
+  title?: string;
+  description?: string;
+}
+
+const {
+  title = `${app.name} — 本地离线的视频 / GIF / 图片 / 文档处理工具箱`,
+  description = `${app.name}：Windows 本地离线多媒体与文档处理桌面应用。49 个功能、55 节点可视化工作流，内置 FFmpeg ${app.ffmpeg}，文件不上传、开箱即用、免费开源。`,
+} = Astro.props;
+
+const canonical = new URL(Astro.url.pathname, Astro.site).href;
+const ogImage = new URL(url('og-image.png'), Astro.site).href;
+---
+
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <meta name="keywords" content="视频转GIF,GIF压缩,图片压缩,图片转SVG,PPT压缩,Word压缩,本地离线,FFmpeg,工作流,批量处理,Windows工具" />
+    <meta name="theme-color" content="#0b0c10" />
+    <link rel="canonical" href={canonical} />
+    <link rel="icon" type="image/png" href={url('favicon.png')} />
+    <link rel="alternate icon" href={url('favicon.ico')} />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={ogImage} />
+    <meta name="twitter:card" content="summary_large_image" />
+
+    <script type="application/ld+json" set:html={JSON.stringify({
+      '@context': 'https://schema.org',
+      '@type': 'SoftwareApplication',
+      name: app.name,
+      operatingSystem: 'Windows 10, Windows 11',
+      applicationCategory: 'MultimediaApplication',
+      softwareVersion: dlVersion,
+      offers: { '@type': 'Offer', price: '0', priceCurrency: 'CNY' },
+      license: 'https://opensource.org/licenses/MIT',
+      description,
+    })} />
+  </head>
+  <body>
+    <slot />
+    <script>
+      // 进入视口时淡入
+      const io = new IntersectionObserver((entries) => {
+        for (const e of entries) {
+          if (e.isIntersecting) {
+            e.target.classList.add('in');
+            io.unobserve(e.target);
+          }
+        }
+      }, { rootMargin: '0px 0px -8% 0px', threshold: 0.08 });
+      document.querySelectorAll('.reveal').forEach((el) => io.observe(el));
+    </script>
+  </body>
+</html>

@@ -1,0 +1,74 @@
+name: Deploy Website (GitHub Pages)
+
+# 官网当前由 Cloudflare Pages 托管（见 website/README.md），此工作流默认保留为手动触发。
+# 如需改用 GitHub Pages 自动部署，取消下方 push / release 触发器的注释，
+# 并在仓库 Settings → Pages 中将 Source 设为 GitHub Actions。
+on:
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - 'website/**'
+  #     - 'renderer/features/**'
+  #     - 'renderer/workflow/node-registry.js'
+  #     - 'renderer/workflow/templates.js'
+  #     - 'package.json'
+  #     - '.github/workflows/pages.yml'
+  # release:
+  #   types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: website/package-lock.json
+
+      - name: Configure GitHub Pages
+        id: pages
+        uses: actions/configure-pages@v5
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build website
+        env:
+          SITE_URL: ${{ steps.pages.outputs.origin }}
+          BASE_PATH: ${{ steps.pages.outputs.base_path }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: npm run build
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: website/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

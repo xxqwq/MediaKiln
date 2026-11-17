@@ -1,0 +1,38 @@
+[
+  {
+    "id": "vector",
+    "title": "图片转 SVG 矢量",
+    "before": "/compare/vector-before.png",
+    "after": "/compare/vector-after.svg",
+    "beforeBytes": 499482,
+    "afterBytes": 24153,
+    "feature": "imageToSvg"
+  },
+  {
+    "id": "cutout",
+    "title": "纯色 / 绿幕抠图透明",
+    "before": "/compare/cutout-before.jpg",
+    "after": "/compare/cutout-after.png",
+    "beforeBytes": 47911,
+    "afterBytes": 309579,
+    "feature": "imageCutout"
+  },
+  {
+    "id": "gif",
+    "title": "GIF 压缩",
+    "before": "/compare/gif-before.gif",
+    "after": "/compare/gif-after.gif",
+    "beforeBytes": 2784791,
+    "afterBytes": 1291369,
+    "feature": "compressGif"
+  },
+  {
+    "id": "bg",
+    "title": "图片更换背景",
+    "before": "/compare/bg-before.jpg",
+    "after": "/compare/bg-after.jpg",
+    "beforeBytes": 47911,
+    "afterBytes": 75990,
+    "feature": "imageReplaceBg"
+  }
+]

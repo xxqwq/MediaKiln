@@ -1,0 +1,209 @@
+---
+import { data, url, hasAsset } from '../lib/site';
+
+// 画布坐标取自软件模板（renderer/workflow/templates.js），横向略微压缩以便在网页中看清文字
+const SX = 0.82;
+const NODE_W = 272;
+const HEAD_H = 50;
+const PORT_H = 28;
+const PAD_B = 12;
+
+const groupMeta = data.groupMeta as Record<string, { color: string; icon: string }>;
+const colorOf = (g: string) => groupMeta[g]?.color || '#94a3b8';
+const shortLabel = (s: string) => s.replace(/\(可选\)|（可选）/g, '').trim();
+
+const templates = data.templates.map((t, i) => {
+  const nodes = t.graph.nodes.map((n) => {
+    const rows = Math.max(n.inputs.length, n.outputs.length, 1);
+    return { ...n, x: Math.round(n.x * SX), h: HEAD_H + rows * PORT_H + PAD_B };
+  });
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const portY = (n: (typeof nodes)[number], idx: number) => n.y + HEAD_H + idx * PORT_H + PORT_H / 2 - 4;
+
+  const edges = t.graph.edges
+    .filter((e) => byId.has(e.from) && byId.has(e.to))
+    .map((e) => {
+      const a = byId.get(e.from)!;
+      const b = byId.get(e.to)!;
+      const ai = Math.max(0, a.outputs.findIndex((p) => p.id === e.fromPort));
+      const bi = Math.max(0, b.inputs.findIndex((p) => p.id === e.toPort));
+      const x1 = a.x + NODE_W, y1 = portY(a, ai);
+      const x2 = b.x, y2 = portY(b, bi);
+      const dx = Math.max(50, Math.abs(x2 - x1) * 0.5);
+      return { d: `M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}`, color: colorOf(a.group) };
+    });
+
+  const minX = Math.min(...nodes.map((n) => n.x)) - 24;
+  const minY = Math.min(...nodes.map((n) => n.y)) - 24;
+  const maxX = Math.max(...nodes.map((n) => n.x + NODE_W)) + 24;
+  const maxY = Math.max(...nodes.map((n) => n.y + n.h)) + 24;
+  const shot = [`screenshots/wf-${t.id}.webp`, `screenshots/wf-template-${i}.webp`].find(hasAsset) || null;
+
+  return {
+    ...t,
+    title: t.name.replace(/^\p{Extended_Pictographic}\uFE0F?\s*/u, ''),
+    emoji: (t.name.match(/^\p{Extended_Pictographic}\uFE0F?/u) || ['🧩'])[0],
+    nodes, edges, portY,
+    viewBox: `${minX} ${minY} ${maxX - minX} ${maxY - minY}`,
+    shot,
+  };
+});
+
+const anyShot = templates.some((t) => t.shot);
+const s = data.stats;
+---
+
+<section class="section wf-section" id="workflow">
+  <div class="container">
+    <div class="section-head reveal">
+      <div class="eyebrow">节点画布模式</div>
+      <h2 class="h2">像搭积木一样，<span class="grad-text">串起整条处理流程</span></h2>
+      <p class="lead">
+        {s.nodes} 个节点（{s.ioNodes} 个输入输出节点和 {s.nodes - s.ioNodes} 个功能节点）可以自由连线。支持连接类型校验、分支并排对比、节点旁路和工作流 JSON 导入导出。下面是软件自带的 {s.templates} 套模板：
+      </p>
+    </div>
+
+    <div class="wf-tabs reveal" role="tablist" aria-label="预设工作流模板">
+      {templates.map((t, i) => (
+        <button class="wf-tab" role="tab" id={`wf-tab-${i}`} aria-controls={`wf-panel-${i}`} aria-selected={i === 0 ? 'true' : 'false'} data-wf={i}>
+          <span class="wf-emoji">{t.emoji}</span>
+          <span class="wf-name">{t.graph.name}</span>
+        </button>
+      ))}
+    </div>
+
+    <div class="wf-stage card reveal">
+      {templates.map((t, i) => (
+        <div class="wf-panel" id={`wf-panel-${i}`} role="tabpanel" aria-labelledby={`wf-tab-${i}`} hidden={i !== 0}>
+          <div class="wf-head">
+            <div>
+              <h3 class="wf-title">{t.title}</h3>
+              <p class="wf-desc">{t.desc}</p>
+            </div>
+            <div class="wf-meta">
+              <span class="tag">{t.category}</span>
+              <span class="tag">{t.nodes.length} 个节点 · {t.edges.length} 条连线</span>
+              {anyShot && t.shot && (
+                <span class="wf-view-toggle" role="group" aria-label="展示方式">
+                  <button class="chip" aria-pressed="true" data-view="diagram">流程图</button>
+                  <button class="chip" aria-pressed="false" data-view="shot">软件截图</button>
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div class="wf-diagram" data-kind="diagram">
+            <svg viewBox={t.viewBox} preserveAspectRatio="xMidYMid meet" role="img" aria-label={`${t.graph.name} 工作流示意图`}>
+              <defs>
+                <pattern id={`dots-${i}`} width="26" height="26" patternUnits="userSpaceOnUse">
+                  <circle cx="1.5" cy="1.5" r="1.4" fill="rgba(255,255,255,.07)" />
+                </pattern>
+              </defs>
+              <rect x="-10000" y="-10000" width="20000" height="20000" fill={`url(#dots-${i})`} />
+              {t.edges.map((e) => (
+                <g>
+                  <path d={e.d} fill="none" stroke={e.color} stroke-opacity=".3" stroke-width="3.5" />
+                  <path class="wire-flow" d={e.d} fill="none" stroke={e.color} stroke-width="3.5" stroke-dasharray="10 16" stroke-linecap="round" />
+                </g>
+              ))}
+              {t.nodes.map((n) => {
+                const c = colorOf(n.group);
+                return (
+                  <g class="node">
+                    <rect x={n.x} y={n.y} width={NODE_W} height={n.h} rx="14" fill="#17181e" stroke="rgba(255,255,255,.12)" stroke-width="1.5" />
+                    <path d={`M${n.x + 14},${n.y} H${n.x + NODE_W - 14}`} stroke={c} stroke-width="4" stroke-linecap="round" />
+                    <text x={n.x + 16} y={n.y + 33} font-size="20" font-weight="650" fill="#ececef">{n.icon} {n.name}</text>
+                    {n.inputs.map((p, pi) => (
+                      <g>
+                        <circle cx={n.x} cy={t.portY(n, pi)} r="7" fill="#17181e" stroke={c} stroke-width="3" />
+                        <text x={n.x + 16} y={t.portY(n, pi) + 6} font-size="16" fill="#a1a3ad">{shortLabel(p.label)}</text>
+                      </g>
+                    ))}
+                    {n.outputs.map((p, pi) => (
+                      <g>
+                        <circle cx={n.x + NODE_W} cy={t.portY(n, pi)} r="7" fill={c} />
+                        <text x={n.x + NODE_W - 16} y={t.portY(n, pi) + 6} font-size="16" fill="#a1a3ad" text-anchor="end">{shortLabel(p.label)}</text>
+                      </g>
+                    ))}
+                  </g>
+                );
+              })}
+            </svg>
+          </div>
+
+          {t.shot && (
+            <div class="wf-shot" data-kind="shot" hidden>
+              <img src={url(t.shot)} alt={`软件内载入「${t.graph.name}」模板的真实截图`} loading="lazy" width="1440" height="900" />
+            </div>
+          )}
+          <p class="wf-scroll-hint" aria-hidden="true">← 左右滑动查看完整流程 →</p>
+        </div>
+      ))}
+    </div>
+  </div>
+</section>
+
+<style>
+  .wf-section { background: linear-gradient(180deg, transparent, rgba(124, 116, 255, .045) 35%, transparent); }
+  .wf-tabs { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-bottom: 22px; }
+  .wf-tab {
+    display: inline-flex; align-items: center; gap: 8px;
+    height: 40px; padding: 0 16px 0 10px; border-radius: 999px;
+    border: 1px solid var(--border-2); background: rgba(255, 255, 255, .03);
+    color: var(--text-2); font-size: 14px;
+    transition: all .2s var(--ease);
+  }
+  .wf-tab:hover { color: var(--text); border-color: var(--border-3); }
+  .wf-tab[aria-selected="true"] { background: var(--accent-soft); border-color: var(--accent-ring); color: #fff; }
+  .wf-emoji { width: 26px; height: 26px; display: grid; place-items: center; font-size: 15px; border-radius: 50%; background: rgba(255, 255, 255, .06); }
+
+  .wf-stage { padding: 26px; }
+  .wf-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; flex-wrap: wrap; }
+  .wf-title { font-size: 20px; font-weight: 650; }
+  .wf-desc { margin-top: 6px; color: var(--text-2); font-size: 14.5px; max-width: 720px; }
+  .wf-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+  .wf-meta .tag { height: 28px; padding: 0 10px; font-size: 12.5px; }
+  .wf-view-toggle { display: inline-flex; gap: 6px; margin-left: 6px; }
+  .wf-view-toggle .chip { height: 28px; font-size: 12.5px; padding: 0 11px; }
+
+  .wf-diagram, .wf-shot { margin-top: 22px; border-radius: 12px; overflow: hidden; border: 1px solid var(--border); background: #0d0e12; }
+  .wf-diagram { overflow-x: auto; scrollbar-width: thin; }
+  .wf-diagram svg { width: 100%; min-width: 900px; height: auto; font-family: var(--font); }
+  .wf-shot img { width: 100%; height: auto; }
+  .wire-flow { animation: dash 1.3s linear infinite; }
+  @keyframes dash { to { stroke-dashoffset: -26; } }
+
+  .wf-scroll-hint { display: none; }
+  @media (max-width: 760px) {
+    .wf-scroll-hint { display: block; margin-top: 10px; text-align: center; font-size: 12.5px; color: var(--text-3); }
+    .wf-tabs { flex-wrap: nowrap; justify-content: flex-start; overflow-x: auto; padding-bottom: 6px; scrollbar-width: none; margin-left: -18px; margin-right: -18px; padding-left: 18px; padding-right: 18px; }
+    .wf-tab { flex: 0 0 auto; }
+    .wf-stage { padding: 16px; }
+  }
+</style>
+
+<script>
+  const tabs = document.querySelectorAll<HTMLButtonElement>('.wf-tab');
+  const panels = document.querySelectorAll<HTMLElement>('.wf-panel');
+  tabs.forEach((tab) => tab.addEventListener('click', () => {
+    const idx = tab.dataset.wf;
+    tabs.forEach((t) => t.setAttribute('aria-selected', String(t === tab)));
+    panels.forEach((p) => { p.hidden = p.id !== `wf-panel-${idx}`; });
+  }));
+
+  // 流程图 / 软件截图 切换（全局同步）
+  let view = 'diagram';
+  const applyView = () => {
+    document.querySelectorAll<HTMLButtonElement>('.wf-view-toggle [data-view]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === view)));
+    panels.forEach((p) => {
+      const hasShot = !!p.querySelector('[data-kind="shot"]');
+      p.querySelectorAll<HTMLElement>('[data-kind]').forEach((el) => {
+        el.hidden = hasShot ? el.dataset.kind !== view : el.dataset.kind !== 'diagram';
+      });
+    });
+  };
+  document.querySelectorAll<HTMLButtonElement>('.wf-view-toggle [data-view]').forEach((b) => b.addEventListener('click', () => {
+    view = b.dataset.view || 'diagram';
+    applyView();
+  }));
+</script>
