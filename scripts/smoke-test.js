@@ -6,6 +6,7 @@ const { spawnSync } = require('child_process');
 const { probe, executeTask, FFMPEG } = require('../ffmpeg');
 
 const TMP = path.join(__dirname, 'smoke');
+fs.rmSync(TMP, { recursive: true, force: true });
 fs.mkdirSync(TMP, { recursive: true });
 
 function run(args) {
