@@ -1,6 +1,7 @@
 'use strict';
 
 const { spawn } = require('child_process');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { isImagePath, isSvgPath, isDocPath, parseSvgDims } = require('./utils');
@@ -352,6 +353,27 @@ function videoCodecArgs(p, { crf = 20, preset = 'medium' } = {}) {
 // 任务执行分发器
 // ---------------------------------------------------------------------------
 
+// 单文件输出的 steps 型任务：把最后一步里的最终输出路径换成同目录临时文件（保留扩展名，ffmpeg 靠它推断容器格式），
+// 返回临时路径；无法确定「args 里恰好出现一次 plan.output 且它是文件」时返回 null，保持原行为。
+function swapOutputToTemp(plan) {
+  const out = plan.output;
+  if (typeof out !== 'string' || plan.outputType === 'dir' || out.includes('%')) return null;
+  const hits = [];
+  for (const step of plan.steps) {
+    step.args.forEach((a, i) => { if (a === out) hits.push({ step, i }); });
+  }
+  if (hits.length !== 1) return null;
+  const { step, i } = hits[0];
+  if (step !== plan.steps[plan.steps.length - 1] || step.args[i - 1] === '-i') return null;
+  try {
+    if (fs.statSync(out).isDirectory()) return null;
+  } catch {}
+  const ext = path.extname(out);
+  const tmp = `${out.slice(0, out.length - ext.length)}.tmp-${crypto.randomBytes(4).toString('hex')}${ext}`;
+  step.args[i] = tmp;
+  return tmp;
+}
+
 function createExecutor(builders) {
   return async function executeTask(taskId, feature, params, onProgress) {
     assertBinaries();
@@ -377,11 +399,15 @@ function createExecutor(builders) {
       return result || { output: plan.output };
     }
 
+    const tmpOut = swapOutputToTemp(plan);
     try {
       for (const step of plan.steps) {
         await runFfmpeg(taskId, step.args, { ...step, onProgress });
       }
+      if (tmpOut) fs.renameSync(tmpOut, plan.output);
     } finally {
+      // 失败/取消时删除临时文件；taskkill 后句柄可能稍晚释放，重试几次且不抛错
+      if (tmpOut) await fs.promises.rm(tmpOut, { force: true, maxRetries: 5, retryDelay: 200 }).catch(() => {});
       for (const f of plan.cleanup || []) {
         fs.unlink(f, () => {});
       }

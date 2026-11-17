@@ -88,7 +88,21 @@ function createWindow() {
   });
 }
 
+// 单实例：重复启动时退出自己，并让已有窗口还原、聚焦
+const gotSingleLock = app.requestSingleInstanceLock();
+if (!gotSingleLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (!win || win.isDestroyed()) return;
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+  });
+}
+
 app.whenReady().then(() => {
+  if (!gotSingleLock) return;
   try {
     ffmpeg.ensureBinaries();
   } catch (err) {
