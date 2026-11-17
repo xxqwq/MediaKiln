@@ -768,6 +768,20 @@ async function test(name, feature, params, check) {
     }
   });
 
+  // 94. GIF 截取（按时间段 1.0s~2.5s）
+  await test('94. GIF 截取 (按时间段 1.0s~2.5s)', 'trimGif', {
+    input: testGif, mode: 'time', start: 1, duration: 1.5, fps: 0, colors: 256, loop: 0, totalDuration: 4,
+  }, (i) => {
+    if (Math.abs(i.duration - 1.5) > 0.25) throw new Error(`截取后时长 ${i.duration}s 应约为 1.5s`);
+  });
+
+  // 95. GIF 截取（按帧序号 第 5~19 帧 = 15 帧）
+  await test('95. GIF 截取 (按帧序号 5~19 帧)', 'trimGif', {
+    input: testGif, mode: 'frames', startFrame: 5, endFrame: 19, fps: 0, colors: 128, loop: -1, srcFps: 15, nbFrames: 60, totalDuration: 4,
+  }, (i) => {
+    if (i.nbFrames !== 15) throw new Error(`应截取 15 帧，实际 ${i.nbFrames} 帧`);
+  });
+
   console.log(failed ? `\n❌ ${failed} 个用例失败` : '\n🎉 全部通过');
   process.exit(failed ? 1 : 0);
 })();

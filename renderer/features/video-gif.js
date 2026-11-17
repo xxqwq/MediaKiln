@@ -201,6 +201,52 @@ window.VGT.VIDEO_FEATURES = [
     },
   },
   {
+    id: 'trimGif', group: 'GIF 编辑', icon: '✂️', name: 'GIF 截取', desc: '按时间段或帧序号截取 GIF 片段（自动保留透明背景与原画质）',
+    accept: ['gif'],
+    fields: [
+      { key: 'mode', label: '截取方式', type: 'chips', def: 'time',
+        options: [['time', '按时间段（秒）'], ['frames', '按帧序号']] },
+      { type: 'times', showIf: (v) => v.mode !== 'frames' },
+      { key: 'startFrame', label: '起始帧（从 1 开始）', type: 'number', def: '1', min: 1, step: 1,
+        showIf: (v) => v.mode === 'frames' },
+      { key: 'endFrame', label: '结束帧（含该帧）', type: 'number', def: '15', min: 1, step: 1,
+        showIf: (v) => v.mode === 'frames' },
+      { key: 'fps', label: '帧率', type: 'select', def: '0',
+        options: [['0', '保持原帧率（推荐）'], ['24', '24 fps'], ['20', '20 fps'], ['15', '15 fps'], ['12', '12 fps'], ['10', '10 fps'], ['8', '8 fps']] },
+      { key: 'colors', label: '调色板颜色数', type: 'select', def: '256',
+        options: [['256', '256 色（原画质，推荐）'], ['128', '128 色（均衡）'], ['64', '64 色（体积更小）']] },
+      { key: 'loop', label: '循环方式', type: 'chips', def: '0',
+        options: [['0', '无限循环'], ['-1', '只播 1 次'], ['1', '循环 2 次']] },
+    ],
+    collect(v, ctx) {
+      if (v.mode === 'frames') {
+        return {
+          input: ctx.file.path,
+          mode: 'frames',
+          startFrame: v.startFrame,
+          endFrame: v.endFrame,
+          fps: v.fps === '0' ? 0 : v.fps,
+          colors: v.colors,
+          loop: v.loop,
+          srcFps: ctx.file.info.fps,
+          nbFrames: ctx.file.info.nbFrames || 0,
+          totalDuration: ctx.file.info.duration,
+        };
+      }
+      const t = rt(ctx.file);
+      return {
+        input: ctx.file.path,
+        mode: 'time',
+        start: t.start,
+        duration: t.duration,
+        fps: v.fps === '0' ? 0 : v.fps,
+        colors: v.colors,
+        loop: v.loop,
+        totalDuration: ctx.file.info.duration,
+      };
+    },
+  },
+  {
     id: 'gifText', group: 'GIF 编辑', icon: '💬', name: 'GIF 加文字', desc: '给 GIF 打字幕、配梗文字（支持中文）',
     accept: ['gif'],
     fields: [

@@ -202,6 +202,60 @@ const builders = {
     });
   },
 
+  // GIF 截取（支持按时间段与按帧序号截取，保留透明通道与两遍调色板）
+  trimGif(p) {
+    const output = defaultOutput(p.input, 'clip', 'gif');
+    const colors = Math.min(Math.max(num(p.colors, 256), 16), 256);
+    const fps = num(p.fps, 0);
+    const loop = p.loop !== undefined ? parseInt(p.loop, 10) : 0;
+    const totalDuration = num(p.totalDuration, 0);
+    const vfParts = [];
+    let estDuration = 0;
+
+    if (p.mode === 'frames') {
+      const nbFrames = Math.max(0, Math.round(num(p.nbFrames, 0)));
+      const startFrame = Math.max(1, Math.round(num(p.startFrame, 1)));
+      let endFrame = Math.max(1, Math.round(num(p.endFrame, startFrame)));
+      if (nbFrames > 0 && startFrame > nbFrames) {
+        throw new Error(`起始帧 (${startFrame}) 不能超过 GIF 总帧数 (${nbFrames})`);
+      }
+      if (nbFrames > 0) endFrame = Math.min(endFrame, nbFrames);
+      if (endFrame < startFrame) {
+        throw new Error('结束帧不能小于起始帧');
+      }
+      vfParts.push(`trim=start_frame=${startFrame - 1}:end_frame=${endFrame}`, 'setpts=PTS-STARTPTS');
+      const srcFps = num(p.srcFps, 0) || 12;
+      estDuration = (endFrame - startFrame + 1) / srcFps;
+    } else {
+      const start = Math.max(num(p.start, 0), 0);
+      const dur = num(p.duration, 0);
+      if (dur <= 0) throw new Error('截取时长必须大于 0');
+      if (totalDuration > 0 && start >= totalDuration) {
+        throw new Error('开始时间不能大于或等于 GIF 总时长');
+      }
+      const actualDur = totalDuration > 0 ? Math.min(dur, totalDuration - start) : dur;
+      vfParts.push(`trim=start=${start}:duration=${dur}`, 'setpts=PTS-STARTPTS');
+      estDuration = actualDur;
+    }
+
+    if (fps > 0) {
+      vfParts.push(`fps=${Math.min(Math.max(fps, 1), 30)}`);
+    }
+
+    return gifPlan({
+      input: p.input,
+      output,
+      colors,
+      dither: 'bayer:bayer_scale=5',
+      statsMode: 'diff',
+      diffMode: 'rectangle',
+      reserveTransparent: true,
+      loop: Number.isFinite(loop) ? loop : 0,
+      totalDuration: estDuration,
+      vf: vfParts.join(','),
+    });
+  },
+
   // GIF 加文字
   gifText(p) {
     const text = String(p.text || '').trim();

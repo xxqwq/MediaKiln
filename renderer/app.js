@@ -14,6 +14,9 @@ const GROUP_ORDER = ['转换', 'GIF 编辑', '图片', 'SVG', '文档', '剪辑'
 // ---------------------------------------------------------------------------
 
 let currentFeature = FEATURES[0];
+let appMode = 'single'; // 'single' | 'workflow'
+let wfController = null;
+let wfTaskProgressCb = null;
 let file = null;
 let files = null;
 let batchFiles = null;
@@ -96,6 +99,10 @@ function makeNavItem(f) {
 
 function renderNav() {
   const nav = $('nav');
+  if (appMode === 'workflow' && wfController) {
+    wfController.renderSidebarPalette(nav, navSearchQuery);
+    return;
+  }
   nav.innerHTML = '';
   const q = navSearchQuery.trim().toLowerCase();
   const match = (f) => !q
@@ -344,8 +351,29 @@ function prefillTimes(info) {
         return b;
       };
       chips.appendChild(mk('整段', 0, round1(info.duration)));
+      if (info.duration > 1.5 && info.duration <= 10) {
+        const mid = round1(info.duration / 2);
+        chips.appendChild(mk('前半段', 0, mid));
+        chips.appendChild(mk('后半段', mid, round1(info.duration)));
+      }
       if (info.duration > 5) chips.appendChild(mk('前 5 秒', 0, 5));
       if (info.duration > 10) chips.appendChild(mk('前 10 秒', 0, 10));
+    }
+  }
+  if (info.nbFrames > 0) {
+    const sf = document.querySelector('#params input[data-key="startFrame"]');
+    const ef = document.querySelector('#params input[data-key="endFrame"]');
+    if (sf) sf.max = String(info.nbFrames);
+    if (ef) {
+      ef.max = String(info.nbFrames);
+      const lbl = ef.closest('.field')?.querySelector('label');
+      if (lbl) lbl.textContent = `结束帧（含该帧，共 ${info.nbFrames} 帧）`;
+      let hasSavedEf = false;
+      try {
+        const saved = JSON.parse(localStorage.getItem(`vgt_params_${currentFeature.id}`) || 'null');
+        hasSavedEf = saved && saved.endFrame !== undefined;
+      } catch {}
+      if (!hasSavedEf) ef.value = String(info.nbFrames);
     }
   }
 }
@@ -388,6 +416,7 @@ function renderFileCard(ext) {
     if (info.width) parts.push(`分辨率 ${info.width}×${info.height}`);
     if (!isImg && info.duration > 0) parts.push(`时长 ${fmtDur(info.duration)}`);
     if (!isImg && info.fps > 0) parts.push(`${Math.round(info.fps)} fps`);
+    if (ext === 'gif' && info.nbFrames > 0) parts.push(`${info.nbFrames} 帧`);
   }
   parts.push(`大小 ${fmtSize(info.size)}`);
   if (!isDoc && !isImg && !['mp3', 'm4a', 'wav', 'flac'].includes(ext)) {
@@ -844,7 +873,7 @@ function showBatchSummary() {
     ? `<button class="btn btn-ghost btn-sm btn-repack-word" id="btn-repack-word">📥 将这 ${doneItems.length} 张结果放回原 ${repackDocLabel} (${escHtml(repackDocName)})</button>`
     : '';
 
-  showResult(kind, `${title}<div class="result-actions">${openBtnHtml}<button class="btn btn-ghost btn-sm" id="btn-again">重新准备</button>${repackBtnHtml}</div>`);
+  showResult(kind, `${title}<div class="result-actions">${openBtnHtml}<button class="btn btn-ghost btn-sm" id="btn-again">重新准备</button><button class="btn btn-ghost btn-sm" id="btn-batch-send-wf">🕸️ 结果发往画布</button>${repackBtnHtml}</div>`);
 
   if (firstOut) {
     $('btn-open').onclick = () =>
@@ -855,6 +884,13 @@ function showBatchSummary() {
   $('btn-again').onclick = () => {
     useFiles(batchFiles.map((b) => b.path)).then(() => {});
   };
+  if ($('btn-batch-send-wf')) {
+    $('btn-batch-send-wf').onclick = () => {
+      const outPaths = doneItems.filter((d) => d.outputType !== 'dir' && d.output).map((d) => d.output);
+      if (!outPaths.length) return toast('没有可发送的输出文件', true);
+      sendFilesToWorkflow(outPaths);
+    };
+  }
   if (canRepack && $('btn-repack-word')) {
     $('btn-repack-word').onclick = () => {
       jumpToDocRepack({
@@ -1056,10 +1092,22 @@ async function showSuccess(res) {
     <button class="btn btn-ghost btn-sm" id="btn-open">${res.outputType === 'dir' ? '打开文件夹' : '打开所在文件夹'}</button>
     ${compareBtnHtml}
     ${repackSingleBtn}
+    <button class="btn btn-ghost btn-sm" id="btn-result-send-wf">🕸️ 结果发往画布</button>
     <button class="btn btn-ghost btn-sm" id="btn-again">再来一次</button></div>${handoffHtml}`);
 
   $('btn-open').onclick = () =>
     res.outputType === 'dir' ? window.api.openFolder(res.output) : window.api.showInFolder(res.output);
+  if ($('btn-result-send-wf')) {
+    $('btn-result-send-wf').onclick = async () => {
+      if (res.outputType === 'dir') {
+        const list = thumbPaths.length ? thumbPaths : await window.api.listDir(res.output, 200);
+        if (!list.length) return toast('输出目录为空', true);
+        await sendFilesToWorkflow(list);
+      } else {
+        await sendFilesToWorkflow([res.output]);
+      }
+    };
+  }
   $('btn-again').onclick = () => {
     if (currentFeature.multi || !file?.path) return clearFile();
     useFile(file.path).then(() => {});
@@ -1338,6 +1386,92 @@ function fmtDur(sec) {
 }
 
 // ---------------------------------------------------------------------------
+// 双模式切换与工作流画布桥接
+// ---------------------------------------------------------------------------
+
+function switchAppMode(nextMode) {
+  if (nextMode === appMode) return;
+  if (running || wfController?.isRunning?.()) {
+    toast('当前有任务正在运行中，请先等待完成或停止', true);
+    return;
+  }
+  appMode = nextMode;
+  localStorage.setItem('vgt_app_mode', appMode);
+  $('mode-btn-single').classList.toggle('active', appMode === 'single');
+  $('mode-btn-workflow').classList.toggle('active', appMode === 'workflow');
+  $('single-main').classList.toggle('hidden', appMode !== 'single');
+  $('workflow-main').classList.toggle('hidden', appMode !== 'workflow');
+  $('nav-search').placeholder = appMode === 'workflow'
+    ? '🔍 搜索工作流节点（支持拖拽或点击添加）'
+    : '🔍 搜索功能（gif / 图片 / svg / word / md…）';
+  $('sidebar-foot').textContent = appMode === 'workflow'
+    ? '滚轮缩放 · 拖线松手建节点 · Ctrl+Enter 运行'
+    : '本地 FFmpeg 9.0 · Ctrl+O 选文件 · 空格播放';
+  renderNav();
+  if (appMode === 'workflow') {
+    wfController?.onActivated?.();
+  }
+}
+
+async function sendFilesToWorkflow(paths) {
+  if (!paths?.length) return;
+  switchAppMode('workflow');
+  await wfController?.receiveFilesFromSingle?.(paths);
+}
+
+function initWorkflowBridge() {
+  if (!window.VGT.workflowCanvas) return;
+  const bridge = {
+    toast,
+    getGlobalPrefs() {
+      return {
+        outputMode: prefOutputMode,
+        outputDir: prefOutputMode === 'custom' ? prefOutputDir : '',
+        hwAccel: prefHwAccel,
+        noOverwrite: prefNoOverwrite,
+      };
+    },
+    setActiveTaskCallbacks(_onTid, onProg) {
+      wfTaskProgressCb = onProg || null;
+    },
+    clearActiveTaskCallbacks() {
+      wfTaskProgressCb = null;
+    },
+    async sendToSingle(paths) {
+      if (!paths?.length) return;
+      const ext = paths[0].split('.').pop().toLowerCase();
+      const target = FEATURES.find((f) => !f.multi && f.accept.includes(ext))
+        || FEATURES.find((f) => f.accept.includes(ext))
+        || FEATURES[0];
+      switchAppMode('single');
+      selectFeature(target, { forceClear: true });
+      await useFiles(paths);
+      toast(`已发送 ${paths.length} 个文件到「${target.name}」`);
+    },
+    openFeatureInSingle(featureId) {
+      const target = FEATURES.find((f) => f.id === featureId);
+      if (!target) return;
+      switchAppMode('single');
+      selectFeature(target);
+    },
+  };
+  window.VGT.appBridge = bridge;
+  wfController = window.VGT.workflowCanvas.initWorkflowCanvas($('workflow-main'), bridge);
+  window.VGT.wfController = wfController;
+
+  $('mode-btn-single').onclick = () => switchAppMode('single');
+  $('mode-btn-workflow').onclick = () => switchAppMode('workflow');
+  if ($('btn-send-wf')) {
+    $('btn-send-wf').onclick = () => {
+      if (files?.length) return sendFilesToWorkflow(files.map((f) => f.path));
+      if (batchFiles?.length) return sendFilesToWorkflow(batchFiles.map((b) => b.path));
+      if (file?.path) return sendFilesToWorkflow([file.path]);
+      toast('请先选择要发送的文件', true);
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 事件绑定与启动
 // ---------------------------------------------------------------------------
 
@@ -1369,13 +1503,16 @@ function bindEvents() {
 
   const dz = $('dropzone');
   document.body.addEventListener('dragover', (e) => {
+    if (appMode === 'workflow') return;
     e.preventDefault();
     dz.classList.add('dragover');
   });
   document.body.addEventListener('dragleave', (e) => {
+    if (appMode === 'workflow') return;
     if (!e.relatedTarget) dz.classList.remove('dragover');
   });
   document.body.addEventListener('drop', async (e) => {
+    if (appMode === 'workflow') return;
     e.preventDefault();
     dz.classList.remove('dragover');
     if (running) return toast('有任务正在进行中', true);
@@ -1393,6 +1530,10 @@ function bindEvents() {
   };
 
   document.addEventListener('keydown', (e) => {
+    if (appMode === 'workflow') {
+      wfController?.handleKeyDown?.(e);
+      return;
+    }
     if (e.isComposing) return;
     const mod = e.ctrlKey || e.metaKey;
     if (mod && e.key.toLowerCase() === 'o') {
@@ -1504,11 +1645,19 @@ function initGlobalPrefs() {
 
 window.addEventListener('DOMContentLoaded', () => {
   initGlobalPrefs();
+  initWorkflowBridge();
   renderNav();
   selectFeature(FEATURES[0]);
   bindEvents();
+  const lastMode = localStorage.getItem('vgt_app_mode');
+  if (lastMode === 'workflow') switchAppMode('workflow');
+
   window.api.onProgress(({ taskId, ratio }) => {
     currentTaskId = taskId;
+    if (wfTaskProgressCb) {
+      wfTaskProgressCb(ratio, taskId);
+      return;
+    }
     if (!running) return;
     if (batchFiles?.length && batchRunningIndex >= 0 && batchRunningIndex < batchFiles.length) {
       const item = batchFiles[batchRunningIndex];

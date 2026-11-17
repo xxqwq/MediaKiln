@@ -119,6 +119,7 @@ const FILE_FILTERS = {
   toWebp: { exts: ALL_MEDIA_EXT },
   convertVideo: { exts: VIDEO_EXT },
   compressGif: { exts: ['gif'] },
+  trimGif: { exts: ['gif'] },
   gifText: { exts: ['gif'] },
   compressTarget: { exts: ALL_MEDIA_EXT },
   chromaGif: { exts: ALL_MEDIA_EXT },
@@ -167,9 +168,11 @@ const FILE_FILTERS = {
   replaceImageFiles: { exts: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'avif', 'gif', 'tif', 'tiff'], multi: true },
   videoGifFile: { exts: ALL_MEDIA_EXT },
   subFile: { exts: ['srt', 'ass', 'ssa', 'vtt'] },
+  anyMedia: { exts: [...VIDEO_EXT, 'gif', ...IMG_EXT, ...SVG_EXT, ...AUDIO_EXT, 'srt', 'ass', 'ssa', 'vtt', ...DOC_EXT], multi: true },
+  anyMediaSingle: { exts: [...VIDEO_EXT, 'gif', ...IMG_EXT, ...SVG_EXT, ...AUDIO_EXT, 'srt', 'ass', 'ssa', 'vtt', ...DOC_EXT] },
 };
 
-const SINGLE_ONLY = new Set(['videoCrop', 'videoBlur', 'multiCut', 'audioFile', 'imageFile', 'videoGifFile', 'subFile']);
+const SINGLE_ONLY = new Set(['videoCrop', 'videoBlur', 'multiCut', 'audioFile', 'imageFile', 'videoGifFile', 'subFile', 'anyMediaSingle']);
 
 ipcMain.handle('pick-file', async (_e, feature, kind) => {
   const targetKey = kind || feature;
@@ -358,4 +361,216 @@ ipcMain.on('start-drag', (e, filePath) => {
     else icon = icon.resize({ width: 64, quality: 'good' });
     e.sender.startDrag({ file: filePath, icon });
   } catch {}
+});
+
+// ---------------------------------------------------------------------------
+// 节点工作流缓存与导入导出 IPC
+// ---------------------------------------------------------------------------
+
+function isCDrivePath(p) {
+  return /^c:/i.test(path.resolve(String(p || '')));
+}
+
+function getWorkflowCacheDir() {
+  const candidates = [];
+  if (app.isPackaged) {
+    const exeDir = path.dirname(process.execPath);
+    if (!isCDrivePath(exeDir)) candidates.push(path.join(exeDir, '.workflow_cache'));
+  } else {
+    if (!isCDrivePath(__dirname)) candidates.push(path.join(__dirname, '.workflow_cache'));
+  }
+  if (fs.existsSync('D:\\')) {
+    candidates.push('D:\\temp\\vgt-workflow-cache');
+  }
+  if (!candidates.length) {
+    candidates.push(path.join(__dirname, '.workflow_cache'));
+  }
+
+  for (const dir of candidates) {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      const probeFile = path.join(dir, `.probe_${process.pid}`);
+      fs.writeFileSync(probeFile, '1');
+      fs.unlinkSync(probeFile);
+      return dir;
+    } catch {}
+  }
+  const fallback = path.join(__dirname, '.workflow_cache');
+  fs.mkdirSync(fallback, { recursive: true });
+  return fallback;
+}
+
+function statDirRecursive(dir) {
+  let sizeBytes = 0;
+  let fileCount = 0;
+  const walk = (cur) => {
+    let entries = [];
+    try { entries = fs.readdirSync(cur, { withFileTypes: true }); } catch { return; }
+    for (const ent of entries) {
+      const full = path.join(cur, ent.name);
+      if (ent.isDirectory()) {
+        walk(full);
+      } else if (ent.isFile()) {
+        try {
+          sizeBytes += fs.statSync(full).size;
+          fileCount++;
+        } catch {}
+      }
+    }
+  };
+  walk(dir);
+  return { sizeBytes, fileCount };
+}
+
+function uniqueExportPath(targetPath, noOverwrite) {
+  if (!noOverwrite || !fs.existsSync(targetPath)) return targetPath;
+  const ext = path.extname(targetPath);
+  const stem = targetPath.slice(0, targetPath.length - ext.length);
+  let i = 1;
+  while (fs.existsSync(`${stem}_${i}${ext}`)) i++;
+  return `${stem}_${i}${ext}`;
+}
+
+function uniqueExportDir(baseDir, folderName, noOverwrite) {
+  const cleanName = String(folderName || 'workflow_export').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').trim() || 'workflow_export';
+  let cand = path.join(baseDir, cleanName);
+  if (!noOverwrite || !fs.existsSync(cand)) return cand;
+  let i = 1;
+  while (fs.existsSync(path.join(baseDir, `${cleanName}_${i}`))) i++;
+  return path.join(baseDir, `${cleanName}_${i}`);
+}
+
+ipcMain.handle('wf:cache-info', () => {
+  const dir = getWorkflowCacheDir();
+  const { sizeBytes, fileCount } = statDirRecursive(dir);
+  return { dir, sizeBytes, fileCount };
+});
+
+ipcMain.handle('wf:clear-cache', () => {
+  if (ffmpeg.hasRunningTasks()) {
+    return { ok: false, error: '有任务正在运行，无法清理缓存' };
+  }
+  const dir = getWorkflowCacheDir();
+  try {
+    for (const name of fs.readdirSync(dir)) {
+      fs.rmSync(path.join(dir, name), { recursive: true, force: true });
+    }
+    fs.mkdirSync(dir, { recursive: true });
+    return { ok: true, dir };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('wf:alloc-node-dir', (_e, opts = {}) => {
+  const cacheRoot = getWorkflowCacheDir();
+  const rawKey = String(opts.subKey || `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`);
+  const cleanKey = rawKey.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64) || 'node';
+  const dir = path.join(cacheRoot, `node_${cleanKey}`);
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+
+  if (opts.manifestDir) {
+    const srcManifest = path.join(opts.manifestDir, '.vgt-manifest.json');
+    if (fs.existsSync(srcManifest)) {
+      try {
+        fs.copyFileSync(srcManifest, path.join(dir, '.vgt-manifest.json'));
+      } catch {}
+    }
+  }
+  return { ok: true, dir };
+});
+
+ipcMain.handle('wf:stat-multi', (_e, filePaths) => {
+  const list = Array.isArray(filePaths) ? filePaths : [];
+  return list.map((p) => {
+    try {
+      const st = fs.statSync(p);
+      return { path: p, exists: true, isDirectory: st.isDirectory(), size: st.size, mtimeMs: st.mtimeMs };
+    } catch {
+      return { path: p, exists: false, isDirectory: false, size: 0, mtimeMs: 0 };
+    }
+  });
+});
+
+ipcMain.handle('wf:export-files', (_e, opts = {}) => {
+  const files = Array.isArray(opts.files) ? opts.files.filter((f) => f && fs.existsSync(f)) : [];
+  if (!files.length) return { ok: false, error: '没有可导出的输出文件' };
+
+  const baseRef = opts.originInputPath || files[0];
+  let targetDir;
+  if (opts.outMode === 'custom' && opts.customDir) {
+    targetDir = opts.customDir;
+  } else if (opts.outMode === 'subdir') {
+    targetDir = path.join(path.dirname(baseRef), 'output');
+  } else {
+    targetDir = path.dirname(baseRef);
+  }
+  fs.mkdirSync(targetDir, { recursive: true });
+
+  const noOverwrite = opts.noOverwrite !== false;
+  const prefix = String(opts.prefix || '').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
+  const suffix = String(opts.suffix || '').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
+  let destDir = targetDir;
+
+  if (opts.exportAsFolder && files.length > 1) {
+    const defaultFolder = opts.folderName
+      || `${path.basename(baseRef, path.extname(baseRef))}_工作流输出`;
+    destDir = uniqueExportDir(targetDir, defaultFolder, noOverwrite);
+    fs.mkdirSync(destDir, { recursive: true });
+  }
+
+  const savedPaths = [];
+  let totalSize = 0;
+  for (const src of files) {
+    const ext = path.extname(src);
+    const stem = path.basename(src, ext);
+    const outName = `${prefix}${stem}${suffix}${ext}`;
+    const dest = uniqueExportPath(path.join(destDir, outName), noOverwrite);
+    if (path.resolve(src).toLowerCase() === path.resolve(dest).toLowerCase()) {
+      savedPaths.push(dest);
+      totalSize += fs.statSync(dest).size;
+      continue;
+    }
+    fs.copyFileSync(src, dest);
+    savedPaths.push(dest);
+    try { totalSize += fs.statSync(dest).size; } catch {}
+  }
+
+  if (opts.manifestDir) {
+    const manifestSrc = path.join(opts.manifestDir, '.vgt-manifest.json');
+    if (fs.existsSync(manifestSrc)) {
+      try { fs.copyFileSync(manifestSrc, path.join(destDir, '.vgt-manifest.json')); } catch {}
+    }
+  }
+
+  return { ok: true, savedPaths, targetDir: destDir, totalSize };
+});
+
+ipcMain.handle('wf:export-json', async (_e, opts = {}) => {
+  const defaultName = String(opts.defaultName || 'workflow').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_') + '.json';
+  const { canceled, filePath } = await dialog.showSaveDialog(win, {
+    title: '导出工作流配置',
+    defaultPath: defaultName,
+    filters: [{ name: '工作流 JSON', extensions: ['json'] }],
+  });
+  if (canceled || !filePath) return { canceled: true };
+  fs.writeFileSync(filePath, String(opts.content || '{}'), 'utf8');
+  return { ok: true, filePath };
+});
+
+ipcMain.handle('wf:import-json', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+    title: '导入工作流配置',
+    properties: ['openFile'],
+    filters: [{ name: '工作流 JSON', extensions: ['json'] }, { name: '所有文件', extensions: ['*'] }],
+  });
+  if (canceled || !filePaths.length) return { canceled: true };
+  const filePath = filePaths[0];
+  try {
+    const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    return { ok: true, filePath, data };
+  } catch (err) {
+    return { ok: false, error: `JSON 解析失败：${err.message}` };
+  }
 });

@@ -116,12 +116,14 @@ function probe(filePath) {
           }
         }
         const subCount = (info.streams || []).filter((s) => s.codec_type === 'subtitle').length;
+        const nbFrames = parseInt(video?.nb_frames, 10) || 0;
         resolve({
           duration,
           size: parseInt(info.format?.size, 10) || 0,
           width: video?.width || 0,
           height: video?.height || 0,
           fps: isImg ? 0 : Math.round(fps * 100) / 100,
+          nbFrames: isImg ? 0 : nbFrames,
           isImage: isImg,
           isSvg: false,
           pixFmt: video?.pix_fmt || '',

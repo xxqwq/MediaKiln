@@ -22,6 +22,13 @@ contextBridge.exposeInMainWorld('api', {
   startDrag: (filePath) => ipcRenderer.send('start-drag', filePath),
   // Electron 32+ 已移除 File.path，用 webUtils 拿拖入文件的磁盘路径
   getPath: (file) => webUtils.getPathForFile(file),
+  wfCacheInfo: () => ipcRenderer.invoke('wf:cache-info'),
+  wfClearCache: () => ipcRenderer.invoke('wf:clear-cache'),
+  wfAllocNodeDir: (opts) => ipcRenderer.invoke('wf:alloc-node-dir', opts),
+  wfStatMulti: (filePaths) => ipcRenderer.invoke('wf:stat-multi', filePaths),
+  wfExportFiles: (opts) => ipcRenderer.invoke('wf:export-files', opts),
+  wfExportJson: (opts) => ipcRenderer.invoke('wf:export-json', opts),
+  wfImportJson: () => ipcRenderer.invoke('wf:import-json'),
   onProgress: (cb) => ipcRenderer.on('task:progress', (_e, payload) => cb(payload)),
   onDone: (cb) => ipcRenderer.on('task:done', (_e, payload) => cb(payload)),
   onError: (cb) => ipcRenderer.on('task:error', (_e, payload) => cb(payload)),

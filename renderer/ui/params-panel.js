@@ -102,9 +102,27 @@ function createParamsController(appCtx) {
       }
 
       if (field.type === 'times') {
+        const dur = file?.info?.duration || 0;
+        const canGifScrub = !hasVideo && file && !file.info?.isImage && dur > 0.2;
         const pickHtml = hasVideo
           ? `<div class="chip-row"><button class="chip" id="pick-t-start">⏮ 设为起点</button><button class="chip" id="pick-t-end">⏭ 设为终点</button></div>`
-          : '';
+          : (canGifScrub
+            ? `<div class="gif-scrub-box">
+                 <div class="gif-scrub-row">
+                   <span>定格预览</span>
+                   <input type="range" id="gif-scrub-range" min="0" max="${round1(dur)}" step="0.1" value="0" />
+                   <span id="gif-scrub-time" class="range-val">0s</span>
+                 </div>
+                 <div class="gif-scrub-preview">
+                   <img id="gif-scrub-img" class="hidden" alt="GIF 帧预览" />
+                   <span class="muted" id="gif-scrub-tip">拖动滑块可查看任意时间点画面并设为起止点</span>
+                 </div>
+                 <div class="chip-row">
+                   <button class="chip" id="pick-t-start">⏮ 设为起点</button>
+                   <button class="chip" id="pick-t-end">⏭ 设为终点</button>
+                 </div>
+               </div>`
+            : '');
         wrap.innerHTML = `
           <label>时间段（秒）</label>
           <div class="times-row">
@@ -350,10 +368,39 @@ function createParamsController(appCtx) {
       });
     });
 
+    const gifScrubRange = box.querySelector('#gif-scrub-range');
     const getVidTime = () => {
       const v = document.querySelector('#preview-box video');
-      return v ? round1(v.currentTime || 0) : 0;
+      if (v) return round1(v.currentTime || 0);
+      if (gifScrubRange) return round1(parseFloat(gifScrubRange.value) || 0);
+      return 0;
     };
+    if (gifScrubRange && file) {
+      const scrubTimeEl = box.querySelector('#gif-scrub-time');
+      const scrubImg = box.querySelector('#gif-scrub-img');
+      const scrubTip = box.querySelector('#gif-scrub-tip');
+      const dur = file.info?.duration || 0;
+      let scrubTimer = null;
+      let scrubReqId = 0;
+      const loadGifFrame = async (tSec) => {
+        const reqId = ++scrubReqId;
+        const safeT = Math.min(Math.max(0, tSec), Math.max(0, dur - 0.05));
+        const dataUrl = await window.api.firstFrame(file.path, safeT);
+        if (reqId !== scrubReqId || !dataUrl || !scrubImg) return;
+        scrubImg.src = dataUrl;
+        scrubImg.classList.remove('hidden');
+        if (scrubTip) scrubTip.classList.add('hidden');
+      };
+      gifScrubRange.oninput = () => {
+        const t = round1(parseFloat(gifScrubRange.value) || 0);
+        if (scrubTimeEl) scrubTimeEl.textContent = `${t}s`;
+        clearTimeout(scrubTimer);
+        scrubTimer = setTimeout(() => loadGifFrame(t), 120);
+      };
+      if (currentFeature.id === 'trimGif') {
+        loadGifFrame(0);
+      }
+    }
     const pickStart = box.querySelector('#pick-t-start');
     const pickEnd = box.querySelector('#pick-t-end');
     if (pickStart) {
@@ -367,6 +414,7 @@ function createParamsController(appCtx) {
       pickEnd.onclick = () => {
         const t = getVidTime();
         $('t-end').value = t;
+        if (parseFloat($('t-start').value) >= t) $('t-start').value = 0;
       };
     }
     const pickVideoTime = box.querySelector('#pick-video-time');
