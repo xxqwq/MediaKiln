@@ -1,8 +1,37 @@
 # 视频 · GIF 工具箱
 
-Windows 桌面小工具，全部处理在本地完成，无需联网、不上传文件。基于 Electron + FFmpeg 9.0（自带二进制，无需安装）。
+Windows 本地离线多媒体与文档处理桌面应用，基于 Electron + FFmpeg 9.0.2。全部处理均在本机完成，无需联网、不上传任何文件；成品安装包与源码仓库均已内置 FFmpeg，开箱即用。
 
-## 功能（44 个，8 大类）
+## 下载与使用
+
+### 方式一：直接下载安装包（推荐）
+前往 [GitHub Releases](https://github.com/xxqwq/usefulTools/releases) 下载最新 Windows 安装包（无需配置 Node.js 或 FFmpeg）：
+- **便携版（免安装）**：`视频GIF工具箱-2.1.1-便携版.exe`，下载后双击即可运行。
+- **安装版**：`视频GIF工具箱-2.1.1-安装版.exe`（若便携版被杀毒软件误报，推荐使用安装版）。
+
+### 方式二：源码运行（需 Node.js 18+）
+1. 克隆仓库或下载源码 ZIP 后解压。
+2. 双击根目录 `启动工具箱.bat`（首次会自动执行 `npm install` 并解压内置 FFmpeg），或手动执行：
+   ```bash
+   npm install          # 自动安装依赖并从 bin/*.exe.br 解压内置 FFmpeg（建议国内环境配置 npmmirror / ELECTRON_MIRROR）
+   npm start            # 启动应用（若 bin/*.exe 缺失，首次启动时也会自动解压还原）
+   ```
+
+---
+
+## 核心特性
+
+- **🛠️ 单工具模式 & 🕸️ 节点画布模式**：顶部/侧栏一键切换「单工具」快速处理与「节点画布」可视化工作流编排。
+- **🕸️ 节点画布工作流**：
+  - 提供 **50 个节点**（6 个输入/输出节点 + 44 个功能节点）与 **6 套开箱即用模板**（视频转精品压缩 GIF、横屏转 9:16 配乐竖屏、Word/PPT 提取图片压缩写回原位、绿幕透明表情包流、Logo 抠图转 SVG + ICO 双路导出、视频抽帧拼图墙）。
+  - 支持连接类型校验、分支并排对比、节点 Bypass 旁路跳过、**增量智能缓存**（修改下游参数时上游已缓存节点秒级命中）以及工作流 JSON 导入导出。
+- **📦 批量队列处理**：除需交互框选/标段或原位回填的功能（画面裁剪、局部打码、多段剪辑、图片放回原位）及 3 个多文件合并/拼图功能外，其余 **37 个功能**均支持一次选择或拖入多个文件顺序批量处理（支持随时 `+ 添加文件`、移除队列项、独立定位输出文件与中途取消）。
+- **🔍 放大预览与对比**：处理完成后点击预览图或「⛶ 放大对比」，支持**并排同步缩放/平移**与**卷帘对比**（支持视频、GIF、位图与 SVG 矢量 vs 位图）。
+- **⚙️ 全局输出与硬件加速**：支持设置输出位置（源文件同目录 / `output` 子目录 / 自定义文件夹）、防覆盖自动编号，以及视频硬件编码加速（CPU / 自动检测 GPU / NVIDIA NVENC / Intel QSV / AMD AMF）。
+
+---
+
+## 功能清单（44 个，8 大类）
 
 ### 转换
 | 功能 | 说明 |
@@ -80,41 +109,46 @@ Windows 桌面小工具，全部处理在本地完成，无需联网、不上传
 | 🛡️ 清除隐私元数据 | 无损剥离视频/音频/图片中的设备型号、GPS 定位等 EXIF/Metadata |
 | 🎞️ 图片合成视频 | 多张图片（可不同尺寸）合成 GIF 或 MP4，自动黑边居中对齐 |
 
-- **批量处理**：除需交互框选/标段的「画面裁剪 / 局部打码 / 多段保留与删片段」和合并/拼图类功能外，其余全部 **35 个功能**均支持一次选择或拖入多个文件顺序批量处理（支持随时 `+ 添加文件`、移除队列项、独立定位输出文件与中途取消）。
-- **放大预览与对比**：处理完成后支持点击预览图或「⛶ 放大对比」，支持**并排同步缩放/平移**与**卷帘对比**（同样支持 SVG 矢量 vs 位图）。
-- **全局输出与加速设置**：顶部栏可切换输出目录（源文件同目录 / `output` 子目录 / 自定义文件夹）与视频硬件加速（CPU / 自动检测 GPU / NVIDIA NVENC / Intel QSV / AMD AMF），自动记忆偏好。
+---
 
-## 使用
-
-- **源码一键启动**：双击根目录 `启动工具箱.bat`（直接运行最新代码，不弹长期驻留黑框）
-- **免安装运行**：双击 `release/视频GIF工具箱-2.1.1-便携版.exe`
-- **安装版**：`release/视频GIF工具箱-2.1.1-安装版.exe`（若便携版被杀软误报，用这个）
-- **开发模式**：`npm start`
-
-## 开发
+## 开发与测试
 
 ```bash
-npm install          # 自动安装依赖并从 bin/*.exe.br 解压内置 FFmpeg（建议配置 ELECTRON_MIRROR 等 npmmirror 镜像）
-npm start            # 运行（若 bin/*.exe 缺失，启动时也会自动从内置压缩包解压）
-node scripts/smoke-test.js   # 冒烟测试（自动生成素材，93 用例覆盖全部功能）
-npm run dist         # 打包便携版 + 安装版到 release/
+npm install                    # 安装依赖并自动从 bin/*.exe.br 解压 FFmpeg
+npm start                      # 启动 Electron 应用
+node scripts/smoke-test.js     # 冒烟测试（自动生成素材，95 用例覆盖全部功能）
+node scripts/workflow-test.js  # 工作流引擎与真实媒体流水线端到端测试（7 项）
+npm run dist                   # 打包便携版 + 安装版到 release/
+npm run release                # 一键发布（支持 -Bump patch/minor/major）
 ```
+
+> 若在无头环境下运行 Electron UI 自检（`scripts/workflow-ui-check.js`），请先清空环境变量 `ELECTRON_RUN_AS_NODE` 后再用 `node_modules\electron\dist\electron.exe scripts\workflow-ui-check.js` 启动。
 
 ## 代码结构
 
 ```
-main.js            Electron 主进程：窗口、IPC（文件/目录对话框、硬件编码探测、首帧提取、批量探测）
-ffmpeg.js          统一门面：组合 core 与 modules，保持 IPC 调用接口兼容
-core/              基础设施：runner.js（ffprobe/ffmpeg/SVG/文档探测与执行器）、ffmpeg-bin.js（内置 FFmpeg 自动解压校验）、doc-parser.js（DOCX/PPTX/MD 解析）与 utils.js
-modules/           功能模块：video.js、image.js、svg.js、document.js
-preload.js         contextBridge 安全桥接（含 webUtils.getPathForFile 处理拖拽路径）
-renderer/          界面：features/（功能注册表）+ ui/（参数面板/裁剪画布/放大对比弹窗）+ app.js（队列与交互编排）
-bin/               内置 FFmpeg 9.0.2（gyan.dev）：仓库内置 ffmpeg.exe.br / ffprobe.exe.br 压缩包（每件 ~28MB），npm install 或首次启动自动解压出 ffmpeg.exe / ffprobe.exe，打包时经 extraResources 释放
-scripts/           FFmpeg 解压校验（ensure-ffmpeg.js）、冒烟测试、WebP 渲染校验工具
+main.js                 Electron 主进程：窗口、IPC（文件对话框、硬件编码探测、首帧提取、工作流缓存与导出）
+ffmpeg.js               统一门面：组合 core 与 modules，保持 IPC 调用接口兼容
+启动工具箱.bat          Windows 源码一键启动脚本（自动清理 ELECTRON_RUN_AS_NODE 并在缺依赖时安装）
+core/
+  ├── ffmpeg-bin.js     内置 FFmpeg 路径解析、Brotli 自动解压与 SHA-256 校验
+  ├── runner.js         ffprobe / ffmpeg / SVG / 文档探测与任务执行器
+  ├── doc-parser.js     DOCX / PPTX / MD 媒体解析与回填
+  └── utils.js          滤镜拼装、GIF 调色板、PGM 圆角遮罩等公共工具
+modules/                功能实现：video.js、image.js、svg.js、document.js
+preload.js              contextBridge 安全桥接（含 webUtils.getPathForFile 拖拽路径获取）
+renderer/
+  ├── app.js            单工具主界面、批量队列与交互编排
+  ├── features/         44 个功能注册表（video-gif.js、image.js、svg.js、document.js）
+  ├── ui/               参数面板、裁剪画布、放大对比弹窗
+  └── workflow/         节点画布、拓扑执行引擎、50 节点注册表与 6 套预设模板
+bin/                    内置 FFmpeg 9.0.2（gyan.dev）：仓库内置 .br 压缩包（每件 ~28MB）与 binaries.json；安装/启动自动解压，打包时经 extraResources 释放
+scripts/                ensure-ffmpeg.js、smoke-test.js、workflow-test.js、workflow-ui-check.js、webp-check.js、release.ps1
 ```
 
 ## 技术备注
 
-- **为什么自带 ffmpeg 9.0.2 而不用 ffmpeg-static**：后者内置的 ffmpeg 6.1 存在动画 WebP 编码缺陷（输出文件损坏，Chromium 也无法解码），且 9.0 对 filtergraph 引号解析更严格。项目已针对 9.0 适配：GIF 加文字走 textfile（免疫特殊字符）、字幕烧录走 ASCII 临时副本（规避 Windows 盘符与中文路径转义坑）、圆角装饰用 JS 生成抗锯齿 PGM 遮罩叠加（比逐像素 `geq` 快数十倍）。
-- 无损截取使用输出端 seek（`-i` 在 `-ss` 前），时长精确；起点若不在关键帧，个别播放器开头可能短暂定格，需要完美开头就用"精确"模式。
-- 视频目标大小压缩按 duration 反推码率（含 5% 容器开销余量）；GIF 为迭代降参（宽度/帧率/颜色/抖动逐级收紧，最多 7 轮），极复杂的动画可能压不到极小目标，会保留体积最小一轮的结果并提示。
+- **为什么自带 FFmpeg 9.0.2 而不用 `ffmpeg-static`**：后者内置的 FFmpeg 6.1 存在动画 WebP 编码缺陷（输出文件损坏，Chromium 也无法解码），且 9.0 对 filtergraph 引号解析更严格。项目已针对 9.0 适配：GIF 加文字走 `textfile`（免疫特殊字符）、字幕烧录走 ASCII 临时副本（规避 Windows 盘符与中文路径转义坑）、圆角装饰用 JS 生成抗锯齿 PGM 遮罩叠加（比逐像素 `geq` 快数十倍）。
+- **如何解决 GitHub 100 MB 单文件限制**：`ffmpeg.exe` 与 `ffprobe.exe` 原始体积各约 100.5 MB，仓库内以 Brotli 压缩包（[ffmpeg.exe.br](bin/ffmpeg.exe.br) 约 28.3 MB、[ffprobe.exe.br](bin/ffprobe.exe.br) 约 28.2 MB）+ [binaries.json](bin/binaries.json) 形式保存；`npm install` 或应用启动时本地秒级解压并校验完整性，打包成品仅复制最终 `.exe` 至 `resources/bin/`。
+- **无损截取策略**：使用输出端 seek（`-i` 在 `-ss` 前），时长精确；起点若不在关键帧，个别播放器开头可能短暂定格，需要完美开头建议使用「精确」模式。
+- **目标大小压缩策略**：视频按 `duration` 反推码率（含 5% 容器开销余量）；GIF 为迭代降参（宽度/帧率/颜色/抖动逐级收紧，最多 7 轮），极复杂的动画可能压不到极小目标，会保留体积最小一轮的结果并提示。
