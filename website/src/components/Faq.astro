@@ -4,11 +4,19 @@ import { app, data, repoUrl } from '../lib/site';
 const faqs = [
   {
     q: '真的完全离线吗？会不会偷偷上传我的文件？',
-    a: `是的，完全离线。所有处理都由安装包内置的 FFmpeg ${app.ffmpeg}、Resvg、SVGO 等组件在本机完成，软件没有任何服务器，也不需要账号。只有一个例外：用 Markdown 相关功能处理文中引用的网络图片时，软件会去下载这些图片，且只会访问图片本身的地址。源码完全公开，欢迎审查。`,
+    a: `是的，媒体处理完全离线。所有音视频、图片与文档处理都由安装包内置的 FFmpeg ${app.ffmpeg}、Resvg、SVGO 等组件在本机完成，软件没有任何服务器，也不需要账号。仅在两个用户主动触发的场景会联网：处理 Markdown 中引用的网络图片（仅访问图片本身地址）以及应用内手动检查热更新。源码完全公开，欢迎审查。`,
   },
   {
     q: '安装版和便携版怎么选？',
     a: '想长期使用，选安装版：会创建快捷方式，杀毒软件误报的概率也更低。想放在 U 盘里或临时用一下，选便携版：下载后双击就能运行。两个版本的功能完全一样。',
+  },
+  {
+    q: '后续更新每次都要重新下载 130 MB 安装包吗？',
+    a: '不需要。软件已内置几百 KB 级别的轻量级业务热更新（安装版与便携版通用），支持国内镜像自动择优、SHA-256 校验、秒级重载生效以及异常自动回滚；仅在涉及底层 Electron 或 FFmpeg 升级时才会提示下载完整安装包。',
+  },
+  {
+    q: '国内下载安装包比较慢怎么办？',
+    a: '可以在上方下载区切换到「国内加速通道 1」或「国内加速通道 2」，页面会自动把安装版和便携版按钮切换成加速直链；也可以直接前往 GitHub Releases 页面下载并核对文件大小或校验值。',
   },
   {
     q: '打开时 Windows 提示“已保护你的电脑”怎么办？',
@@ -32,9 +40,19 @@ const faqs = [
   },
   {
     q: '收费吗？可以商用吗？',
-    a: `完全免费，基于 MIT 协议开源，可以自由使用、修改和分发。如果觉得好用，欢迎到 GitHub 点个 Star ⭐`,
+    a: '完全免费，基于 MIT 协议开源，可以自由使用、修改和分发。如果觉得好用，欢迎到 GitHub 点个 Star ⭐',
   },
 ];
+
+const faqJsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'FAQPage',
+  mainEntity: faqs.map((f) => ({
+    '@type': 'Question',
+    name: f.q,
+    acceptedAnswer: { '@type': 'Answer', text: f.a },
+  })),
+};
 ---
 
 <section class="section" id="faq">
@@ -56,6 +74,7 @@ const faqs = [
     </div>
     <p class="faq-more reveal">还有其他问题？<a href={`${repoUrl}/issues`} target="_blank" rel="noopener">到 GitHub Issues 提问 →</a></p>
   </div>
+  <script type="application/ld+json" set:html={JSON.stringify(faqJsonLd)} />
 </section>
 
 <style>
@@ -79,7 +98,7 @@ const faqs = [
   }
   .faq-ico::after { transform: rotate(90deg); }
   .faq[open] .faq-ico::after { transform: rotate(0deg); }
-  .faq p { padding: 0 22px 20px; color: var(--text-2); font-size: 15px; }
+  .faq p { padding: 0 22px 20px; color: var(--text-2); font-size: 15px; line-height: 1.65; }
   .faq-more { margin-top: 28px; text-align: center; color: var(--text-3); font-size: 14px; }
   .faq-more a { color: var(--accent-hi); }
 </style>

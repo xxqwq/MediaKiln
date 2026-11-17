@@ -35,7 +35,21 @@ const docShot = ['screenshots/doc-extract.webp', 'screenshots/doc-extract-images
         <div class="tile-icon">📦</div>
         <h3>拖进一堆文件，批量处理</h3>
         <p>{s.batchFeatures} 个功能支持多文件队列：可以随时添加、移除、中途取消，单个文件失败不会影响其他文件。</p>
-        {batchShot && <img class="tile-shot" src={url(batchShot)} alt="批量队列处理完成后的界面截图" loading="lazy" width="1440" height="900" />}
+        {batchShot && (
+          <div class="shot-frame">
+            <img
+              class="tile-shot"
+              src={url(batchShot)}
+              alt="批量队列处理完成后的界面截图"
+              data-caption="批量队列处理：一次拖入多个文件顺序处理，实时显示各自压缩率"
+              data-zoomable
+              loading="lazy"
+              width="1440"
+              height="900"
+            />
+            <span class="shot-zoom-badge" aria-hidden="true">🔍 放大</span>
+          </div>
+        )}
       </article>
 
       <!-- 目标大小 -->
@@ -54,7 +68,19 @@ const docShot = ['screenshots/doc-extract.webp', 'screenshots/doc-extract-images
         <h3>Word / PPT 图片：提取、压缩、放回原位</h3>
         <p>自动识别 .docx / .pptx 里的所有图片，可以只处理指定章节或页面，原位压缩、打码、美化后再写回文档，文字和排版完全不变。</p>
         {docShot ? (
-          <img class="tile-shot" src={url(docShot)} alt="Word / PPT 提取图片界面截图" loading="lazy" width="1440" height="900" />
+          <div class="shot-frame">
+            <img
+              class="tile-shot"
+              src={url(docShot)}
+              alt="Word / PPT 提取图片界面截图"
+              data-caption="文档图片提取与原位回填：支持按章节筛选、贴剪贴板替换并一键写回原 Word/PPT"
+              data-zoomable
+              loading="lazy"
+              width="1440"
+              height="900"
+            />
+            <span class="shot-zoom-badge" aria-hidden="true">🔍 放大</span>
+          </div>
         ) : (
           <div class="doc-flow" aria-hidden="true">
             <span class="df-file">📄 方案.pptx<em>含大量原图</em></span>
@@ -71,7 +97,21 @@ const docShot = ['screenshots/doc-extract.webp', 'screenshots/doc-extract-images
         <div class="tile-icon">🪄</div>
         <h3>抠图、换背景、转矢量</h3>
         <p>纯色或绿幕一键抠成透明底，换纯色、渐变或图片背景；还能把 Logo 描摹成可以无限放大的 SVG。</p>
-        {cutoutShot && <img class="tile-shot" src={url(cutoutShot)} alt="抠图 / 更换背景功能截图" loading="lazy" width="1440" height="900" />}
+        {cutoutShot && (
+          <div class="shot-frame cutout-crop">
+            <img
+              class="tile-shot"
+              src={url(cutoutShot)}
+              alt="抠图 / 更换背景功能截图"
+              data-caption="纯色/绿幕抠图透明 PNG：实时容差与边缘羽化调节，一键导出透明底"
+              data-zoomable
+              loading="lazy"
+              width="1440"
+              height="900"
+            />
+            <span class="shot-zoom-badge" aria-hidden="true">🔍 放大</span>
+          </div>
+        )}
       </article>
 
       <!-- 小卡片 -->
@@ -106,21 +146,56 @@ const docShot = ['screenshots/doc-extract.webp', 'screenshots/doc-extract-images
     gap: 18px;
   }
   .tile { padding: 28px; position: relative; overflow: hidden; display: flex; flex-direction: column; }
+  .tile:hover { transform: translateY(-2px); border-color: var(--border-3); }
   .tile h3 { font-size: 19px; line-height: 1.4; margin: 14px 0 8px; font-weight: 650; }
   .tile p { color: var(--text-2); font-size: 15px; }
   .tile-icon {
     width: 42px; height: 42px; border-radius: 12px;
     display: grid; place-items: center; font-size: 20px;
-    background: rgba(255, 255, 255, .05);
+    background: rgba(255, 255, 255, .055);
     border: 1px solid var(--border-2);
+  }
+
+  .shot-frame {
+    position: relative;
+    margin-top: 22px;
+    border-radius: 11px;
+    border: 1px solid var(--border-2);
+    overflow: hidden;
+    background: #0d0e13;
+    box-shadow: 0 22px 44px -22px rgba(0, 0, 0, .75);
   }
   .tile-shot {
-    margin-top: 22px;
-    border-radius: 10px;
-    border: 1px solid var(--border-2);
-    width: 100%; height: auto;
-    box-shadow: 0 20px 40px -20px rgba(0, 0, 0, .7);
+    width: 100%; height: auto; display: block;
+    transition: transform .35s var(--ease);
   }
+  .shot-frame:hover .tile-shot { transform: scale(1.015); }
+  .t-doc .shot-frame, .t-cutout .shot-frame { margin-top: auto; }
+  .t-doc p, .t-cutout p { margin-bottom: 22px; }
+  /* 裁去 image-cutout.webp 顶部滚动残影，保留完整参数面板与前后透明抠图对比 */
+  .cutout-crop { aspect-ratio: 16 / 9.4; }
+  .cutout-crop .tile-shot {
+    height: 100%;
+    object-fit: cover;
+    object-position: center bottom;
+  }
+  .shot-zoom-badge {
+    position: absolute;
+    right: 10px;
+    bottom: 10px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    font-size: 11.5px;
+    color: #fff;
+    background: rgba(11, 12, 16, .76);
+    border: 1px solid rgba(255, 255, 255, .16);
+    backdrop-filter: blur(8px);
+    opacity: 0;
+    transform: translateY(4px);
+    transition: opacity .2s, transform .2s;
+    pointer-events: none;
+  }
+  .shot-frame:hover .shot-zoom-badge { opacity: 1; transform: none; }
 
   .t-privacy { grid-column: span 3; }
   .t-batch { grid-column: span 3; grid-row: span 2; }
@@ -144,7 +219,7 @@ const docShot = ['screenshots/doc-extract.webp', 'screenshots/doc-extract-images
 
   .t-privacy { background: radial-gradient(120% 90% at 0% 0%, rgba(61, 214, 140, .10), transparent 60%), linear-gradient(180deg, rgba(255, 255, 255, .035), rgba(255, 255, 255, .015)); }
   .t-batch { background: radial-gradient(100% 70% at 100% 0%, rgba(124, 116, 255, .16), transparent 60%), linear-gradient(180deg, rgba(255, 255, 255, .035), rgba(255, 255, 255, .015)); }
-  .t-batch .tile-shot { margin-top: auto; padding-top: 0; }
+  .t-batch .shot-frame { margin-top: auto; }
   .t-batch p { margin-bottom: 22px; }
 
   /* 隐私流程示意 */

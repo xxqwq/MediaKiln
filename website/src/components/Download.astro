@@ -1,5 +1,13 @@
 ---
-import { app, assetUrl, assetName, assetSize, releasesUrl, repoUrl, dlVersion, release, fmtBytes } from '../lib/site';
+import { app, assetUrl, assetName, assetSize, releasesUrl, repoUrl, dlVersion, fmtBytes, mirrorPrefixes } from '../lib/site';
+
+const mirrors = [
+  { id: 'official', label: '🌐 GitHub 官方源（默认）', prefix: mirrorPrefixes.official },
+  { id: 'ghproxy', label: '⚡ 国内加速通道 1', prefix: mirrorPrefixes.ghproxy },
+  { id: 'ghfast', label: '⚡ 国内加速通道 2', prefix: mirrorPrefixes.ghfast },
+];
+
+const cloneCmd = `git clone https://github.com/${app.repo}.git`;
 ---
 
 <section class="section dl-section" id="download">
@@ -8,15 +16,31 @@ import { app, assetUrl, assetName, assetSize, releasesUrl, repoUrl, dlVersion, r
       <div class="dl-glow" aria-hidden="true"></div>
       <div class="section-head">
         <div class="eyebrow">免费下载</div>
-        <h2 class="h2">现在就开始，<span class="grad-text">不注册、不联网</span></h2>
+        <h2 class="h2">现在就开始，<span class="grad-text nowrap-pair"><span>不注册、</span><span>不联网</span></span></h2>
         <p class="lead">
           最新版本 <strong data-rel-version>v{dlVersion}</strong><span data-rel-date></span>
           <br />安装包已内置 FFmpeg {app.ffmpeg}，无需另行配置
         </p>
       </div>
 
+      <div class="dl-mirror-wrap">
+        <div class="dl-mirror-seg" role="group" aria-label="选择下载源">
+          {mirrors.map((m, i) => (
+            <button
+              type="button"
+              class="dl-mirror-btn"
+              aria-pressed={i === 0 ? 'true' : 'false'}
+              data-mirror-prefix={m.prefix}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+        <p class="dl-mirror-note">加速通道经公共 GitHub 镜像代理直链，若遇单条线路波动可切换其他线路或前往 Releases 页面核对 SHA-256。</p>
+      </div>
+
       <div class="dl-options">
-        <a class="dl-option primary" href={assetUrl('setup')} data-dl="setup">
+        <a class="dl-option primary" href={assetUrl('setup')} data-dl="setup" data-raw-url={assetUrl('setup')}>
           <span class="dl-badge">推荐</span>
           <span class="dl-ico" aria-hidden="true">💿</span>
           <span class="dl-title">安装版</span>
@@ -24,7 +48,7 @@ import { app, assetUrl, assetName, assetSize, releasesUrl, repoUrl, dlVersion, r
           <span class="dl-file"><span data-dl-name="setup">{assetName('setup')}</span><span data-dl-size="setup">{assetSize('setup') ? fmtBytes(assetSize('setup')) : ''}</span></span>
           <span class="btn btn-primary">下载安装版</span>
         </a>
-        <a class="dl-option" href={assetUrl('portable')} data-dl="portable">
+        <a class="dl-option" href={assetUrl('portable')} data-dl="portable" data-raw-url={assetUrl('portable')}>
           <span class="dl-ico" aria-hidden="true">🎒</span>
           <span class="dl-title">便携版</span>
           <span class="dl-desc">免安装，下载后双击即可运行，可以放在 U 盘里随身携带。</span>
@@ -40,9 +64,17 @@ import { app, assetUrl, assetName, assetSize, releasesUrl, repoUrl, dlVersion, r
         <li><span>价格</span>免费 · MIT 开源</li>
       </ul>
 
+      <div class="dl-dev">
+        <span class="dl-dev-label">源码运行（Node.js 18+）</span>
+        <div class="dl-cmd-box">
+          <code>{cloneCmd}</code>
+          <button type="button" class="dl-copy-btn" id="dl-copy-btn" data-copy={cloneCmd}>复制命令</button>
+        </div>
+      </div>
+
       <div class="dl-more">
         <a href={releasesUrl} target="_blank" rel="noopener">历史版本与更新日志 →</a>
-        <a href={repoUrl} target="_blank" rel="noopener">从源码运行（Node.js 18+）→</a>
+        <a href={repoUrl} target="_blank" rel="noopener">前往 GitHub 源码仓库 →</a>
       </div>
     </div>
   </div>
@@ -51,28 +83,55 @@ import { app, assetUrl, assetName, assetSize, releasesUrl, repoUrl, dlVersion, r
 <style>
   .dl-card {
     position: relative; overflow: hidden;
-    padding: 72px 48px 48px;
+    padding: 68px 48px 44px;
     border-radius: 28px;
-    background: linear-gradient(180deg, rgba(124, 116, 255, .10), rgba(255, 255, 255, .02) 60%);
-    border: 1px solid rgba(124, 116, 255, .25);
+    background: linear-gradient(180deg, rgba(124, 116, 255, .11), rgba(255, 255, 255, .02) 60%);
+    border: 1px solid rgba(124, 116, 255, .28);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .12), 0 28px 80px -24px rgba(0, 0, 0, .75);
   }
   .dl-glow {
-    position: absolute; width: 700px; height: 400px; left: 50%; top: -240px; transform: translateX(-50%);
-    background: radial-gradient(closest-side, rgba(124, 116, 255, .45), transparent); filter: blur(40px);
+    position: absolute; width: 720px; height: 420px; left: 50%; top: -240px; transform: translateX(-50%);
+    background: radial-gradient(closest-side, rgba(124, 116, 255, .48), transparent); filter: blur(42px);
     pointer-events: none;
   }
-  .dl-card .section-head { position: relative; margin-bottom: 40px; }
+  .dl-card .section-head { position: relative; margin-bottom: 28px; }
+  .nowrap-pair span { display: inline-block; }
   .lead strong { color: var(--text); }
+
+  .dl-mirror-wrap {
+    position: relative;
+    display: flex; flex-direction: column; align-items: center; gap: 10px;
+    margin-bottom: 28px;
+  }
+  .dl-mirror-seg {
+    display: inline-flex; flex-wrap: wrap; justify-content: center; gap: 6px;
+    padding: 4px; border-radius: 999px;
+    background: rgba(11, 12, 16, .65);
+    border: 1px solid var(--border-2);
+  }
+  .dl-mirror-btn {
+    height: 32px; padding: 0 14px; border-radius: 999px;
+    font-size: 13px; color: var(--text-2);
+    transition: all .2s var(--ease);
+  }
+  .dl-mirror-btn:hover { color: var(--text); }
+  .dl-mirror-btn[aria-pressed="true"] {
+    background: var(--accent-soft);
+    color: #fff;
+    box-shadow: inset 0 0 0 1px var(--accent-ring);
+  }
+  .dl-mirror-note { font-size: 12px; color: var(--text-3); text-align: center; max-width: 640px; }
+
   .dl-options { position: relative; display: grid; grid-template-columns: 1fr 1fr; gap: 18px; max-width: 860px; margin: 0 auto; }
   .dl-option {
     min-width: 0;
     position: relative; display: flex; flex-direction: column; gap: 8px;
     padding: 28px; border-radius: 20px;
-    background: rgba(11, 12, 16, .6); border: 1px solid var(--border-2);
+    background: rgba(11, 12, 16, .64); border: 1px solid var(--border-2);
     transition: border-color .2s, transform .2s var(--ease);
   }
   .dl-option:hover { border-color: var(--border-3); transform: translateY(-2px); }
-  .dl-option.primary { border-color: rgba(124, 116, 255, .45); }
+  .dl-option.primary { border-color: rgba(124, 116, 255, .48); }
   .dl-badge {
     position: absolute; top: 20px; right: 20px; font-size: 12px; font-weight: 600;
     padding: 3px 10px; border-radius: 999px; background: var(--accent); color: #fff;
@@ -90,18 +149,77 @@ import { app, assetUrl, assetName, assetSize, releasesUrl, repoUrl, dlVersion, r
   .dl-option .btn { margin-top: 10px; width: 100%; }
 
   .dl-req {
-    position: relative; list-style: none; margin: 36px auto 0; max-width: 860px;
+    position: relative; list-style: none; margin: 32px auto 0; max-width: 860px;
     display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;
   }
   .dl-req li { font-size: 14px; display: flex; flex-direction: column; gap: 2px; padding: 12px 16px; border-left: 2px solid var(--border-2); }
   .dl-req li span { font-size: 12px; color: var(--text-3); }
-  .dl-more { position: relative; margin-top: 30px; display: flex; justify-content: center; gap: 28px; flex-wrap: wrap; font-size: 14px; }
+
+  .dl-dev {
+    position: relative;
+    margin: 26px auto 0; max-width: 860px;
+    display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap;
+    padding: 12px 16px; border-radius: 14px;
+    background: rgba(11, 12, 16, .52); border: 1px solid var(--border);
+  }
+  .dl-dev-label { font-size: 13px; color: var(--text-2); }
+  .dl-cmd-box {
+    display: inline-flex; align-items: center; gap: 10px; max-width: 100%;
+    padding: 5px 6px 5px 12px; border-radius: 9px;
+    background: rgba(255, 255, 255, .035); border: 1px solid var(--border-2);
+  }
+  .dl-cmd-box code {
+    font-family: var(--mono); font-size: 12.5px; color: #d6d3ff;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .dl-copy-btn {
+    height: 26px; padding: 0 10px; border-radius: 7px; font-size: 12px; font-weight: 500;
+    color: var(--text); background: rgba(255, 255, 255, .07); border: 1px solid var(--border-2);
+    flex-shrink: 0; transition: background .2s, border-color .2s;
+  }
+  .dl-copy-btn:hover { background: var(--accent-soft); border-color: var(--accent-ring); }
+
+  .dl-more { position: relative; margin-top: 26px; display: flex; justify-content: center; gap: 28px; flex-wrap: wrap; font-size: 14px; }
   .dl-more a { color: var(--accent-hi); }
   .dl-more a:hover { text-decoration: underline; }
 
   @media (max-width: 760px) {
-    .dl-card { padding: 52px 18px 32px; border-radius: 22px; }
+    .dl-card { padding: 48px 18px 32px; border-radius: 22px; }
+    .dl-mirror-seg { border-radius: 14px; }
     .dl-options { grid-template-columns: 1fr; }
     .dl-req { grid-template-columns: 1fr 1fr; }
+    .dl-cmd-box { width: 100%; justify-content: space-between; }
+    .dl-cmd-box code { font-size: 11px; min-width: 0; }
   }
 </style>
+
+<script>
+  const mirrorBtns = document.querySelectorAll<HTMLButtonElement>('.dl-mirror-btn');
+  mirrorBtns.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const prefix = btn.dataset.mirrorPrefix || '';
+      mirrorBtns.forEach((b) => b.setAttribute('aria-pressed', String(b === btn)));
+      const apply = (window as Window & { __vgtApplyDlMirror?: (p: string) => void }).__vgtApplyDlMirror;
+      if (apply) {
+        apply(prefix);
+      } else {
+        document.querySelectorAll<HTMLAnchorElement>('[data-dl]').forEach((a) => {
+          const raw = a.getAttribute('data-raw-url') || a.getAttribute('href') || '';
+          if (raw) a.href = prefix + raw;
+        });
+      }
+    });
+  });
+
+  const copyBtn = document.getElementById('dl-copy-btn');
+  copyBtn?.addEventListener('click', async () => {
+    const cmd = copyBtn.getAttribute('data-copy') || '';
+    if (!cmd) return;
+    try {
+      await navigator.clipboard.writeText(cmd);
+      const prev = copyBtn.textContent;
+      copyBtn.textContent = '已复制 ✓';
+      window.setTimeout(() => { copyBtn.textContent = prev; }, 2000);
+    } catch {}
+  });
+</script>

@@ -29,20 +29,39 @@ export const releasesUrl = `${repoUrl}/releases`;
 export const latestReleaseUrl = `${repoUrl}/releases/latest`;
 
 /** 构建时获取到的最新已发布 Release（可能为 null） */
-export const release = (appData as { latestRelease?: { tag: string; version: string; publishedAt?: string; assets: { name: string; size: number; url: string }[] } | null }).latestRelease || null;
+export const release = (appData as {
+  latestRelease?: {
+    tag: string;
+    version: string;
+    publishedAt?: string;
+    assets: { name: string; label?: string; size: number; url: string }[];
+  } | null;
+}).latestRelease || null;
 
 /** 页面上展示的“可下载版本”：优先使用已发布的 Release，避免显示尚未发布的开发版本号 */
 export const dlVersion = release?.version || app.version;
 
-/** 下载直链：找到 Release 资源则直连，否则回退到 Releases 最新页（运行时脚本还会再次刷新） */
+function findAsset(kind: 'setup' | 'portable') {
+  const nameRe = kind === 'setup' ? /(-setup|安装版)\.exe$/i : /(-portable|便携版)\.exe$/i;
+  const labelRe = kind === 'setup' ? /安装版/i : /便携版/i;
+  return release?.assets.find((a) => nameRe.test(a.name) || labelRe.test(a.label || ''));
+}
+
+/** 下载直链：优先取 Release 资产直链，构建期离线/限流时回退到确定性的 GitHub 下载直链（运行时脚本还会再次刷新） */
 export const assetUrl = (kind: 'setup' | 'portable') =>
-  release?.assets.find((a) => new RegExp(`-${kind}\\.exe$`, 'i').test(a.name))?.url || latestReleaseUrl;
+  findAsset(kind)?.url || `https://github.com/${app.repo}/releases/download/v${dlVersion}/video-gif-toolbox-${dlVersion}-${kind}.exe`;
 
 export const assetName = (kind: 'setup' | 'portable') =>
-  release?.assets.find((a) => new RegExp(`-${kind}\\.exe$`, 'i').test(a.name))?.name || `video-gif-toolbox-${dlVersion}-${kind}.exe`;
+  findAsset(kind)?.label || findAsset(kind)?.name || `视频GIF工具箱-${dlVersion}-${kind === 'setup' ? '安装版' : '便携版'}.exe`;
 
 export const assetSize = (kind: 'setup' | 'portable') =>
-  release?.assets.find((a) => new RegExp(`-${kind}\\.exe$`, 'i').test(a.name))?.size || 0;
+  findAsset(kind)?.size || 0;
+
+export const mirrorPrefixes = {
+  official: '',
+  ghproxy: 'https://gh-proxy.com/',
+  ghfast: 'https://ghfast.top/',
+} as const;
 
 export const fmtBytes = (n: number) => {
   if (!Number.isFinite(n) || n <= 0) return '-';

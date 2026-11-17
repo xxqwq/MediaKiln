@@ -5,17 +5,32 @@ import { data, url, hasAsset, readPublicJson, fmtBytes } from '../lib/site';
 
 interface Item { id: string; title: string; before: string; after: string; beforeBytes?: number; afterBytes?: number; feature?: string; note?: string }
 
-// 文件大小在构建时直接从真实文件读取，保证展示数字与素材一致
 const sizeOf = (p: string) => {
   try { return fs.statSync(path.resolve(process.cwd(), 'public', p)).size; } catch { return 0; }
 };
 const featureName = (id?: string) => data.features.find((f) => f.id === id)?.name || id;
+const extLabel = (p: string) => path.extname(p).slice(1).toUpperCase();
+
+const techNotes: Record<string, string> = {
+  vector: '轮廓描摹 + SVGO 精简 · 任意放大不糊',
+  cutout: 'JPG → 32-bit 透明通道 PNG · 边缘抗锯齿羽化',
+  gif: '动态调色板 + 局部帧间差分瘦身',
+  bg: '边缘连通识别 · 保留主体内同色细节',
+};
 
 const items = readPublicJson<Item[]>('compare/meta.json', [])
   .map((it) => {
     const before = it.before.replace(/^\/?(compare\/)?/, 'compare/');
     const after = it.after.replace(/^\/?(compare\/)?/, 'compare/');
-    return { ...it, before, after, beforeBytes: sizeOf(before), afterBytes: sizeOf(after), feature: featureName(it.feature) };
+    return {
+      ...it,
+      before,
+      after,
+      beforeBytes: sizeOf(before),
+      afterBytes: sizeOf(after),
+      feature: featureName(it.feature),
+      techNote: it.note || techNotes[it.id] || '',
+    };
   })
   .filter((it) => hasAsset(it.before) && hasAsset(it.after));
 
@@ -28,38 +43,75 @@ const pct = (a?: number, b?: number) => (a && b ? Math.round((1 - b / a) * 100) 
       <div class="section-head reveal">
         <div class="eyebrow">真实效果</div>
         <h2 class="h2">拖动滑块，<span class="grad-text">看看处理前后的区别</span></h2>
-        <p class="lead">以下素材都由本软件实际处理生成，没有任何后期修饰。文件大小均为真实字节数。</p>
+        <p class="lead">以下素材均由本软件实际处理生成，没有任何后期修饰；可开启 2× 放大检视矢量与抠图边缘。</p>
       </div>
 
       <div class="cmp-tabs reveal" role="tablist" aria-label="对比示例">
         {items.map((it, i) => (
-          <button class="chip" role="tab" aria-selected={i === 0 ? 'true' : 'false'} id={`cmp-tab-${it.id}`} aria-controls={`cmp-${it.id}`} data-cmp={it.id}>{it.title}</button>
+          <button type="button" class="chip" role="tab" aria-selected={i === 0 ? 'true' : 'false'} id={`cmp-tab-${it.id}`} aria-controls={`cmp-${it.id}`} data-cmp={it.id}>{it.title}</button>
         ))}
       </div>
 
       {items.map((it, i) => {
         const saved = pct(it.beforeBytes, it.afterBytes);
+        const shrunk = it.beforeBytes > 0 && it.afterBytes > 0 && it.afterBytes < it.beforeBytes;
+        const deferred = i > 0;
         return (
-          <div class="cmp-panel reveal" id={`cmp-${it.id}`} role="tabpanel" aria-labelledby={`cmp-tab-${it.id}`} hidden={i !== 0}>
-            <div class="cmp-frame" style="--pos: 50%">
-              <img class="cmp-img cmp-before" src={url(it.before)} alt={`${it.title}：处理前`} loading="lazy" draggable="false" />
-              <img class="cmp-img cmp-after" src={url(it.after)} alt={`${it.title}：处理后`} loading="lazy" draggable="false" />
-              <span class="cmp-label l">处理前</span>
-              <span class="cmp-label r">处理后</span>
+          <div class="cmp-panel reveal" id={`cmp-${it.id}`} role="tabpanel" aria-labelledby={`cmp-tab-${it.id}`} hidden={i !== 0} data-loaded={deferred ? 'false' : 'true'}>
+            <div class="cmp-frame" style="--pos: 50%" data-zoom="false">
+              <div class="cmp-layer cmp-layer-before">
+                <img
+                  class="cmp-img"
+                  src={deferred ? undefined : url(it.before)}
+                  data-src={deferred ? url(it.before) : undefined}
+                  alt={`${it.title}：处理前`}
+                  loading={deferred ? 'lazy' : 'eager'}
+                  draggable="false"
+                />
+              </div>
+              <div class="cmp-layer cmp-layer-after">
+                <img
+                  class="cmp-img"
+                  src={deferred ? undefined : url(it.after)}
+                  data-src={deferred ? url(it.after) : undefined}
+                  alt={`${it.title}：处理后`}
+                  loading={deferred ? 'lazy' : 'eager'}
+                  draggable="false"
+                />
+              </div>
+              {deferred && <div class="cmp-loading" aria-hidden="true"><span>素材加载中…</span></div>}
+              <span class="cmp-label l">处理前 · {extLabel(it.before)}</span>
+              <span class="cmp-label r">处理后 · {extLabel(it.after)}</span>
               <div class="cmp-handle" aria-hidden="true"><span>⟷</span></div>
               <input class="cmp-range" type="range" min="0" max="100" value="50" aria-label={`${it.title} 对比滑块`} />
             </div>
+
+            <div class="cmp-controls">
+              <div class="cmp-presets" role="group" aria-label="快速定位对比位置">
+                <button type="button" class="cmp-ctl-btn" data-pos="0">只看原图</button>
+                <button type="button" class="cmp-ctl-btn" data-pos="50">50 : 50</button>
+                <button type="button" class="cmp-ctl-btn" data-pos="100">只看成品</button>
+              </div>
+              <button type="button" class="cmp-ctl-btn cmp-zoom-btn" aria-pressed="false" data-zoom-toggle>🔍 2× 细节放大</button>
+            </div>
+
             <div class="cmp-meta">
               {it.feature && <span class="tag">使用功能：{it.feature}</span>}
-              {it.beforeBytes > 0 && it.afterBytes > 0 && it.afterBytes < it.beforeBytes && (
+              {shrunk ? (
                 <span class="cmp-size">
                   <span>{fmtBytes(it.beforeBytes)}</span>
                   <span class="arrow">→</span>
                   <strong>{fmtBytes(it.afterBytes)}</strong>
                   {saved !== null && saved > 0 && <span class="saved">体积 −{saved}%</span>}
                 </span>
+              ) : (
+                <span class="cmp-size">
+                  <span>{extLabel(it.before)} ({fmtBytes(it.beforeBytes)})</span>
+                  <span class="arrow">→</span>
+                  <strong>{extLabel(it.after)} ({fmtBytes(it.afterBytes)})</strong>
+                </span>
               )}
-              {it.note && <span class="cmp-note">{it.note}</span>}
+              {it.techNote && <span class="cmp-note">{it.techNote}</span>}
             </div>
           </div>
         );
@@ -69,73 +121,184 @@ const pct = (a?: number, b?: number) => (a && b ? Math.round((1 - b / a) * 100) 
 )}
 
 <style>
-  .cmp-tabs { display: flex; justify-content: center; flex-wrap: wrap; gap: 8px; margin-bottom: 26px; }
+  .cmp-tabs { display: flex; justify-content: center; flex-wrap: wrap; gap: 8px; margin-bottom: 24px; }
   .cmp-panel { max-width: 960px; margin: 0 auto; }
   .cmp-frame {
-    position: relative; display: grid;
+    position: relative;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    max-height: 540px;
     border-radius: 16px; overflow: hidden;
     border: 1px solid var(--border-2);
     box-shadow: var(--shadow-pop);
-    background-color: #1a1b21;
+    background-color: #181920;
     background-image:
-      linear-gradient(45deg, #23242b 25%, transparent 25%), linear-gradient(-45deg, #23242b 25%, transparent 25%),
-      linear-gradient(45deg, transparent 75%, #23242b 75%), linear-gradient(-45deg, transparent 75%, #23242b 75%);
+      linear-gradient(45deg, #22232b 25%, transparent 25%), linear-gradient(-45deg, #22232b 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #22232b 75%), linear-gradient(-45deg, transparent 75%, #22232b 75%);
     background-size: 22px 22px;
     background-position: 0 0, 0 11px, 11px -11px, -11px 0;
     user-select: none;
     touch-action: pan-y;
   }
-  .cmp-img { grid-area: 1 / 1; width: 100%; height: 100%; max-height: 560px; object-fit: contain; pointer-events: none; }
-  /* 两张图互补裁切：处理后的透明区域不会透出底下的原图，而是显示棋盘格 */
-  .cmp-before { clip-path: inset(0 calc(100% - var(--pos)) 0 0); }
-  .cmp-after { clip-path: inset(0 0 0 var(--pos)); }
+  .cmp-layer {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+  }
+  /* 外层做互补裁切，内层做放大，保证任意滑块位置与中心线严丝合缝 */
+  .cmp-layer-before { clip-path: inset(0 calc(100% - var(--pos)) 0 0); }
+  .cmp-layer-after { clip-path: inset(0 0 0 var(--pos)); }
+  .cmp-img {
+    width: 100%; height: 100%;
+    object-fit: contain;
+    transition: transform .3s var(--ease);
+    transform-origin: center center;
+  }
+  .cmp-frame[data-zoom="true"] .cmp-img { transform: scale(2); }
+
+  .cmp-loading {
+    position: absolute; inset: 0; display: grid; place-items: center;
+    background: rgba(15, 16, 22, .62); backdrop-filter: blur(6px);
+    font-size: 13.5px; color: var(--text-2); pointer-events: none;
+    transition: opacity .25s;
+  }
+  .cmp-panel[data-loaded="true"] .cmp-loading { opacity: 0; }
+
   .cmp-handle {
     position: absolute; top: 0; bottom: 0; left: var(--pos); width: 2px; margin-left: -1px;
-    background: #fff; box-shadow: 0 0 12px rgba(0, 0, 0, .5); pointer-events: none;
+    background: #fff; box-shadow: 0 0 12px rgba(0, 0, 0, .55); pointer-events: none;
   }
   .cmp-handle span {
     position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
     width: 40px; height: 40px; border-radius: 50%;
     display: grid; place-items: center;
     background: #fff; color: #222; font-size: 18px; font-weight: 700;
-    box-shadow: 0 6px 20px rgba(0, 0, 0, .4);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, .45);
   }
   .cmp-range {
     position: absolute; inset: 0; width: 100%; height: 100%;
     opacity: 0; cursor: ew-resize; margin: 0;
   }
-  .cmp-range:focus-visible + * { outline: none; }
   .cmp-frame:has(.cmp-range:focus-visible) { outline: 2px solid var(--accent-ring); outline-offset: 3px; }
   .cmp-label {
     position: absolute; top: 14px; padding: 4px 10px; border-radius: 8px;
-    font-size: 12.5px; background: rgba(0, 0, 0, .55); backdrop-filter: blur(6px); color: #fff;
+    font-size: 12px; background: rgba(0, 0, 0, .62); backdrop-filter: blur(8px); color: #fff;
+    border: 1px solid rgba(255, 255, 255, .12);
     pointer-events: none;
   }
   .cmp-label.l { left: 14px; }
   .cmp-label.r { right: 14px; }
 
-  .cmp-meta { margin-top: 18px; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 12px 20px; font-size: 14px; color: var(--text-2); }
+  .cmp-controls {
+    margin-top: 14px;
+    display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+  }
+  .cmp-presets { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .cmp-ctl-btn {
+    height: 30px; padding: 0 12px; border-radius: 999px;
+    font-size: 12.5px; color: var(--text-2);
+    background: rgba(255, 255, 255, .04); border: 1px solid var(--border-2);
+    transition: all .2s var(--ease);
+  }
+  .cmp-ctl-btn:hover { color: var(--text); border-color: var(--border-3); background: rgba(255, 255, 255, .08); }
+  .cmp-zoom-btn[aria-pressed="true"] {
+    background: var(--accent-soft); border-color: var(--accent-ring); color: #fff;
+  }
+
+  .cmp-meta { margin-top: 14px; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 10px 18px; font-size: 14px; color: var(--text-2); }
   .cmp-size { display: inline-flex; align-items: center; gap: 8px; font-variant-numeric: tabular-nums; }
   .cmp-size strong { color: var(--text); }
   .cmp-size .arrow { color: var(--text-3); }
-  .saved { color: var(--success); font-weight: 600; background: rgba(61, 214, 140, .1); padding: 2px 8px; border-radius: 6px; }
-  .cmp-note { color: var(--text-3); }
+  .saved { color: var(--success); font-weight: 600; background: rgba(61, 214, 140, .11); padding: 2px 8px; border-radius: 6px; }
+  .cmp-note { color: var(--text-2); font-size: 13px; }
+
+  @media (max-width: 720px) {
+    .cmp-frame { aspect-ratio: 4 / 3; }
+    .cmp-controls { justify-content: center; }
+  }
 </style>
 
 <script>
-  document.querySelectorAll<HTMLElement>('.cmp-frame').forEach((frame) => {
-    const range = frame.querySelector<HTMLInputElement>('.cmp-range')!;
+  const panels = Array.from(document.querySelectorAll<HTMLElement>('.cmp-panel'));
+
+  const loadPanel = (panel: HTMLElement) => {
+    if (panel.dataset.loaded === 'true') return;
+    const imgs = Array.from(panel.querySelectorAll<HTMLImageElement>('img[data-src]'));
+    if (!imgs.length) {
+      panel.dataset.loaded = 'true';
+      return;
+    }
+    let pending = imgs.length;
+    const done = () => {
+      pending--;
+      if (pending <= 0) panel.dataset.loaded = 'true';
+    };
+    imgs.forEach((img) => {
+      const url = img.dataset.src;
+      if (!url) { done(); return; }
+      img.addEventListener('load', done, { once: true });
+      img.addEventListener('error', done, { once: true });
+      img.src = url;
+      img.removeAttribute('data-src');
+      if (img.complete) done();
+    });
+  };
+
+  panels.forEach((panel) => {
+    const frame = panel.querySelector<HTMLElement>('.cmp-frame')!;
+    const range = panel.querySelector<HTMLInputElement>('.cmp-range')!;
+    const zoomBtn = panel.querySelector<HTMLButtonElement>('[data-zoom-toggle]');
     const update = () => frame.style.setProperty('--pos', `${range.value}%`);
     range.addEventListener('input', update);
     update();
+
+    panel.querySelectorAll<HTMLButtonElement>('[data-pos]').forEach((b) => {
+      b.addEventListener('click', () => {
+        range.value = b.dataset.pos || '50';
+        update();
+      });
+    });
+
+    zoomBtn?.addEventListener('click', () => {
+      const next = frame.dataset.zoom !== 'true';
+      frame.dataset.zoom = String(next);
+      zoomBtn.setAttribute('aria-pressed', String(next));
+    });
   });
 
-  const tabs = document.querySelectorAll<HTMLButtonElement>('.cmp-tabs [data-cmp]');
-  tabs.forEach((tab) => tab.addEventListener('click', () => {
-    tabs.forEach((t) => t.setAttribute('aria-selected', String(t === tab)));
-    document.querySelectorAll<HTMLElement>('.cmp-panel').forEach((p) => {
-      p.hidden = p.id !== `cmp-${tab.dataset.cmp}`;
-      if (!p.hidden) p.classList.add('in');
+  const tabs = Array.from(document.querySelectorAll<HTMLButtonElement>('.cmp-tabs [data-cmp]'));
+  tabs.forEach((tab) => {
+    const targetId = `cmp-${tab.dataset.cmp}`;
+    const targetPanel = document.getElementById(targetId);
+    tab.addEventListener('mouseenter', () => { if (targetPanel) loadPanel(targetPanel); });
+    tab.addEventListener('focus', () => { if (targetPanel) loadPanel(targetPanel); });
+    tab.addEventListener('click', () => {
+      tabs.forEach((t) => t.setAttribute('aria-selected', String(t === tab)));
+      panels.forEach((p) => {
+        const active = p.id === targetId;
+        p.hidden = !active;
+        if (active) {
+          p.classList.add('in');
+          loadPanel(p);
+        }
+      });
     });
-  }));
+  });
+
+  // 滚动接近对比区块后，在空闲时段预热其余示例图，兼顾首屏性能与切换秒开
+  const cmpSection = document.getElementById('compare');
+  if (cmpSection) {
+    const prewarm = new IntersectionObserver((entries) => {
+      if (!entries.some((e) => e.isIntersecting)) return;
+      prewarm.disconnect();
+      const run = () => panels.forEach((p) => loadPanel(p));
+      if ('requestIdleCallback' in window) {
+        (window as Window & { requestIdleCallback: (cb: () => void) => void }).requestIdleCallback(run);
+      } else {
+        window.setTimeout(run, 400);
+      }
+    }, { rootMargin: '320px 0px' });
+    prewarm.observe(cmpSection);
+  }
 </script>

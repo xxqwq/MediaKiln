@@ -1,6 +1,6 @@
 ---
 import '../styles/global.css';
-import { app, url, dlVersion } from '../lib/site';
+import { app, data, url, dlVersion } from '../lib/site';
 
 interface Props {
   title?: string;
@@ -9,7 +9,7 @@ interface Props {
 
 const {
   title = `${app.name} — 本地离线的视频 / GIF / 图片 / 文档处理工具箱`,
-  description = `${app.name}：Windows 本地离线多媒体与文档处理桌面应用。49 个功能、55 节点可视化工作流，内置 FFmpeg ${app.ffmpeg}，文件不上传、开箱即用、免费开源。`,
+  description = `${app.name}：Windows 本地离线多媒体与文档处理桌面应用。${data.stats.features} 个功能、${data.stats.nodes} 节点可视化工作流，内置 FFmpeg ${app.ffmpeg}，文件不上传、开箱即用、免费开源。`,
 } = Astro.props;
 
 const canonical = new URL(Astro.url.pathname, Astro.site).href;
@@ -21,6 +21,7 @@ const ogImage = new URL(url('og-image.png'), Astro.site).href;
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script is:inline>document.documentElement.classList.add('js');</script>
     <title>{title}</title>
     <meta name="description" content={description} />
     <meta name="keywords" content="视频转GIF,GIF压缩,图片压缩,图片转SVG,PPT压缩,Word压缩,本地离线,FFmpeg,工作流,批量处理,Windows工具" />
@@ -30,11 +31,16 @@ const ogImage = new URL(url('og-image.png'), Astro.site).href;
     <link rel="alternate icon" href={url('favicon.ico')} />
 
     <meta property="og:type" content="website" />
+    <meta property="og:locale" content="zh_CN" />
+    <meta property="og:site_name" content={app.name} />
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
     <meta property="og:url" content={canonical} />
     <meta property="og:image" content={ogImage} />
     <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={ogImage} />
 
     <script type="application/ld+json" set:html={JSON.stringify({
       '@context': 'https://schema.org',
@@ -50,8 +56,26 @@ const ogImage = new URL(url('og-image.png'), Astro.site).href;
   </head>
   <body>
     <slot />
+
+    <dialog id="img-lightbox" class="lightbox-dialog" aria-label="截图放大预览">
+      <div class="lightbox-card">
+        <button type="button" class="lightbox-close" id="lightbox-close" aria-label="关闭大图">×</button>
+        <img class="lightbox-img" id="lightbox-img" src="" alt="" />
+        <div class="lightbox-foot">
+          <span id="lightbox-caption"></span>
+          <span>按 Esc 或点击空白处关闭</span>
+        </div>
+      </div>
+    </dialog>
+
+    <div class="float-dock" id="float-dock" aria-label="快捷操作">
+      <a class="float-dl" href="#download">免费下载</a>
+      <button type="button" class="float-top" id="back-to-top" aria-label="回到顶部" title="回到顶部">↑</button>
+    </div>
+
     <script>
-      // 进入视口时淡入
+      // 1. 滚动渐入（含兜底机制防止元素卡在隐藏态）
+      const revealEls = Array.from(document.querySelectorAll<HTMLElement>('.reveal'));
       const io = new IntersectionObserver((entries) => {
         for (const e of entries) {
           if (e.isIntersecting) {
@@ -59,8 +83,67 @@ const ogImage = new URL(url('og-image.png'), Astro.site).href;
             io.unobserve(e.target);
           }
         }
-      }, { rootMargin: '0px 0px -8% 0px', threshold: 0.08 });
-      document.querySelectorAll('.reveal').forEach((el) => io.observe(el));
+      }, { rootMargin: '0px 0px -6% 0px', threshold: 0.04 });
+      revealEls.forEach((el) => io.observe(el));
+
+      const revealVisibleFallback = () => {
+        const vh = window.innerHeight || 900;
+        for (const el of revealEls) {
+          if (el.classList.contains('in')) continue;
+          const r = el.getBoundingClientRect();
+          if (r.top < vh * 1.05 && r.bottom > 0) el.classList.add('in');
+        }
+      };
+      window.setTimeout(revealVisibleFallback, 350);
+
+      // 2. 全局高清截图灯箱
+      const dialog = document.getElementById('img-lightbox') as HTMLDialogElement | null;
+      const lbImg = document.getElementById('lightbox-img') as HTMLImageElement | null;
+      const lbCap = document.getElementById('lightbox-caption');
+      const lbClose = document.getElementById('lightbox-close');
+
+      const openLightbox = (img: HTMLImageElement) => {
+        if (!dialog || !lbImg || !lbCap) return;
+        const src = img.currentSrc || img.getAttribute('src') || img.dataset.src || '';
+        if (!src) return;
+        lbImg.src = src;
+        lbImg.alt = img.alt || '';
+        lbCap.textContent = img.dataset.caption || img.alt || '软件界面高清预览';
+        dialog.showModal();
+      };
+
+      document.addEventListener('click', (e) => {
+        const target = e.target as HTMLElement | null;
+        if (!target) return;
+        const zoomImg = target.closest<HTMLImageElement>('img[data-zoomable]');
+        if (zoomImg) {
+          openLightbox(zoomImg);
+        }
+      });
+
+      lbClose?.addEventListener('click', () => dialog?.close());
+      dialog?.addEventListener('click', (e) => {
+        if (e.target === dialog) dialog.close();
+      });
+
+      // 3. 悬浮快捷胶囊（处于下载区时自动退避，避免遮挡操作按钮）
+      const dock = document.getElementById('float-dock');
+      const topBtn = document.getElementById('back-to-top');
+      const dlSec = document.getElementById('download');
+      let dlVisible = false;
+      const toggleDock = () => {
+        if (!dock) return;
+        dock.classList.toggle('show', window.scrollY > 760 && !dlVisible);
+      };
+      if (dlSec) {
+        new IntersectionObserver((entries) => {
+          dlVisible = entries.some((e) => e.isIntersecting);
+          toggleDock();
+        }, { threshold: 0.15 }).observe(dlSec);
+      }
+      toggleDock();
+      window.addEventListener('scroll', toggleDock, { passive: true });
+      topBtn?.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
     </script>
   </body>
 </html>

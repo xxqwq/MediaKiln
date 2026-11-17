@@ -1,10 +1,35 @@
 ---
-import { app, data, url, hasAsset, assetUrl, releasesUrl, dlVersion, release } from '../lib/site';
+import { app, data, url, hasAsset, assetUrl, assetSize, fmtBytes, releasesUrl, dlVersion, release } from '../lib/site';
 
 const shots = [
-  { id: 'single', label: '🛠️ 单工具模式', file: 'screenshots/single-video-to-gif.webp', alt: '单工具模式：视频转 GIF 界面，左侧为 8 大类功能导航，右侧为预览与参数面板' },
-  { id: 'workflow', label: '🕸️ 节点画布模式', file: 'screenshots/workflow-canvas.webp', alt: '节点画布模式：视频截取、加水印、转 GIF、压缩并分支对比的工作流' },
-  { id: 'compare', label: '⛶ 放大对比', file: 'screenshots/single-result-compare.webp', alt: '处理完成后的放大对比弹窗，支持并排同步缩放与卷帘对比' },
+  {
+    id: 'single',
+    label: '🛠️ 单工具模式',
+    file: 'screenshots/single-video-to-gif.webp',
+    caption: '左侧 8 大分类即点即用，右侧实时视频预览与两遍调色板高清转码参数',
+    alt: '单工具模式：视频转 GIF 界面，左侧为 8 大类功能导航，右侧为预览与参数面板',
+  },
+  {
+    id: 'workflow',
+    label: '🕸️ 节点画布工作流',
+    file: 'screenshots/workflow-canvas.webp',
+    caption: '多步骤自由连线、分支前后对比与增量智能缓存，调整下游参数秒级命中',
+    alt: '节点画布模式：视频截取、加水印、转 GIF、压缩并分支对比的工作流',
+  },
+  {
+    id: 'batch',
+    label: '📦 批量队列处理',
+    file: 'screenshots/batch-queue.webp',
+    caption: '一次性拖入多文件顺序批处理，实时显示每个文件的压缩率与总体瘦身结果',
+    alt: '批量队列处理完成后的界面截图，显示每个文件的体积变化',
+  },
+  {
+    id: 'compare',
+    label: '⛶ 卷帘放大对比',
+    file: 'screenshots/single-result-compare.webp',
+    caption: '处理结果支持 100%～400% 同步缩放平移与透明棋盘格卷帘细节检视',
+    alt: '处理完成后的放大对比弹窗，支持并排同步缩放与卷帘对比',
+  },
 ].filter((s) => hasAsset(s.file));
 
 const s = data.stats;
@@ -31,7 +56,8 @@ const s = data.stats;
     </h1>
 
     <p class="hero-sub fade-up" style="--d:120ms">
-      {s.features} 个本地处理功能，加上 {s.nodes} 个节点的可视化工作流画布。<br />内置 FFmpeg {app.ffmpeg}，<strong>不联网、不上传文件</strong>，下载即用，免费开源。
+      {s.features} 项全能处理 · {s.nodes} 节点可视化流水线 · 内置 FFmpeg {app.ffmpeg}。<br />
+      <strong>断网可用、文件永不离开电脑</strong>，免费开源、无广告无体积限制。
     </p>
 
     <div class="hero-cta fade-up" style="--d:180ms">
@@ -39,27 +65,42 @@ const s = data.stats;
         <span>
           <svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true" style="display:inline;vertical-align:-3px;margin-right:6px"><path d="M3 5.5 10.5 4.5v7H3v-6Zm8.5-1.15L21 3v8.5h-9.5V4.35ZM3 12.5h7.5v7L3 18.5v-6Zm8.5 0H21V21l-9.5-1.35V12.5Z"/></svg>下载 Windows 安装版
         </span>
-        <span class="sub">v<span data-rel-version-num>{dlVersion}</span> · Win10 / 11 x64</span>
+        <span class="sub">v<span data-rel-version-num>{dlVersion}</span> · Win10 / 11 x64<span class="dl-size-dot" data-dl-size="setup">{assetSize('setup') ? fmtBytes(assetSize('setup')) : ''}</span></span>
       </a>
       <a class="btn btn-ghost btn-stack" href={assetUrl('portable')} data-dl="portable">
-        <span>便携版（免安装）</span>
-        <span class="sub">单个 exe，双击即用</span>
+        <span>免安装便携版</span>
+        <span class="sub">单个 exe，双击即用<span class="dl-size-dot" data-dl-size="portable">{assetSize('portable') ? fmtBytes(assetSize('portable')) : ''}</span></span>
       </a>
     </div>
 
-    <ul class="hero-points fade-up" style="--d:240ms" aria-label="核心卖点">
-      <li><span class="ck">✓</span>100% 本地离线</li>
-      <li><span class="ck">✓</span>{s.batchFeatures} 个功能支持批量</li>
-      <li><span class="ck">✓</span>NVENC / QSV / AMF 硬件加速</li>
-      <li><span class="ck">✓</span>MIT 开源</li>
-    </ul>
+    <div class="hero-meta fade-up" style="--d:230ms">
+      <ul class="hero-points" aria-label="核心卖点">
+        <li><span class="ck">✓</span>100% 本地离线</li>
+        <li><span class="ck">✓</span>{s.batchFeatures} 项支持批量</li>
+        <li><span class="ck">✓</span>NVENC / QSV / AMF 硬件加速</li>
+        <li><span class="ck">✓</span>MIT 开源</li>
+      </ul>
+      <a class="hero-browse" href="#all-features">浏览全部 {s.features} 个功能 ↓</a>
+    </div>
 
     {shots.length > 0 && (
-      <div class="hero-shot fade-up" style="--d:320ms">
+      <div class="hero-shot fade-up is-auto" id="hero-shot" style="--d:310ms">
         {shots.length > 1 && (
           <div class="shot-tabs" role="tablist" aria-label="界面预览">
             {shots.map((sh, i) => (
-              <button class="chip" role="tab" id={`shot-tab-${sh.id}`} aria-controls={`shot-${sh.id}`} aria-selected={i === 0 ? 'true' : 'false'} data-shot={sh.id}>{sh.label}</button>
+              <button
+                type="button"
+                class="chip shot-tab"
+                role="tab"
+                id={`shot-tab-${sh.id}`}
+                aria-controls={`shot-${sh.id}`}
+                aria-selected={i === 0 ? 'true' : 'false'}
+                data-shot={sh.id}
+                data-caption={sh.caption}
+              >
+                <span>{sh.label}</span>
+                <span class="shot-bar" aria-hidden="true"><i></i></span>
+              </button>
             ))}
           </div>
         )}
@@ -67,6 +108,10 @@ const s = data.stats;
           <div class="window-bar">
             <span class="dots"><i></i><i></i><i></i></span>
             <span class="title">{app.name}</span>
+            <span class="win-right">
+              <span class="win-pill">🔒 本机离线引擎 · 0 上传</span>
+              <span class="win-zoom-hint">🔍 点击大图</span>
+            </span>
           </div>
           <div class="window-body shot-stack">
             {shots.map((sh, i) => (
@@ -76,6 +121,8 @@ const s = data.stats;
                 aria-labelledby={`shot-tab-${sh.id}`}
                 src={url(sh.file)}
                 alt={sh.alt}
+                data-caption={sh.caption}
+                data-zoomable
                 width="1440"
                 height="900"
                 loading={i === 0 ? 'eager' : 'lazy'}
@@ -85,25 +132,26 @@ const s = data.stats;
             ))}
           </div>
         </div>
+        <p class="shot-caption" id="shot-caption">{shots[0].caption}</p>
       </div>
     )}
   </div>
 </section>
 
 <style>
-  .hero { position: relative; padding: calc(var(--nav-h) + 72px) 0 40px; overflow: hidden; }
+  .hero { position: relative; padding: calc(var(--nav-h) + 64px) 0 42px; overflow: hidden; }
   .hero-bg { position: absolute; inset: 0; pointer-events: none; }
-  .glow { position: absolute; border-radius: 50%; filter: blur(90px); opacity: .55; }
-  .g1 { width: 720px; height: 520px; left: 50%; top: -220px; transform: translateX(-60%); background: radial-gradient(closest-side, rgba(124, 116, 255, .55), transparent); }
-  .g2 { width: 520px; height: 420px; left: 58%; top: 40px; background: radial-gradient(closest-side, rgba(103, 199, 230, .28), transparent); }
+  .glow { position: absolute; border-radius: 50%; filter: blur(95px); opacity: .58; }
+  .g1 { width: 760px; height: 520px; left: 50%; top: -220px; transform: translateX(-60%); background: radial-gradient(closest-side, rgba(124, 116, 255, .56), transparent); }
+  .g2 { width: 540px; height: 430px; left: 56%; top: 30px; background: radial-gradient(closest-side, rgba(103, 199, 230, .28), transparent); }
   .grid {
     position: absolute; inset: 0;
     background-image:
-      linear-gradient(rgba(255, 255, 255, .035) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(255, 255, 255, .035) 1px, transparent 1px);
+      linear-gradient(rgba(255, 255, 255, .036) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 255, 255, .036) 1px, transparent 1px);
     background-size: 56px 56px;
-    mask-image: radial-gradient(ellipse 70% 55% at 50% 20%, #000 30%, transparent 75%);
-    -webkit-mask-image: radial-gradient(ellipse 70% 55% at 50% 20%, #000 30%, transparent 75%);
+    mask-image: radial-gradient(ellipse 75% 58% at 50% 18%, #000 30%, transparent 78%);
+    -webkit-mask-image: radial-gradient(ellipse 75% 58% at 50% 18%, #000 30%, transparent 78%);
   }
 
   .hero-inner { position: relative; text-align: center; display: flex; flex-direction: column; align-items: center; }
@@ -112,76 +160,147 @@ const s = data.stats;
     display: inline-flex; align-items: center; gap: 10px;
     height: 34px; padding: 0 14px;
     border-radius: 999px;
-    background: rgba(255, 255, 255, .04);
+    background: rgba(255, 255, 255, .045);
     border: 1px solid var(--border-2);
     font-size: 13px;
     transition: border-color .2s, background .2s;
   }
   .badge:hover { border-color: var(--accent-ring); background: var(--accent-soft); }
-  .badge-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 4px rgba(61, 214, 140, .18); }
+  .badge-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--success);
+    box-shadow: 0 0 0 4px rgba(61, 214, 140, .18);
+    animation: pulse-dot 2.4s ease-in-out infinite;
+  }
+  @keyframes pulse-dot {
+    0%, 100% { box-shadow: 0 0 0 3px rgba(61, 214, 140, .20); }
+    50% { box-shadow: 0 0 0 6px rgba(61, 214, 140, .06); }
+  }
   .badge-sep { width: 1px; height: 14px; background: var(--border-3); }
   .muted { color: var(--text-2); }
 
   .hero-title {
-    margin-top: 28px;
+    margin-top: 26px;
     font-family: var(--font-display);
-    font-size: clamp(38px, 6.4vw, 72px);
+    font-size: clamp(38px, 6.2vw, 70px);
     line-height: 1.12;
     font-weight: 800;
-    letter-spacing: -.02em;
+    letter-spacing: -.022em;
   }
-  .hero-sub { margin-top: 22px; max-width: 680px; font-size: clamp(16px, 1.6vw, 19px); color: var(--text-2); text-wrap: balance; }
+  .hero-sub { margin-top: 20px; max-width: 700px; font-size: clamp(16px, 1.55vw, 18.5px); color: var(--text-2); text-wrap: balance; }
   .hero-sub strong { color: var(--text); font-weight: 600; white-space: nowrap; }
 
-  .hero-cta { margin-top: 36px; display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; }
-  .hero-cta .btn { min-width: 220px; }
+  .hero-cta { margin-top: 32px; display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; }
+  .hero-cta .btn { min-width: 232px; }
+  .dl-size-dot:not(:empty)::before { content: " · "; }
 
+  .hero-meta { margin-top: 24px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
   .hero-points {
-    list-style: none; margin-top: 26px;
-    display: flex; flex-wrap: wrap; justify-content: center; gap: 10px 26px;
-    font-size: 14px; color: var(--text-2);
+    list-style: none;
+    display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 24px;
+    font-size: 13.5px; color: var(--text-2);
   }
-  .hero-points li { display: flex; align-items: center; gap: 7px; }
+  .hero-points li { display: flex; align-items: center; gap: 6px; }
   .ck { color: var(--success); font-weight: 700; }
+  .hero-browse { font-size: 13.5px; color: var(--accent-hi); transition: color .2s; }
+  .hero-browse:hover { color: #fff; text-decoration: underline; text-underline-offset: 4px; }
 
-  .hero-shot { margin-top: 64px; width: 100%; max-width: 1120px; perspective: 1600px; }
-  .shot-tabs { display: flex; justify-content: center; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
-  .hero-shot .window { position: relative; }
-  .hero-shot .window::after {
-    content: ""; position: absolute; inset: auto 0 0 0; height: 30%;
-    background: linear-gradient(transparent, rgba(11, 12, 16, .55));
-    pointer-events: none;
+  .hero-shot { margin-top: 48px; width: 100%; max-width: 1120px; }
+  .shot-tabs { display: flex; justify-content: center; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+  .shot-tab { position: relative; overflow: hidden; padding: 0 15px; height: 36px; }
+  .shot-bar {
+    position: absolute; left: 10px; right: 10px; bottom: 0; height: 2px;
+    border-radius: 2px; overflow: hidden; opacity: 0;
   }
-  .shot-stack { display: grid; }
-  .shot { grid-area: 1 / 1; opacity: 0; transition: opacity .45s var(--ease); }
-  .shot.active { opacity: 1; }
+  .shot-bar i { display: block; width: 100%; height: 100%; background: linear-gradient(90deg, var(--accent-hi), var(--accent-2)); transform: scaleX(0); transform-origin: left; }
+  .hero-shot.is-auto .shot-tab[aria-selected="true"] .shot-bar { opacity: 1; }
+  .hero-shot.is-auto .shot-tab[aria-selected="true"] .shot-bar i { animation: tab-progress 5.5s linear infinite; }
+  .hero-shot.is-paused .shot-tab[aria-selected="true"] .shot-bar i { animation-play-state: paused; }
+  @keyframes tab-progress { from { transform: scaleX(0); } to { transform: scaleX(1); } }
 
-  @media (max-width: 640px) {
-    .hero { padding-top: calc(var(--nav-h) + 48px); }
+  .window-bar { position: relative; }
+  .window-bar .title { text-align: center; }
+  .win-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  .win-pill {
+    font-size: 11.5px; color: #b9f5d6; padding: 2px 8px; border-radius: 999px;
+    background: rgba(61, 214, 140, .10); border: 1px solid rgba(61, 214, 140, .25);
+    white-space: nowrap;
+  }
+  .win-zoom-hint {
+    font-size: 11.5px; color: var(--text-3); padding: 2px 8px; border-radius: 6px;
+    background: rgba(255, 255, 255, .04); border: 1px solid var(--border);
+    white-space: nowrap;
+  }
+
+  .shot-stack { display: grid; }
+  .shot { grid-area: 1 / 1; opacity: 0; pointer-events: none; transition: opacity .42s var(--ease); }
+  .shot.active { opacity: 1; pointer-events: auto; }
+  .shot-caption { margin-top: 14px; font-size: 13.5px; color: var(--text-2); }
+
+  @media (max-width: 720px) {
+    .hero { padding-top: calc(var(--nav-h) + 42px); }
     .hero-title br, .hero-sub br { display: none; }
     .hero-cta { width: 100%; }
     .hero-cta .btn { width: 100%; }
-    .hero-shot { margin-top: 44px; }
+    .hero-shot { margin-top: 38px; }
+    .win-pill, .win-zoom-hint { display: none; }
   }
 </style>
 
 <script>
-  const tabs = document.querySelectorAll<HTMLButtonElement>('.shot-tabs [data-shot]');
+  const heroShot = document.getElementById('hero-shot');
+  const tabs = Array.from(document.querySelectorAll<HTMLButtonElement>('.shot-tabs [data-shot]'));
+  const capEl = document.getElementById('shot-caption');
   let timer: number | undefined;
+  let cur = 0;
+
   const select = (id: string) => {
-    tabs.forEach((t) => t.setAttribute('aria-selected', String(t.dataset.shot === id)));
-    document.querySelectorAll('.shot-stack .shot').forEach((img) => img.classList.toggle('active', img.id === `shot-${id}`));
+    tabs.forEach((t, idx) => {
+      const active = t.dataset.shot === id;
+      t.setAttribute('aria-selected', String(active));
+      if (active) {
+        cur = idx;
+        if (capEl && t.dataset.caption) capEl.textContent = t.dataset.caption;
+      }
+    });
+    document.querySelectorAll('.shot-stack .shot').forEach((img) => {
+      img.classList.toggle('active', img.id === `shot-${id}`);
+    });
   };
-  tabs.forEach((t) => t.addEventListener('click', () => {
+
+  const stopAuto = () => {
     window.clearInterval(timer);
+    timer = undefined;
+    heroShot?.classList.remove('is-auto');
+  };
+
+  const startAuto = () => {
+    if (tabs.length <= 1 || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    window.clearInterval(timer);
+    timer = window.setInterval(() => {
+      cur = (cur + 1) % tabs.length;
+      select(tabs[cur].dataset.shot!);
+    }, 5500);
+  };
+
+  tabs.forEach((t) => t.addEventListener('click', () => {
+    stopAuto();
     select(t.dataset.shot!);
   }));
-  // 自动轮播，用户点击后停止
-  if (tabs.length > 1 && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    let i = 0;
-    timer = window.setInterval(() => {
-      i = (i + 1) % tabs.length;
-      select(tabs[i].dataset.shot!);
-    }, 5000);
+
+  if (heroShot && tabs.length > 1 && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    startAuto();
+    heroShot.addEventListener('mouseenter', () => {
+      heroShot.classList.add('is-paused');
+      window.clearInterval(timer);
+    });
+    heroShot.addEventListener('mouseleave', () => {
+      if (heroShot.classList.contains('is-auto')) {
+        heroShot.classList.remove('is-paused');
+        startAuto();
+      }
+    });
+  } else {
+    heroShot?.classList.remove('is-auto');
   }
 </script>

@@ -73,8 +73,8 @@ const templates = templatesMod.WORKFLOW_TEMPLATES.map((t) => ({
       const def = nodeByType.get(n.type) || {};
       return {
         id: n.id, type: n.type, x: n.x, y: n.y, name: def.name || n.type, icon: def.icon || '•', group: def.group || '', isIo: !!def.isIo,
-        inputs: (def.inputs || []).map((p) => ({ id: p.id, label: p.label })),
-        outputs: (def.outputs || []).map((p) => ({ id: p.id, label: p.label })),
+        inputs: (def.inputs || []).map((p) => ({ id: p.id, label: p.label, type: p.type })),
+        outputs: (def.outputs || []).map((p) => ({ id: p.id, label: p.label, type: p.type })),
       };
     }),
     edges: t.graph.edges.map((e) => ({ from: e.fromNode, fromPort: e.fromPort, to: e.toNode, toPort: e.toPort })),
@@ -83,22 +83,26 @@ const templates = templatesMod.WORKFLOW_TEMPLATES.map((t) => ({
 
 const pkg = JSON.parse(fs.readFileSync(path.join(APP_ROOT, 'package.json'), 'utf8'));
 
-// 3. 最新已发布的 Release（CI 中带 GITHUB_TOKEN 不受限流；失败时回退为 null，页面改为链接到 Releases 页面）
+// 3. 最新包含桌面安装包的已发布 Release（跳过仅包含热更新包的 -HotfixOnly Release）
 async function fetchLatestRelease() {
   try {
     const headers = { Accept: 'application/vnd.github+json', 'User-Agent': 'vgt-website-build' };
     if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
-    const res = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, { headers, signal: AbortSignal.timeout(8000) });
+    const res = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=10`, { headers, signal: AbortSignal.timeout(8000) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const j = await res.json();
+    const list = await res.json();
+    const exeRe = /(-setup|安装版|-portable|便携版)\.exe$/i;
+    const stable = (Array.isArray(list) ? list : []).filter((r) => !r.draft && !r.prerelease);
+    const j = stable.find((r) => (r.assets || []).some((a) => exeRe.test(a.name) || /安装版|便携版/i.test(a.label || ''))) || stable[0];
+    if (!j) return null;
     return {
       tag: j.tag_name,
       version: String(j.tag_name || '').replace(/^v/, ''),
       publishedAt: j.published_at,
-      assets: (j.assets || []).map((a) => ({ name: a.name, size: a.size, url: a.browser_download_url })),
+      assets: (j.assets || []).map((a) => ({ name: a.name, label: a.label || '', size: a.size, url: a.browser_download_url })),
     };
   } catch (err) {
-    console.warn(`[extract] 获取最新 Release 失败（${err.message}），下载按钮将回退为 Releases 页面链接`);
+    console.warn(`[extract] 获取最新 Release 失败（${err.message}），构建期将使用 v${pkg.version} 确定性下载直链回退`);
     return null;
   }
 }

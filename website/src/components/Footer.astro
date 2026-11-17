@@ -9,14 +9,17 @@ const year = new Date().getFullYear();
     <div class="foot-brand">
       <div class="fb-row"><Logo size={28} /><strong>{app.name}</strong></div>
       <p>Windows 本地离线多媒体与文档处理工具箱。<br />{data.stats.features} 个功能 · {data.stats.nodes} 个工作流节点 · 文件永不上传。</p>
+      <div class="foot-pledge">🔒 零遥测 · 零上传 · 零广告</div>
     </div>
     <div class="foot-cols">
       <div>
         <h4>产品</h4>
-        <a href="#features">功能亮点</a>
+        <a href="#features">核心亮点</a>
+        <a href="#why-local">对比优势</a>
         <a href="#workflow">节点工作流</a>
+        <a href="#compare">效果实测</a>
         <a href="#all-features">功能清单</a>
-        <a href="#download">下载</a>
+        <a href="#download">免费下载</a>
       </div>
       <div>
         <h4>开源</h4>
@@ -39,10 +42,16 @@ const year = new Date().getFullYear();
 </footer>
 
 <style>
-  .footer { border-top: 1px solid var(--border); padding: 56px 0 32px; margin-top: 40px; background: var(--bg-elev); }
+  .footer { border-top: 1px solid var(--border); padding: 56px 0 76px; margin-top: 40px; background: var(--bg-elev); }
   .foot-inner { display: flex; justify-content: space-between; gap: 48px; flex-wrap: wrap; }
   .fb-row { display: flex; align-items: center; gap: 10px; font-size: 16px; }
   .foot-brand p { margin-top: 14px; color: var(--text-3); font-size: 14px; max-width: 360px; }
+  .foot-pledge {
+    display: inline-flex; align-items: center; gap: 6px;
+    margin-top: 16px; padding: 5px 12px; border-radius: 999px;
+    font-size: 12px; color: #b9f5d6;
+    background: rgba(61, 214, 140, .09); border: 1px solid rgba(61, 214, 140, .25);
+  }
   .foot-cols { display: flex; gap: 64px; flex-wrap: wrap; }
   .foot-cols div { display: flex; flex-direction: column; gap: 8px; font-size: 14px; }
   .foot-cols h4 { font-size: 13px; color: var(--text); margin-bottom: 4px; font-weight: 600; }

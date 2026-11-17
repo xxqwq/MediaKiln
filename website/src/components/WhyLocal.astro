@@ -1,0 +1,207 @@
+---
+import { data } from '../lib/site';
+
+const s = data.stats;
+
+const painPoints = [
+  {
+    icon: '💬',
+    title: '微信 / 公众号限流卡壳',
+    desc: '表情包限 1 MB、公众号动图与 Discord 限大小？自动迭代压到指定体积，省去手动反复试错。',
+  },
+  {
+    icon: '📊',
+    title: '几百 MB 的 PPT 发不出',
+    desc: '不用一页页另存压缩。自动扫描 .docx / .pptx 内嵌图片原位瘦身与 SHA-256 去重，排版纹丝不动。',
+  },
+  {
+    icon: '🎨',
+    title: '白底 Logo 一键抠图转矢量',
+    desc: '吸管取色一键抠透明底、换渐变背景，还能描摹成可无限放大的 SVG 并同步导出 ICO 图标。',
+  },
+  {
+    icon: '🗂️',
+    title: '杂乱素材文件夹批量归整',
+    desc: '位图、SVG、视频混在一个目录？文件夹自动递归扫描，按格式分流压缩并自动汇总导出。',
+  },
+];
+
+const rows = [
+  {
+    dim: '文件隐私安全',
+    ours: '100% 本机离线处理，不经任何服务器，断网可用',
+    web: '必须先上传至第三方云端，存在泄露与留存风险',
+    heavy: '本地运行安全，但常伴随云同步或账号绑定',
+  },
+  {
+    dim: '体积与批量限制',
+    ours: `无文件大小上限，${s.batchFeatures} 项功能支持多文件队列`,
+    web: '常限制单文件 50~200 MB、每日免费次数或排队限速',
+    heavy: '无体积限制，但批量需反复设导出队列或写脚本',
+  },
+  {
+    dim: '多步骤流水线',
+    ours: `${s.nodes} 节点可视化工作流 + ${s.templates} 套模板，修改参数增量复用`,
+    web: '只能单步来回下载再上传，极易出错且耗时',
+    heavy: '需在多款软件间来回导入导出，或手写长串命令',
+  },
+  {
+    dim: '画质与硬件加速',
+    ours: '两遍调色板 GIF 编码 + 自动检测 NVENC / QSV / AMF',
+    web: '受限于服务器算力，常强制压缩画质或降帧降分辨率',
+    heavy: '画质极强，但参数门槛高、占用数 GB 内存与磁盘',
+  },
+  {
+    dim: '费用与纯净度',
+    ours: '完全免费、MIT 开源、无广告、无水印、无登录弹窗',
+    web: '常见 VIP 订阅付费、导出强加水印或满屏诱导广告',
+    heavy: '动辄高昂正版订阅费，安装配置动辄耗时半小时',
+  },
+];
+---
+
+<section class="section why-section" id="why-local">
+  <div class="container">
+    <div class="section-head reveal">
+      <div class="eyebrow">真实场景对比</div>
+      <h2 class="h2">告别上传等待，<span class="grad-text">本机算力一次搞定</span></h2>
+      <p class="lead">无论是临时应付公众号发图，还是长期批量整理设计素材与文档，本地桌面工具箱都比网页端和重型软件更顺手。</p>
+    </div>
+
+    <div class="pain-grid">
+      {painPoints.map((p) => (
+        <article class="card pain-card reveal">
+          <div class="pain-head">
+            <span class="pain-ico" aria-hidden="true">{p.icon}</span>
+            <h3>{p.title}</h3>
+          </div>
+          <p>{p.desc}</p>
+        </article>
+      ))}
+    </div>
+
+    <div class="card matrix-card reveal">
+      <div class="matrix-scroll">
+        <table class="matrix-table">
+          <thead>
+            <tr>
+              <th scope="col" class="col-dim">对比维度</th>
+              <th scope="col" class="col-ours">
+                <span class="ours-head">
+                  <span>视频 · GIF 工具箱</span>
+                  <span class="ours-badge">推荐</span>
+                </span>
+              </th>
+              <th scope="col" class="col-other">传统在线转换网站</th>
+              <th scope="col" class="col-other">重型专业软件 / 手写命令</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr>
+                <th scope="row" class="cell-dim">{r.dim}</th>
+                <td class="cell-ours"><div class="cell-in"><span class="ok-ico" aria-hidden="true">✓</span><span>{r.ours}</span></div></td>
+                <td class="cell-other"><div class="cell-in"><span class="no-ico" aria-hidden="true">✕</span><span>{r.web}</span></div></td>
+                <td class="cell-other"><div class="cell-in"><span class="mid-ico" aria-hidden="true">•</span><span>{r.heavy}</span></div></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .why-section {
+    background: radial-gradient(70% 50% at 50% 50%, rgba(103, 199, 230, .035), transparent 70%);
+  }
+
+  .pain-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px;
+    margin-bottom: 24px;
+  }
+  .pain-card {
+    padding: 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .pain-card:hover { transform: translateY(-2px); border-color: var(--border-3); }
+  .pain-head { display: flex; align-items: center; gap: 10px; }
+  .pain-ico {
+    width: 36px; height: 36px; border-radius: 10px;
+    display: grid; place-items: center; font-size: 18px; flex-shrink: 0;
+    background: rgba(255, 255, 255, .05); border: 1px solid var(--border-2);
+  }
+  .pain-card h3 { font-size: 15.5px; font-weight: 650; line-height: 1.35; }
+  .pain-card p { font-size: 13.5px; color: var(--text-2); line-height: 1.6; }
+
+  .matrix-card {
+    overflow: hidden;
+    border-color: var(--border-2);
+    background: linear-gradient(180deg, rgba(255, 255, 255, .035), rgba(14, 15, 20, .82));
+  }
+  .matrix-scroll { overflow-x: auto; scrollbar-width: thin; }
+  .matrix-table {
+    width: 100%;
+    min-width: 760px;
+    border-collapse: collapse;
+    text-align: left;
+    font-size: 14px;
+  }
+  .matrix-table th, .matrix-table td {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  .matrix-table tbody tr:last-child th,
+  .matrix-table tbody tr:last-child td { border-bottom: 0; }
+
+  .matrix-table thead th {
+    font-size: 13.5px;
+    font-weight: 650;
+    color: var(--text-2);
+    background: rgba(255, 255, 255, .02);
+  }
+  .col-dim { width: 17%; color: var(--text-3); }
+  .col-ours {
+    width: 31%;
+    color: #fff !important;
+    background: linear-gradient(180deg, rgba(124, 116, 255, .18), rgba(124, 116, 255, .08)) !important;
+    border-left: 1px solid rgba(124, 116, 255, .36);
+    border-right: 1px solid rgba(124, 116, 255, .36);
+  }
+  .col-other { width: 26%; }
+
+  .ours-head { display: inline-flex; align-items: center; gap: 8px; }
+  .ours-badge {
+    font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
+    background: var(--accent); color: #fff;
+  }
+
+  .cell-dim { font-weight: 600; color: var(--text); font-size: 14px; }
+  .cell-ours {
+    color: #ecebff;
+    background: rgba(124, 116, 255, .065);
+    border-left: 1px solid rgba(124, 116, 255, .28);
+    border-right: 1px solid rgba(124, 116, 255, .28);
+  }
+  .cell-other { color: var(--text-2); }
+  .cell-ours, .cell-other { line-height: 1.55; }
+  .cell-in { display: flex; align-items: flex-start; gap: 7px; }
+  .ok-ico, .no-ico, .mid-ico { flex-shrink: 0; width: 15px; font-weight: 700; text-align: center; }
+  .ok-ico { color: var(--success); }
+  .no-ico { color: #f47067; opacity: .85; }
+  .mid-ico { color: var(--text-3); }
+
+  @media (max-width: 1060px) {
+    .pain-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 640px) {
+    .pain-grid { grid-template-columns: 1fr; }
+    .matrix-table th, .matrix-table td { padding: 13px 14px; font-size: 13px; }
+  }
+</style>

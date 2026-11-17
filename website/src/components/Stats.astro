@@ -8,9 +8,16 @@ const items = [
   { n: s.formats, unit: '种', label: '输入格式' },
   { n: 0, unit: '字节', label: '上传到云端', zero: true },
 ];
+
+const formatGroups = [
+  { label: '🎬 视频 / 动图', exts: 'MP4 · MKV · MOV · WebM · AVI · GIF · WebP' },
+  { label: '🖼️ 图片 / 矢量', exts: 'PNG · JPG · WebP · AVIF · ICO · BMP · SVG' },
+  { label: '📑 办公文档', exts: 'DOCX · PPTX · Markdown · PDF' },
+  { label: '🎵 音频 / 字幕', exts: 'MP3 · M4A · WAV · FLAC · SRT · ASS · VTT' },
+];
 ---
 
-<section class="stats" aria-label="数据概览">
+<section class="stats" aria-label="数据概览与支持格式">
   <div class="container">
     <ul class="stats-row reveal">
       {items.map((it) => (
@@ -20,23 +27,69 @@ const items = [
         </li>
       ))}
     </ul>
+
+    <div class="format-bar reveal" aria-label="支持格式全览">
+      {formatGroups.map((g) => (
+        <div class="fmt-group">
+          <span class="fmt-label">{g.label}</span>
+          <span class="fmt-exts">{g.exts}</span>
+        </div>
+      ))}
+    </div>
   </div>
 </section>
 
 <style>
-  .stats { padding: 40px 0 8px; }
+  .stats { padding: 36px 0 12px; }
   .stats-row {
     list-style: none;
     display: grid; grid-template-columns: repeat(5, 1fr);
     border: 1px solid var(--border); border-radius: var(--radius-lg);
-    background: rgba(255, 255, 255, .02);
+    background: linear-gradient(180deg, rgba(255, 255, 255, .032), rgba(255, 255, 255, .014));
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06);
   }
-  .stats-row li { padding: 26px 20px; text-align: center; display: flex; flex-direction: column; gap: 4px; }
+  .stats-row li { padding: 26px 20px; text-align: center; display: flex; flex-direction: column; gap: 5px; }
   .stats-row li + li { border-left: 1px solid var(--border); }
-  .num { font-family: var(--font-display); font-size: 38px; font-weight: 750; line-height: 1.1; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
-  .num small { font-size: 14px; font-weight: 500; color: var(--text-3); margin-left: 4px; letter-spacing: 0; }
-  .zero .num { color: var(--success); }
+  .num {
+    font-family: var(--font-display); font-size: 38px; font-weight: 750; line-height: 1.1;
+    font-variant-numeric: tabular-nums; letter-spacing: -.02em;
+    background: linear-gradient(180deg, #fff 20%, #c8c5e8 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .num small { font-size: 14px; font-weight: 500; color: var(--text-3); margin-left: 4px; letter-spacing: 0; -webkit-text-fill-color: var(--text-3); }
+  .zero .num {
+    background: linear-gradient(180deg, #8df4bf 0%, var(--success) 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
   .label { font-size: 13.5px; color: var(--text-2); }
+  .zero .label { color: #b9f5d6; }
+
+  .format-bar {
+    margin-top: 14px;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+  }
+  .fmt-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 12px 15px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, .02);
+    border: 1px solid var(--border);
+  }
+  .fmt-label { font-size: 12.5px; font-weight: 600; color: var(--text-2); }
+  .fmt-exts {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--text-3);
+    line-height: 1.5;
+  }
+
+  @media (max-width: 1020px) {
+    .format-bar { grid-template-columns: repeat(2, 1fr); }
+  }
   @media (max-width: 760px) {
     .stats-row { grid-template-columns: repeat(2, 1fr); }
     .stats-row li { border-left: 0 !important; border-top: 1px solid var(--border); }
@@ -44,11 +97,11 @@ const items = [
     .stats-row li:nth-child(even) { border-left: 1px solid var(--border) !important; }
     .stats-row li:last-child { grid-column: span 2; border-left: 0 !important; }
     .num { font-size: 30px; }
+    .format-bar { grid-template-columns: 1fr; }
   }
 </style>
 
 <script>
-  // 数字滚动动画
   const els = document.querySelectorAll<HTMLElement>('[data-count]');
   if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
     const io = new IntersectionObserver((entries) => {
@@ -59,15 +112,16 @@ const items = [
         io.unobserve(el);
         if (!target) continue;
         const start = performance.now();
+        const base = Math.round(target * 0.35);
         const step = (t: number) => {
-          const p = Math.min(1, (t - start) / 1100);
-          el.textContent = String(Math.round(target * (1 - Math.pow(1 - p, 3))));
+          const p = Math.min(1, (t - start) / 550);
+          el.textContent = String(Math.round(base + (target - base) * (1 - Math.pow(1 - p, 3))));
           if (p < 1) requestAnimationFrame(step);
         };
-        el.textContent = '0';
+        el.textContent = String(base);
         requestAnimationFrame(step);
       }
-    }, { threshold: 0.4 });
+    }, { threshold: 0.35 });
     els.forEach((el) => io.observe(el));
   }
 </script>
