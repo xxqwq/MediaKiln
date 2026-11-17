@@ -5,6 +5,11 @@ window.VGT = window.VGT || {};
 
 const SAVABLE_TYPES = new Set(['select', 'chips', 'range', 'color', 'number', 'text']);
 const round1 = (n) => Math.round(n * 10) / 10;
+const escHtml = (s) => String(s ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;');
 
 function readChips(key) {
   const row = document.querySelector(`.chip-row[data-key="${key}"]`);
@@ -75,6 +80,7 @@ function createParamsController(appCtx) {
     window.__pendingSecondFile = null;
     window.__secondInfo = null;
     window.__segments = [];
+    window.__docSelectedSectionIds = null;
     const box = $('params');
     box.innerHTML = '';
 
@@ -228,6 +234,47 @@ function createParamsController(appCtx) {
           <div class="crop-wrap"><canvas id="crop-canvas"></canvas></div>
           <div class="chip-row"><button class="chip" id="crop-reset">重置选区</button></div>
           <div class="muted crop-status" id="crop-status">尚未选择区域</div>`;
+      } else if (field.type === 'docSections') {
+        const sections = file?.info?.sections || [];
+        const actionWord = field.actionWord || '提取';
+        const emptyTarget = field.emptyTarget || 'Word / PPT / Markdown 文档';
+        if (!file) {
+          wrap.innerHTML = `<label>${field.label}</label>
+            <div class="doc-sections-empty muted">导入单个 ${emptyTarget}后可在此勾选指定章节或页面（批量模式下${actionWord}全部章节）</div>`;
+        } else if (!sections.length) {
+          const mdHint = emptyTarget.includes('Markdown') ? ' / Markdown # 标题' : '';
+          const emptyMsg = file.info?.docType === 'pptx'
+            ? `当前 PPT 仅 1 页，将${actionWord}全部媒体资源`
+            : `未检测到章节标题（如 Word 标题样式 / “第X章”${mdHint}），将${actionWord}文档全部图片`;
+          wrap.innerHTML = `<label>${field.label}</label>
+            <div class="doc-sections-empty muted">${emptyMsg}</div>`;
+        } else {
+          window.__docSelectedSectionIds = sections.map((s) => s.id);
+          const rowsHtml = sections.map((s) => {
+            const indent = Math.min(5, Math.max(0, (s.level || 1) - 1));
+            const countText = s.imageCount > 0
+              ? (s.imageCount !== s.directImageCount ? `直属 ${s.directImageCount} / 共 ${s.imageCount} 图` : `${s.imageCount} 图`)
+              : '0 图';
+            const emptyCls = s.imageCount === 0 ? ' is-empty' : '';
+            return `<label class="doc-sec-item${emptyCls}" data-sec-row="${escHtml(s.id)}" style="padding-left:${10 + indent * 16}px">
+              <input type="checkbox" class="doc-sec-check" data-sec-id="${escHtml(s.id)}" checked />
+              <span class="doc-sec-title" title="${escHtml(s.title)}">${escHtml(s.title)}</span>
+              <span class="doc-sec-count${s.imageCount > 0 ? ' has-img' : ''}">${countText}</span>
+            </label>`;
+          }).join('');
+          wrap.innerHTML = `<label>${field.label}</label>
+            <div class="doc-sections-box" id="doc-sections-box" data-action-word="${escHtml(actionWord)}">
+              <div class="doc-sec-toolbar">
+                <input type="text" id="doc-sec-search" class="doc-sec-search" placeholder="筛选章节 / 页面名称…" />
+                <button type="button" class="batch-btn" id="doc-sec-all">全选</button>
+                <button type="button" class="batch-btn" id="doc-sec-with-img" title="只保留含图片或媒体的章节">仅选有图</button>
+                <button type="button" class="batch-btn" id="doc-sec-none">清空</button>
+                <label class="doc-sec-cascade" title="勾选/取消父章节时连带其子章节"><input type="checkbox" id="doc-sec-cascade" checked /> 连带子章节</label>
+              </div>
+              <div class="doc-sec-summary" id="doc-sec-summary"></div>
+              <div class="doc-sec-list" id="doc-sec-list">${rowsHtml}</div>
+            </div>`;
+        }
       }
       grid.appendChild(wrap);
     }
@@ -512,6 +559,118 @@ function createParamsController(appCtx) {
         name.title = list.join('\n');
         name.classList.remove('muted');
       };
+    }
+
+    const docSecBox = box.querySelector('#doc-sections-box');
+    if (docSecBox && file?.info?.sections?.length) {
+      const sections = file.info.sections;
+      const childrenMap = new Map();
+      for (const s of sections) {
+        if (!s.parentId) continue;
+        if (!childrenMap.has(s.parentId)) childrenMap.set(s.parentId, []);
+        childrenMap.get(s.parentId).push(s.id);
+      }
+      const getDescendantIds = (rootId) => {
+        const res = [];
+        const queue = [...(childrenMap.get(rootId) || [])];
+        while (queue.length) {
+          const cid = queue.shift();
+          res.push(cid);
+          const sub = childrenMap.get(cid);
+          if (sub?.length) queue.push(...sub);
+        }
+        return res;
+      };
+
+      const checkEls = new Map();
+      const rowEls = new Map();
+      docSecBox.querySelectorAll('.doc-sec-check').forEach((cb) => {
+        checkEls.set(cb.dataset.secId, cb);
+      });
+      docSecBox.querySelectorAll('.doc-sec-item').forEach((row) => {
+        rowEls.set(row.dataset.secRow, row);
+      });
+
+      const summaryEl = docSecBox.querySelector('#doc-sec-summary');
+      const cascadeEl = docSecBox.querySelector('#doc-sec-cascade');
+      const searchEl = docSecBox.querySelector('#doc-sec-search');
+
+      const actionWord = docSecBox.dataset.actionWord || '提取';
+      const unitWord = actionWord === '压缩' ? '项媒体' : '张图';
+      const syncDocSections = () => {
+        const selected = [];
+        let imgEst = 0;
+        for (const s of sections) {
+          if (checkEls.get(s.id)?.checked) {
+            selected.push(s.id);
+            imgEst += s.directImageCount || 0;
+          }
+        }
+        window.__docSelectedSectionIds = selected;
+        if (summaryEl) {
+          summaryEl.textContent = selected.length
+            ? `已选 ${selected.length} / ${sections.length} 项（预计${actionWord} ${imgEst} ${unitWord}）`
+            : `⚠️ 尚未选择任何章节（共 ${sections.length} 项）`;
+          summaryEl.classList.toggle('is-warn', selected.length === 0);
+        }
+      };
+
+      checkEls.forEach((cb, secId) => {
+        cb.onchange = () => {
+          if (cascadeEl?.checked) {
+            const desc = getDescendantIds(secId);
+            for (const dId of desc) {
+              const dCb = checkEls.get(dId);
+              if (dCb) dCb.checked = cb.checked;
+            }
+          }
+          syncDocSections();
+        };
+      });
+
+      const isVisibleRow = (secId) => {
+        const r = rowEls.get(secId);
+        return r && !r.classList.contains('hidden');
+      };
+
+      docSecBox.querySelector('#doc-sec-all').onclick = () => {
+        for (const s of sections) {
+          if (isVisibleRow(s.id)) {
+            const cb = checkEls.get(s.id);
+            if (cb) cb.checked = true;
+          }
+        }
+        syncDocSections();
+      };
+      docSecBox.querySelector('#doc-sec-with-img').onclick = () => {
+        for (const s of sections) {
+          if (isVisibleRow(s.id)) {
+            const cb = checkEls.get(s.id);
+            if (cb) cb.checked = (s.directImageCount || 0) > 0;
+          }
+        }
+        syncDocSections();
+      };
+      docSecBox.querySelector('#doc-sec-none').onclick = () => {
+        const hasFilter = !!(searchEl?.value || '').trim();
+        for (const s of sections) {
+          if (!hasFilter || isVisibleRow(s.id)) {
+            const cb = checkEls.get(s.id);
+            if (cb) cb.checked = false;
+          }
+        }
+        syncDocSections();
+      };
+      if (searchEl) {
+        searchEl.oninput = () => {
+          const q = searchEl.value.trim().toLowerCase();
+          for (const s of sections) {
+            const row = rowEls.get(s.id);
+            if (row) row.classList.toggle('hidden', !!q && !s.title.toLowerCase().includes(q));
+          }
+        };
+      }
+      syncDocSections();
     }
 
     if (box.querySelector('#crop-canvas')) {

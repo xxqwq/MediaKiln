@@ -45,6 +45,99 @@ function parseRelsMap(xmlText, baseDir = 'word') {
   return map;
 }
 
+function decodeXmlEntities(str) {
+  return String(str || '')
+    .replace(/&#x([0-9a-f]+);/gi, (_m, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_m, dec) => String.fromCodePoint(parseInt(dec, 10)))
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
+function parseDocxStyleHeadingLevels(zip) {
+  const stylesEntry = zip.getEntry('word/styles.xml');
+  const styleMap = new Map();
+  if (stylesEntry) {
+    const xml = stylesEntry.getData().toString('utf8');
+    const styleRe = /<w:style\b([^>]*)>([\s\S]*?)<\/w:style>/gi;
+    let m;
+    while ((m = styleRe.exec(xml))) {
+      const attrs = m[1];
+      const body = m[2];
+      const type = attrs.match(/\bw:type\s*=\s*["']([^"']+)["']/i)?.[1];
+      if (type && type.toLowerCase() !== 'paragraph') continue;
+      const id = attrs.match(/\bw:styleId\s*=\s*["']([^"']+)["']/i)?.[1];
+      if (!id) continue;
+      const name = body.match(/<w:name\b[^>]*\bw:val\s*=\s*["']([^"']+)["']/i)?.[1] || '';
+      const basedOn = body.match(/<w:basedOn\b[^>]*\bw:val\s*=\s*["']([^"']+)["']/i)?.[1] || '';
+      const outRaw = body.match(/<w:outlineLvl\b[^>]*\bw:val\s*=\s*["'](\d+)["']/i)?.[1];
+      const outlineLvl = outRaw !== undefined ? Number(outRaw) : null;
+      styleMap.set(id, { name, basedOn, outlineLvl });
+    }
+  }
+
+  const cache = new Map();
+  const resolveLevel = (styleId, depth = 0) => {
+    if (!styleId || depth > 10) return 0;
+    if (cache.has(styleId)) return cache.get(styleId);
+    let lvl = 0;
+    const meta = styleMap.get(styleId);
+    if (meta) {
+      if (meta.outlineLvl !== null && meta.outlineLvl >= 0 && meta.outlineLvl <= 8) {
+        lvl = meta.outlineLvl + 1;
+      } else {
+        const nm = meta.name.match(/^(?:heading|标题)\s*([1-9])$/i);
+        if (nm) lvl = Number(nm[1]);
+        else if (meta.basedOn) lvl = resolveLevel(meta.basedOn, depth + 1);
+      }
+    }
+    if (!lvl) {
+      const sm = String(styleId).match(/^(?:heading|h|标题)\s*([1-9])$/i);
+      if (sm) lvl = Number(sm[1]);
+    }
+    cache.set(styleId, lvl);
+    return lvl;
+  };
+  return resolveLevel;
+}
+
+function scanDocxParagraphs(docXml) {
+  const paragraphs = [];
+  const tagRe = /<\/?w:p(?:\s[^>]*)?>/gi;
+  let depth = 0;
+  let startIdx = -1;
+  let m;
+  while ((m = tagRe.exec(docXml))) {
+    const tag = m[0];
+    if (tag.startsWith('</')) {
+      if (depth > 0) {
+        depth--;
+        if (depth === 0 && startIdx >= 0) {
+          paragraphs.push(docXml.slice(startIdx, m.index + tag.length));
+          startIdx = -1;
+        }
+      }
+    } else if (!tag.endsWith('/>')) {
+      if (depth === 0) startIdx = m.index;
+      depth++;
+    }
+  }
+  return paragraphs;
+}
+
+function extractDocxParagraphText(pXml) {
+  const clean = pXml.replace(/<w:tab\b[^>]*\/?>/gi, '<w:t> </w:t>');
+  const parts = [];
+  const tRe = /<w:t\b[^>]*>([\s\S]*?)<\/w:t>/gi;
+  let m;
+  while ((m = tRe.exec(clean))) {
+    parts.push(decodeXmlEntities(m[1]));
+  }
+  return parts.join('').replace(/\s+/g, ' ').trim();
+}
+
 function inspectDocx(filePath) {
   const ext = path.extname(filePath).slice(1).toLowerCase();
   if (ext === 'doc') {
@@ -72,33 +165,138 @@ function inspectDocx(filePath) {
 
   mediaEntries.sort((a, b) => naturalCompare(a.entryName, b.entryName));
 
-  // 读取主文档关系以按文章出现顺序排列图片
+  // 读取主文档关系以按文章出现顺序排列图片并解析章节结构
   const relsEntry = entryMap.get('word/_rels/document.xml.rels');
   const relsMap = relsEntry ? parseRelsMap(relsEntry.getData().toString('utf8'), 'word') : new Map();
   const docEntry = entryMap.get('word/document.xml');
+  const resolveStyleLevel = parseDocxStyleHeadingLevels(zip);
 
   const orderedNames = [];
   const seen = new Set();
+  const sectionMetaByEntry = new Map();
+  const sections = [];
+  let hasRealHeading = false;
 
   if (docEntry && relsMap.size) {
     const docXml = docEntry.getData().toString('utf8');
-    const refRe = /\b(?:r:embed|r:id)\s*=\s*["']([^"']+)["']/gi;
-    let m;
-    while ((m = refRe.exec(docXml))) {
-      const target = relsMap.get(m[1]);
-      if (target && /^word\/media\//i.test(target) && entryMap.has(target) && !seen.has(target)) {
+    const paragraphs = scanDocxParagraphs(docXml);
+    const parsedParas = paragraphs.map((pXml) => {
+      const pPr = pXml.match(/<w:pPr\b[^>]*>([\s\S]*?)<\/w:pPr>/i)?.[1] || '';
+      const outLvlRaw = pPr.match(/<w:outlineLvl\b[^>]*\bw:val\s*=\s*["'](\d+)["']/i)?.[1];
+      const styleId = pPr.match(/<w:pStyle\b[^>]*\bw:val\s*=\s*["']([^"']+)["']/i)?.[1] || '';
+      let level = 0;
+      if (outLvlRaw !== undefined) {
+        const n = Number(outLvlRaw);
+        if (n >= 0 && n <= 8) level = n + 1;
+      }
+      if (!level && styleId) level = resolveStyleLevel(styleId);
+      const text = extractDocxParagraphText(pXml);
+
+      const mediaTargets = [];
+      const refRe = /\b(?:r:embed|r:id)\s*=\s*["']([^"']+)["']/gi;
+      let rm;
+      while ((rm = refRe.exec(pXml))) {
+        const target = relsMap.get(rm[1]);
+        if (target && /^word\/media\//i.test(target) && entryMap.has(target)) {
+          mediaTargets.push(target);
+        }
+      }
+      return { text, level: level > 6 ? 6 : level, mediaTargets };
+    });
+
+    const styledHeadingCount = parsedParas.filter((p) => p.level > 0 && p.text).length;
+    if (styledHeadingCount < 2) {
+      for (const p of parsedParas) {
+        if (p.level > 0 || p.mediaTargets.length || !p.text || p.text.length > 60) continue;
+        if (/^第[一二三四五六七八九十百零\d]+[章节篇部分卷](?:[\s：:、.].*)?$/.test(p.text)) {
+          p.level = /^第[一二三四五六七八九十百零\d]+节/.test(p.text) ? 2 : 1;
+        } else if (/^\d+(?:\.\d+){1,2}\s+\S+/.test(p.text)) {
+          p.level = Math.min(3, (p.text.match(/\./g) || []).length + 1);
+        }
+      }
+    }
+
+    const stack = [];
+    let secSeq = 0;
+    let implicitSec = null;
+
+    for (const p of parsedParas) {
+      if (p.level > 0 && p.text) {
+        hasRealHeading = true;
+        while (stack.length && stack[stack.length - 1].level >= p.level) stack.pop();
+        const sec = {
+          id: `sec_${++secSeq}`,
+          title: p.text,
+          level: p.level,
+          parentId: stack.length ? stack[stack.length - 1].id : null,
+          directImageCount: 0,
+          imageCount: 0,
+        };
+        sections.push(sec);
+        stack.push(sec);
+      }
+
+      for (const target of p.mediaTargets) {
+        if (seen.has(target)) continue;
         seen.add(target);
         orderedNames.push(target);
+
+        let curStack = stack;
+        if (!curStack.length) {
+          if (!implicitSec) {
+            implicitSec = {
+              id: 'sec_0',
+              title: '封面 / 前言（首个标题之前）',
+              level: 1,
+              parentId: null,
+              directImageCount: 0,
+              imageCount: 0,
+            };
+            sections.unshift(implicitSec);
+          }
+          curStack = [implicitSec];
+        }
+        const curSec = curStack[curStack.length - 1];
+        curSec.directImageCount++;
+        for (const s of curStack) s.imageCount++;
+        sectionMetaByEntry.set(target, {
+          sectionId: curSec.id,
+          sectionTitle: curSec.title,
+          ancestorSectionIds: curStack.map((s) => s.id),
+          ancestorTitles: curStack.map((s) => s.title),
+        });
       }
     }
   }
 
   // 补充页眉/页脚/批注/文本框等其余 media
+  let extraSec = null;
   for (const e of mediaEntries) {
     const name = String(e.entryName || '').replace(/\\/g, '/');
     if (!seen.has(name)) {
       seen.add(name);
       orderedNames.push(name);
+      if (hasRealHeading) {
+        if (!extraSec) {
+          extraSec = {
+            id: 'sec_extra',
+            title: '页眉 / 页脚 / 其他区域',
+            level: 1,
+            parentId: null,
+            directImageCount: 0,
+            imageCount: 0,
+          };
+          sections.push(extraSec);
+        }
+        extraSec.directImageCount++;
+        extraSec.imageCount++;
+        sectionMetaByEntry.set(name, {
+          sectionId: extraSec.id,
+          sectionTitle: extraSec.title,
+          ancestorSectionIds: [extraSec.id],
+          ancestorTitles: [extraSec.title],
+        });
+      }
     }
   }
 
@@ -106,6 +304,7 @@ function inspectDocx(filePath) {
     const e = entryMap.get(entryName);
     const filename = path.posix.basename(entryName);
     const imgExt = path.posix.extname(filename).slice(1).toLowerCase() || 'png';
+    const secMeta = sectionMetaByEntry.get(entryName) || {};
     return {
       kind: 'docxMedia',
       entryName,
@@ -113,6 +312,10 @@ function inspectDocx(filePath) {
       ext: imgExt,
       size: e.header.size || 0,
       isVectorLegacy: imgExt === 'emf' || imgExt === 'wmf',
+      sectionId: secMeta.sectionId || '',
+      sectionTitle: secMeta.sectionTitle || '',
+      ancestorSectionIds: secMeta.ancestorSectionIds || [],
+      ancestorTitles: secMeta.ancestorTitles || [],
     };
   });
 
@@ -120,6 +323,7 @@ function inspectDocx(filePath) {
   return {
     docType: 'docx',
     items,
+    sections: hasRealHeading ? sections : [],
     stats: {
       total: items.length,
       imageCount: items.length,
@@ -190,39 +394,94 @@ function inspectPptx(filePath) {
 
   const orderedNames = [];
   const seenMedia = new Set();
+  const sectionMetaByEntry = new Map();
+  const sections = [];
 
-  for (const slidePath of slidePaths) {
+  for (let sIdx = 0; sIdx < slidePaths.length; sIdx++) {
+    const slidePath = slidePaths[sIdx];
     const baseName = path.posix.basename(slidePath);
     const relsPath = `ppt/slides/_rels/${baseName}.rels`;
     const slideRelsEntry = entryMap.get(relsPath);
+    const slideXml = entryMap.get(slidePath)?.getData().toString('utf8') || '';
+
+    // 提取本页标题占位符文本
+    let slideTitle = '';
+    const spRe = /<p:sp\b[\s\S]*?<\/p:sp>/gi;
+    let spm;
+    while ((spm = spRe.exec(slideXml))) {
+      if (/<p:ph\b[^>]*\btype\s*=\s*["'](?:title|ctrTitle)["']/i.test(spm[0])) {
+        const texts = [];
+        const tRe = /<a:t\b[^>]*>([\s\S]*?)<\/a:t>/gi;
+        let tm;
+        while ((tm = tRe.exec(spm[0]))) texts.push(decodeXmlEntities(tm[1]));
+        slideTitle = texts.join('').replace(/\s+/g, ' ').trim();
+        if (slideTitle) break;
+      }
+    }
+    const sec = {
+      id: `slide_${sIdx + 1}`,
+      title: slideTitle ? `第 ${sIdx + 1} 页：${slideTitle}` : `第 ${sIdx + 1} 页`,
+      level: 1,
+      parentId: null,
+      directImageCount: 0,
+      imageCount: 0,
+    };
+    sections.push(sec);
+
     if (!slideRelsEntry) continue;
     const slideRels = parseRelsMap(slideRelsEntry.getData().toString('utf8'), 'ppt/slides');
-    const slideXml = entryMap.get(slidePath)?.getData().toString('utf8') || '';
+
+    const recordSlideTarget = (target) => {
+      if (!target || !/^ppt\/media\//i.test(target) || !entryMap.has(target) || seenMedia.has(target)) return;
+      seenMedia.add(target);
+      orderedNames.push(target);
+      sec.directImageCount++;
+      sec.imageCount++;
+      sectionMetaByEntry.set(target, {
+        sectionId: sec.id,
+        sectionTitle: sec.title,
+        ancestorSectionIds: [sec.id],
+        ancestorTitles: [sec.title],
+      });
+    };
 
     const refRe = /\b(?:r:embed|r:link|r:id)\s*=\s*["']([^"']+)["']/gi;
     let rm;
     while ((rm = refRe.exec(slideXml))) {
-      const target = slideRels.get(rm[1]);
-      if (target && /^ppt\/media\//i.test(target) && entryMap.has(target) && !seenMedia.has(target)) {
-        seenMedia.add(target);
-        orderedNames.push(target);
-      }
+      recordSlideTarget(slideRels.get(rm[1]));
     }
     // 兼容未在 XML 正文正则捕获但存在于该页 .rels 中的媒体
     for (const target of slideRels.values()) {
-      if (/^ppt\/media\//i.test(target) && entryMap.has(target) && !seenMedia.has(target)) {
-        seenMedia.add(target);
-        orderedNames.push(target);
-      }
+      recordSlideTarget(target);
     }
   }
 
   // 补充母版、版式、备注页、主题等其余 ppt/media
+  let extraSlideSec = null;
   for (const e of mediaEntries) {
     const name = String(e.entryName || '').replace(/\\/g, '/');
     if (!seenMedia.has(name)) {
       seenMedia.add(name);
       orderedNames.push(name);
+      if (!extraSlideSec) {
+        extraSlideSec = {
+          id: 'slide_extra',
+          title: '母版 / 版式 / 其他资源',
+          level: 1,
+          parentId: null,
+          directImageCount: 0,
+          imageCount: 0,
+        };
+        sections.push(extraSlideSec);
+      }
+      extraSlideSec.directImageCount++;
+      extraSlideSec.imageCount++;
+      sectionMetaByEntry.set(name, {
+        sectionId: extraSlideSec.id,
+        sectionTitle: extraSlideSec.title,
+        ancestorSectionIds: [extraSlideSec.id],
+        ancestorTitles: [extraSlideSec.title],
+      });
     }
   }
 
@@ -233,6 +492,7 @@ function inspectPptx(filePath) {
     const mediaKind = PPT_VIDEO_EXTS.has(mediaExt)
       ? 'video'
       : (PPT_AUDIO_EXTS.has(mediaExt) ? 'audio' : 'image');
+    const secMeta = sectionMetaByEntry.get(entryName) || {};
     return {
       kind: 'pptxMedia',
       mediaKind,
@@ -241,6 +501,10 @@ function inspectPptx(filePath) {
       ext: mediaExt,
       size: e.header.size || 0,
       isVectorLegacy: mediaExt === 'emf' || mediaExt === 'wmf',
+      sectionId: secMeta.sectionId || '',
+      sectionTitle: secMeta.sectionTitle || '',
+      ancestorSectionIds: secMeta.ancestorSectionIds || [],
+      ancestorTitles: secMeta.ancestorTitles || [],
     };
   });
 
@@ -252,6 +516,7 @@ function inspectPptx(filePath) {
   return {
     docType: 'pptx',
     items,
+    sections: sections.length > 1 ? sections : [],
     stats: {
       total: items.length,
       imageCount: imageItems.length,
@@ -515,14 +780,92 @@ function scanMarkdownImages(filePath) {
 
   hits.sort((a, b) => a.index - b.index);
 
+  // 扫描 Markdown 章节标题（已屏蔽代码块）
+  const mdHeadings = [];
+  const headingLineRe = /^\s{0,3}(#{1,6})\s+(.+?)\s*#*$/gm;
+  let hm;
+  while ((hm = headingLineRe.exec(clean))) {
+    const title = hm[2].trim();
+    if (title) {
+      mdHeadings.push({ index: hm.index, level: hm[1].length, title });
+    }
+  }
+
+  const sections = [];
+  const stack = [];
+  let secSeq = 0;
+  let implicitSec = null;
+  let hPtr = 0;
+
   const items = [];
   for (const h of hits) {
-    if (h.kind === 'inlineSvg') {
-      items.push(h);
-      continue;
+    while (hPtr < mdHeadings.length && mdHeadings[hPtr].index <= h.index) {
+      const hd = mdHeadings[hPtr++];
+      while (stack.length && stack[stack.length - 1].level >= hd.level) stack.pop();
+      const sec = {
+        id: `sec_${++secSeq}`,
+        title: hd.title,
+        level: hd.level,
+        parentId: stack.length ? stack[stack.length - 1].id : null,
+        directImageCount: 0,
+        imageCount: 0,
+      };
+      sections.push(sec);
+      stack.push(sec);
     }
-    const item = classifyTarget(h.target, h.alt, mdDir, { source: h.source });
-    if (item) items.push(item);
+
+    let curStack = stack;
+    if (mdHeadings.length && !curStack.length) {
+      if (!implicitSec) {
+        implicitSec = {
+          id: 'sec_0',
+          title: '正文开头（首个标题之前）',
+          level: 1,
+          parentId: null,
+          directImageCount: 0,
+          imageCount: 0,
+        };
+        sections.unshift(implicitSec);
+      }
+      curStack = [implicitSec];
+    }
+
+    const secExtra = curStack.length
+      ? {
+          sectionId: curStack[curStack.length - 1].id,
+          sectionTitle: curStack[curStack.length - 1].title,
+          ancestorSectionIds: curStack.map((s) => s.id),
+          ancestorTitles: curStack.map((s) => s.title),
+        }
+      : { sectionId: '', sectionTitle: '', ancestorSectionIds: [], ancestorTitles: [] };
+
+    const item = h.kind === 'inlineSvg'
+      ? { ...h, ...secExtra }
+      : classifyTarget(h.target, h.alt, mdDir, { source: h.source, ...secExtra });
+
+    if (item) {
+      items.push(item);
+      if (curStack.length) {
+        curStack[curStack.length - 1].directImageCount++;
+        for (const s of curStack) s.imageCount++;
+      }
+    }
+  }
+
+  // 把最后一个含图章节之后的标题也补齐（方便用户在目录树里看到完整大纲）
+  while (hPtr < mdHeadings.length) {
+    const hd = mdHeadings[hPtr++];
+    while (stack.length && stack[stack.length - 1].level >= hd.level) stack.pop();
+    const sec = {
+      id: `sec_${++secSeq}`,
+      title: hd.title,
+      level: hd.level,
+      parentId: stack.length ? stack[stack.length - 1].id : null,
+      directImageCount: 0,
+      imageCount: 0,
+    };
+    sections.push(sec);
+    stack.push(sec);
   }
 
   const stats = {
@@ -534,7 +877,12 @@ function scanMarkdownImages(filePath) {
     remote: items.filter((i) => i.kind === 'remote').length,
   };
 
-  return { docType: 'md', items, stats };
+  return {
+    docType: 'md',
+    items,
+    sections: mdHeadings.length ? sections : [],
+    stats,
+  };
 }
 
 const DOCX_CT_MAP = {
@@ -655,6 +1003,133 @@ function ensureDocxContentTypes(zip, extensions = [], renameMap = null) {
   }
 }
 
+function updateExtentAttr(tag, newHeightFn) {
+  const cxMatch = tag.match(/\bcx\s*=\s*["'](\d+)["']/i);
+  const cyMatch = tag.match(/\bcy\s*=\s*["'](\d+)["']/i);
+  if (!cxMatch || !cyMatch) return { tag, changed: false };
+  const cx = Number(cxMatch[1]);
+  const oldCy = Number(cyMatch[1]);
+  if (!(cx > 0)) return { tag, changed: false };
+  const newCy = Math.max(1, Math.round(newHeightFn(cx)));
+  if (newCy === oldCy) return { tag, changed: false };
+  const nextTag = tag.replace(/\bcy\s*=\s*(["'])\d+\1/i, `cy=$1${newCy}$1`);
+  return { tag: nextTag, changed: nextTag !== tag };
+}
+
+function updateOoxmlImageSizesKeepWidth(zip, sizeMapByEntry) {
+  if (!sizeMapByEntry || !sizeMapByEntry.size) return 0;
+
+  let updatedContainers = 0;
+  const entries = zip.getEntries();
+
+  for (const relsEntry of entries) {
+    const relsName = String(relsEntry.entryName || '').replace(/\\/g, '/');
+    if (relsEntry.isDirectory) continue;
+    const rm = relsName.match(/^(.+)\/_rels\/([^/]+\.xml)\.rels$/i);
+    if (!rm) continue;
+
+    const baseDir = rm[1];
+    const xmlPath = `${baseDir}/${rm[2]}`;
+    const xmlEntry = zip.getEntry(xmlPath);
+    if (!xmlEntry || xmlEntry.isDirectory) continue;
+
+    const relsMap = parseRelsMap(relsEntry.getData().toString('utf8'), baseDir);
+    const rIdSizeMap = new Map();
+    for (const [rId, absTarget] of relsMap.entries()) {
+      const dims = sizeMapByEntry.get(absTarget.toLowerCase());
+      if (dims && dims.width > 0 && dims.height > 0) {
+        rIdSizeMap.set(rId, dims);
+      }
+    }
+    if (!rIdSizeMap.size) continue;
+
+    let xml = xmlEntry.getData().toString('utf8');
+    let xmlChanged = false;
+
+    // 1. Word DrawingML: <wp:inline> / <wp:anchor>
+    xml = xml.replace(/<wp:(inline|anchor)\b[^>]*>[\s\S]*?<\/wp:\1>/gi, (block) => {
+      const blipMatch = block.match(/<a:blip\b[^>]*\b(?:r:embed|r:link)\s*=\s*["']([^"']+)["'][^>]*>/i);
+      if (!blipMatch) return block;
+      const dims = rIdSizeMap.get(blipMatch[1]);
+      if (!dims) return block;
+
+      let nextBlock = block;
+      let blockChanged = false;
+      const heightForWidth = (cx) => (cx * dims.height) / dims.width;
+
+      nextBlock = nextBlock.replace(/<wp:extent\b[^>]*>/i, (extTag) => {
+        const res = updateExtentAttr(extTag, heightForWidth);
+        if (res.changed) blockChanged = true;
+        return res.tag;
+      });
+
+      nextBlock = nextBlock.replace(/(<pic:spPr\b[\s\S]*?<a:xfrm\b[\s\S]*?)(<a:ext\b[^>]*>)/i, (_m, prefix, extTag) => {
+        const res = updateExtentAttr(extTag, heightForWidth);
+        if (res.changed) blockChanged = true;
+        return `${prefix}${res.tag}`;
+      });
+
+      if (blockChanged) {
+        xmlChanged = true;
+        updatedContainers++;
+      }
+      return nextBlock;
+    });
+
+    // 2. PPT DrawingML: <p:pic>
+    xml = xml.replace(/<p:pic\b[^>]*>[\s\S]*?<\/p:pic>/gi, (block) => {
+      const blipMatch = block.match(/<a:blip\b[^>]*\b(?:r:embed|r:link)\s*=\s*["']([^"']+)["'][^>]*>/i);
+      if (!blipMatch) return block;
+      const dims = rIdSizeMap.get(blipMatch[1]);
+      if (!dims) return block;
+
+      let blockChanged = false;
+      const heightForWidth = (cx) => (cx * dims.height) / dims.width;
+      const nextBlock = block.replace(/(<p:spPr\b[\s\S]*?<a:xfrm\b[\s\S]*?)(<a:ext\b[^>]*>)/i, (_m, prefix, extTag) => {
+        const res = updateExtentAttr(extTag, heightForWidth);
+        if (res.changed) blockChanged = true;
+        return `${prefix}${res.tag}`;
+      });
+
+      if (blockChanged) {
+        xmlChanged = true;
+        updatedContainers++;
+      }
+      return nextBlock;
+    });
+
+    // 3. Word VML fallback: <v:shape ... style="...width:300pt;height:200pt...">...<v:imagedata r:id="..."/>
+    xml = xml.replace(/<v:shape\b[^>]*>[\s\S]*?<\/v:shape>/gi, (block) => {
+      const imgMatch = block.match(/<v:imagedata\b[^>]*\b(?:r:id|o:relid)\s*=\s*["']([^"']+)["'][^>]*>/i);
+      if (!imgMatch) return block;
+      const dims = rIdSizeMap.get(imgMatch[1]);
+      if (!dims) return block;
+
+      const nextBlock = block.replace(/(<v:shape\b[^>]*\bstyle\s*=\s*)(["'])([^"']*)\2/i, (full, prefix, q, styleStr) => {
+        const wMatch = styleStr.match(/\bwidth\s*:\s*([\d.]+)([a-z%]*)/i);
+        const hMatch = styleStr.match(/\bheight\s*:\s*([\d.]+)([a-z%]*)/i);
+        if (!wMatch || !hMatch) return full;
+        const wVal = parseFloat(wMatch[1]);
+        if (!(wVal > 0)) return full;
+        const newHVal = Number(((wVal * dims.height) / dims.width).toFixed(2));
+        const unit = hMatch[2] || wMatch[2] || '';
+        const nextStyle = styleStr.replace(/\bheight\s*:\s*[\d.]+[a-z%]*/i, `height:${newHVal}${unit}`);
+        if (nextStyle === styleStr) return full;
+        xmlChanged = true;
+        updatedContainers++;
+        return `${prefix}${q}${nextStyle}${q}`;
+      });
+      return nextBlock;
+    });
+
+    if (xmlChanged) {
+      zip.updateFile(xmlPath, Buffer.from(xml, 'utf8'));
+    }
+  }
+
+  return updatedContainers;
+}
+
 function inspectDocument(filePath) {
   const ext = path.extname(String(filePath || '')).slice(1).toLowerCase();
   if (ext === 'docx' || ext === 'doc') return inspectDocx(filePath);
@@ -671,4 +1146,5 @@ module.exports = {
   allocUniqueMediaEntry,
   rewriteDocxMediaTargets,
   ensureDocxContentTypes,
+  updateOoxmlImageSizesKeepWidth,
 };

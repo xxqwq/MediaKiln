@@ -937,7 +937,10 @@ async function showSuccess(res) {
       if (es.dataUriCount) details.push(`Base64 ${es.dataUriCount}`);
       if (es.inlineSvgCount) details.push(`内联 SVG ${es.inlineSvgCount}`);
       if (es.remoteDownloaded) details.push(`网络下载 ${es.remoteDownloaded}`);
-      line = `✅ 已从文档识别并导出 ${es.savedCount} 个媒体文件` + (details.length ? `（${details.join(' · ')}）` : '');
+      const secScope = es.sectionFiltered && es.sectionTitles?.length
+        ? `（仅所选 ${es.sectionTitles.length} 个章节：${escHtml(es.sectionTitles.slice(0, 2).join('、'))}${es.sectionTitles.length > 2 ? ' 等' : ''}）`
+        : '';
+      line = `✅ 已从文档${secScope}识别并导出 ${es.savedCount} 个媒体文件` + (details.length ? `（${details.join(' · ')}）` : '');
       const notes = [];
       if (es.remoteSkipped) notes.push(`跳过网络图 ${es.remoteSkipped} 张`);
       if (es.missingLocal) notes.push(`本地路径不存在 ${es.missingLocal} 处`);
@@ -952,11 +955,14 @@ async function showSuccess(res) {
       const ds = res.docCompressSummary;
       const docLbl = ds.docType === 'pptx' ? 'PPT' : 'Word';
       const vNote = ds.videoCompressedCount ? `，含视频 ${ds.videoCompressedCount} 个` : '';
+      const secScope = ds.sectionFiltered && ds.sectionTitles?.length
+        ? `（仅所选 ${ds.sectionTitles.length} 个章节：${escHtml(ds.sectionTitles.slice(0, 2).join('、'))}${ds.sectionTitles.length > 2 ? ' 等' : ''}）`
+        : '';
       if (ds.newSize < ds.origSize) {
         const pct = Math.round((1 - ds.newSize / ds.origSize) * 100);
-        line = `✅ ${docLbl} 压缩完成：${fmtSize(ds.origSize)} → ${fmtSize(ds.newSize)}，节省 ${pct}%（已压缩 ${ds.compressedCount}/${ds.totalMedia} 项媒体${vNote}）`;
+        line = `✅ ${docLbl}${secScope} 压缩完成：${fmtSize(ds.origSize)} → ${fmtSize(ds.newSize)}，节省 ${pct}%（已压缩 ${ds.compressedCount}/${ds.totalMedia} 项媒体${vNote}）`;
       } else {
-        line = `✅ ${docLbl} 处理完成：${fmtSize(ds.origSize)} → ${fmtSize(ds.newSize)}（文档内媒体已接近最优，尝试降低分辨率上限或切换“极限瘦身”）`;
+        line = `✅ ${docLbl}${secScope} 处理完成：${fmtSize(ds.origSize)} → ${fmtSize(ds.newSize)}（所选范围内媒体已接近最优，尝试降低分辨率上限或切换“极限瘦身”）`;
       }
     } else if (res.docRepackSummary) {
       const rs = res.docRepackSummary;
@@ -964,7 +970,8 @@ async function showSuccess(res) {
       const delta = rs.newSize < rs.origSize
         ? `，节省 ${Math.round((1 - rs.newSize / rs.origSize) * 100)}%`
         : '';
-      line = `✅ 已将 ${rs.replacedCount} 张图片放回 ${docLbl} 原位（匹配 ${rs.matchedCount} 处，${fmtSize(rs.origSize)} → ${fmtSize(rs.newSize)}${delta}）`;
+      const resizeNote = rs.resizedCount > 0 ? `，保持原宽度并自适应 ${rs.resizedCount} 处高度` : '';
+      line = `✅ 已将 ${rs.replacedCount} 张图片放回 ${docLbl} 原位（匹配 ${rs.matchedCount} 处${resizeNote}，${fmtSize(rs.origSize)} → ${fmtSize(rs.newSize)}${delta}）`;
     } else if ((currentFeature.id === 'compressGif' || currentFeature.id === 'imageConvert' || currentFeature.id === 'svgOptimize') && file?.info.size) {
       if (outSize < file.info.size) {
         const pct = Math.round((1 - outSize / file.info.size) * 100);
@@ -1002,7 +1009,7 @@ async function showSuccess(res) {
         : await window.api.listDir(res.output, 200);
       thumbPaths = rawList.filter((p) => previewExts.has(p.split('.').pop().toLowerCase()));
       if (thumbPaths.length) {
-        const shownThumbs = thumbPaths.slice(0, 60);
+        const shownThumbs = thumbPaths.slice(0, 300);
         const hasSvgThumb = shownThumbs.some((p) => p.toLowerCase().endsWith('.svg'));
         const hasRasterThumb = shownThumbs.some((p) => !p.toLowerCase().endsWith('.svg'));
         const moreHtml = thumbPaths.length > shownThumbs.length
@@ -1033,7 +1040,7 @@ async function showSuccess(res) {
                 return `<div class="result-thumb-card selected" data-thumb-card="${idx}">
                   <input type="checkbox" class="result-thumb-check" data-thumb-check="${idx}" checked title="勾选此图" />
                   <div class="result-thumb-img-wrap" data-thumb-idx="${idx}" draggable="true" title="点击放大查看 / 拖出到外部软件：${fn}">
-                    <img${isSvg ? ' class="is-svg"' : ''} src="${u}" alt="${fn}" draggable="false" />
+                    <img${isSvg ? ' class="is-svg"' : ''} src="${u}" alt="${fn}" loading="lazy" draggable="false" />
                   </div>
                   <div class="result-thumb-name" title="${escHtml(p)}">${fn}</div>
                   <div class="result-thumb-ops">
@@ -1172,7 +1179,7 @@ async function showSuccess(res) {
   };
 
   if (thumbPaths.length) {
-    const shownThumbs = thumbPaths.slice(0, 60);
+    const shownThumbs = thumbPaths.slice(0, 300);
     const getSelectedPaths = () => {
       const checks = [...document.querySelectorAll('.result-thumb-check')];
       return checks.filter((c) => c.checked).map((c) => shownThumbs[Number(c.dataset.thumbCheck)]).filter(Boolean);

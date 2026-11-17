@@ -9,9 +9,12 @@ const {
   normalizeHexColor,
   imageCodecArgs,
   writeRoundedMaskPgm,
+  writeGradientPpm,
 } = require('../core/utils');
 const {
+  probe,
   runFfmpeg,
+  runFfmpegBinary,
   defaultOutput,
   defaultDirOutput,
   stampOutput,
@@ -463,11 +466,274 @@ function imageFrame(p) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// 7. 图片更换背景（纯色 / 渐变 / 自定义图片，支持透明图直换 & 边缘连通抠图护主体）
+// ---------------------------------------------------------------------------
+function applyPixelCutout(rawBuf, W, H, { keyColor, similarity, blend, scope }) {
+  const N = W * H;
+  const keyHex = normalizeHexColor(keyColor, 'ffffff');
+  const kr = parseInt(keyHex.slice(0, 2), 16);
+  const kg = parseInt(keyHex.slice(2, 4), 16);
+  const kb = parseInt(keyHex.slice(4, 6), 16);
+
+  const sim = Math.min(Math.max(num(similarity, 0.18), 0.01), 0.6);
+  const bl = Math.min(Math.max(num(blend, 0.06), 0), 0.4);
+  const maxDist = Math.sqrt(3 * 255 * 255);
+  const simDist = sim * maxDist;
+  const maxFeatherDist = (sim + bl) * maxDist;
+  const featherSpan = Math.max(1e-6, maxFeatherDist - simDist);
+  const simSq = simDist * simDist;
+  const featherSq = maxFeatherDist * maxFeatherDist;
+
+  const distSqAt = (idx) => {
+    const off = idx * 4;
+    const dr = rawBuf[off] - kr;
+    const dg = rawBuf[off + 1] - kg;
+    const db = rawBuf[off + 2] - kb;
+    return dr * dr + dg * dg + db * db;
+  };
+
+  if (scope === 'global') {
+    for (let i = 0; i < N; i++) {
+      const aOff = i * 4 + 3;
+      const origA = rawBuf[aOff];
+      if (!origA) continue;
+      const d2 = distSqAt(i);
+      if (d2 <= simSq) {
+        rawBuf[aOff] = 0;
+      } else if (bl > 0 && d2 < featherSq) {
+        const t = (Math.sqrt(d2) - simDist) / featherSpan;
+        rawBuf[aOff] = Math.round(origA * Math.max(0, Math.min(1, t)));
+      }
+    }
+    return;
+  }
+
+  // 边缘连通抠图（BFS 从四边扩散，保护主体内部同色如白衬衫/眼睛等不被误抠）
+  const visited = new Uint8Array(N);
+  const queue = new Int32Array(N);
+  let head = 0;
+  let tail = 0;
+
+  const trySeed = (idx) => {
+    if (visited[idx]) return;
+    const origA = rawBuf[idx * 4 + 3];
+    if (origA < 10 || distSqAt(idx) <= simSq) {
+      visited[idx] = 1;
+      queue[tail++] = idx;
+    }
+  };
+
+  for (let x = 0; x < W; x++) {
+    trySeed(x);
+    if (H > 1) trySeed((H - 1) * W + x);
+  }
+  for (let y = 1; y < H - 1; y++) {
+    trySeed(y * W);
+    if (W > 1) trySeed(y * W + (W - 1));
+  }
+
+  while (head < tail) {
+    const idx = queue[head++];
+    rawBuf[idx * 4 + 3] = 0;
+    const x = idx % W;
+    const y = (idx - x) / W;
+
+    if (x > 0) trySeed(idx - 1);
+    if (x + 1 < W) trySeed(idx + 1);
+    if (y > 0) trySeed(idx - W);
+    if (y + 1 < H) trySeed(idx + W);
+  }
+
+  if (bl > 0 && tail > 0) {
+    const feathered = new Uint8Array(N);
+    const band1 = [];
+    const checkFeather = (nIdx, minKeep) => {
+      if (visited[nIdx] || feathered[nIdx]) return false;
+      const aOff = nIdx * 4 + 3;
+      const origA = rawBuf[aOff];
+      if (!origA) return false;
+      const d2 = distSqAt(nIdx);
+      if (d2 >= featherSq) return false;
+      feathered[nIdx] = 1;
+      const t = (Math.sqrt(d2) - simDist) / featherSpan;
+      rawBuf[aOff] = Math.round(origA * Math.max(minKeep, Math.min(1, t)));
+      return true;
+    };
+
+    for (let q = 0; q < tail; q++) {
+      const idx = queue[q];
+      const x = idx % W;
+      const y = (idx - x) / W;
+      for (let dy = -1; dy <= 1; dy++) {
+        const ny = y + dy;
+        if (ny < 0 || ny >= H) continue;
+        for (let dx = -1; dx <= 1; dx++) {
+          if (!dx && !dy) continue;
+          const nx = x + dx;
+          if (nx < 0 || nx >= W) continue;
+          const nIdx = ny * W + nx;
+          if (checkFeather(nIdx, 0)) band1.push(nIdx);
+        }
+      }
+    }
+
+    for (let i = 0; i < band1.length; i++) {
+      const idx = band1[i];
+      const x = idx % W;
+      const y = (idx - x) / W;
+      for (let dy = -1; dy <= 1; dy++) {
+        const ny = y + dy;
+        if (ny < 0 || ny >= H) continue;
+        for (let dx = -1; dx <= 1; dx++) {
+          if (!dx && !dy) continue;
+          const nx = x + dx;
+          if (nx < 0 || nx >= W) continue;
+          checkFeather(ny * W + nx, 0.35);
+        }
+      }
+    }
+  }
+}
+
+function imageReplaceBg(p) {
+  const fmt = ['png', 'jpg', 'webp'].includes(p.format) ? p.format : 'png';
+  const bgType = ['solid', 'gradient', 'image'].includes(p.bgType) ? p.bgType : 'solid';
+  const fgMode = ['auto', 'keepAlpha', 'colorkey'].includes(p.fgMode) ? p.fgMode : 'auto';
+  const cutoutScope = p.cutoutScope === 'global' ? 'global' : 'edge';
+  const bgFit = ['bgOriginal', 'cover', 'stretch', 'contain'].includes(p.bgFit) ? p.bgFit : 'cover';
+  const fgScale = ['fitAuto', 'contain', 'keep'].includes(p.fgScale) ? p.fgScale : 'fitAuto';
+  const fgPos = ['center', 'bottom', 'tl', 'tr', 'bl', 'br'].includes(p.fgPos) ? p.fgPos : 'center';
+
+  if (bgType === 'image' && (!p.bgImage || !fs.existsSync(p.bgImage))) {
+    throw new Error('请先选择有效的背景图片');
+  }
+
+  const output = defaultOutput(p.input, '换背景', fmt);
+
+  return {
+    output,
+    async run(taskId, onProgress) {
+      onProgress?.(0.08);
+      const info = await probe(p.input);
+      const W = Math.round(num(info.width, 0));
+      const H = Math.round(num(info.height, 0));
+      if (W < 2 || H < 2) throw new Error('无法读取图片尺寸');
+
+      const rawBuf = await runFfmpegBinary(taskId, [
+        '-i', p.input,
+        '-f', 'rawvideo',
+        '-pix_fmt', 'rgba',
+        'pipe:1',
+      ]);
+      onProgress?.(0.35);
+
+      const expectedLen = W * H * 4;
+      if (!rawBuf || rawBuf.length < expectedLen) {
+        throw new Error('解码图片像素失败，请检查文件是否损坏');
+      }
+
+      let shouldCutout = fgMode === 'colorkey';
+      if (fgMode === 'auto') {
+        let hasAlpha = false;
+        for (let i = 3; i < expectedLen; i += 4) {
+          if (rawBuf[i] < 250) {
+            hasAlpha = true;
+            break;
+          }
+        }
+        shouldCutout = !hasAlpha;
+      }
+
+      if (shouldCutout) {
+        applyPixelCutout(rawBuf, W, H, {
+          keyColor: p.keyColor || '#ffffff',
+          similarity: p.similarity,
+          blend: p.blend,
+          scope: cutoutScope,
+        });
+      }
+      onProgress?.(0.62);
+
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vgt_repbg_'));
+      try {
+        const fgRawPath = path.join(tmpDir, 'fg.raw');
+        fs.writeFileSync(fgRawPath, rawBuf.subarray(0, expectedLen));
+
+        const args = ['-f', 'rawvideo', '-pix_fmt', 'rgba', '-video_size', `${W}x${H}`, '-i', fgRawPath];
+        let fc = '';
+
+        if (bgType === 'solid') {
+          const bgHex = normalizeHexColor(p.bgColor, '438edb');
+          fc = `color=c=0x${bgHex}:s=${W}x${H},format=rgba[bg];[bg][0:v]overlay=0:0:shortest=1`;
+        } else if (bgType === 'gradient') {
+          const gradPpm = path.join(tmpDir, 'grad.ppm');
+          const gw = Math.min(W, 640);
+          const gh = Math.max(2, Math.round(H * (gw / W)));
+          writeGradientPpm(gradPpm, gw, gh, p.gradStart || '#6366f1', p.gradEnd || '#22d3ee', p.gradDir || 'tlbr');
+          args.push('-i', gradPpm);
+          fc = `[1:v]scale=${W}:${H}:flags=bicubic,format=rgba[bg];[bg][0:v]overlay=0:0:shortest=1`;
+        } else if (bgFit === 'bgOriginal') {
+          args.push('-i', p.bgImage);
+          const xyMap = {
+            center: 'x=(W-w)/2:y=(H-h)/2',
+            bottom: 'x=(W-w)/2:y=H-h',
+            tl: 'x=0:y=0',
+            tr: 'x=W-w:y=0',
+            bl: 'x=0:y=H-h',
+            br: 'x=W-w:y=H-h',
+          };
+          const xyExpr = xyMap[fgPos] || xyMap.center;
+          if (fgScale === 'keep') {
+            fc = `[1:v]setsar=1,format=rgba[bg];[0:v]setsar=1[fg];[bg][fg]overlay=${xyExpr}:shortest=1`;
+          } else {
+            const scaleTarget = fgScale === 'contain' ? 'w=rw:h=rh' : "w='min(iw,rw)':h='min(ih,rh)'";
+            fc = `[1:v]setsar=1,format=rgba,split[bg][bgref];[0:v][bgref]scale=${scaleTarget}:force_original_aspect_ratio=decrease:flags=lanczos,setsar=1[fg];[bg][fg]overlay=${xyExpr}:shortest=1`;
+          }
+        } else {
+          args.push('-i', p.bgImage);
+          const padColor = needsOpaqueBg(fmt) ? '0xffffff' : '0x00000000';
+          let bgFilter;
+          if (bgFit === 'stretch') {
+            bgFilter = `scale=${W}:${H}:flags=lanczos`;
+          } else if (bgFit === 'contain') {
+            bgFilter = `scale=${W}:${H}:force_original_aspect_ratio=decrease:flags=lanczos,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=${padColor}`;
+          } else {
+            bgFilter = `scale=${W}:${H}:force_original_aspect_ratio=increase:flags=lanczos,crop=${W}:${H}`;
+          }
+          fc = `[1:v]${bgFilter},setsar=1,format=rgba[bg];[bg][0:v]overlay=0:0:shortest=1`;
+        }
+
+        if (needsOpaqueBg(fmt)) {
+          fc += ',format=rgb24[vout]';
+        } else {
+          fc += ',format=rgba[vout]';
+        }
+
+        args.push(
+          '-filter_complex', fc,
+          '-map', '[vout]',
+          '-map_metadata', '-1',
+          ...imageCodecArgs(fmt, { quality: 'high' }),
+          output,
+        );
+
+        await runFfmpeg(taskId, args, { totalDuration: 0 });
+        onProgress?.(1);
+        return { output };
+      } finally {
+        try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+      }
+    },
+  };
+}
+
 module.exports = {
   imageConvert,
   imageCompressTarget,
   imageStitch,
   imageSplit,
   imageCutout,
+  imageReplaceBg,
   imageFrame,
 };

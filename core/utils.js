@@ -182,6 +182,45 @@ function writeRoundedMaskPgm(filePath, w, h, r) {
   fs.writeFileSync(filePath, Buffer.concat([header, data]));
 }
 
+// 生成线性/径向渐变 RGB 图像 (.ppm)
+function writeGradientPpm(filePath, w, h, startHex, endHex, dir = 'tlbr') {
+  const sHex = normalizeHexColor(startHex, '6366f1');
+  const eHex = normalizeHexColor(endHex, '22d3ee');
+  const sr = parseInt(sHex.slice(0, 2), 16);
+  const sg = parseInt(sHex.slice(2, 4), 16);
+  const sb = parseInt(sHex.slice(4, 6), 16);
+  const er = parseInt(eHex.slice(0, 2), 16);
+  const eg = parseInt(eHex.slice(2, 4), 16);
+  const eb = parseInt(eHex.slice(4, 6), 16);
+
+  const header = Buffer.from(`P6\n${w} ${h}\n255\n`, 'ascii');
+  const data = Buffer.allocUnsafe(w * h * 3);
+  const denomX = Math.max(1, w - 1);
+  const denomY = Math.max(1, h - 1);
+  const cx = denomX / 2;
+  const cy = denomY / 2;
+  const rx = Math.max(1, w / 2);
+  const ry = Math.max(1, h / 2);
+
+  let pos = 0;
+  for (let y = 0; y < h; y++) {
+    const ny = y / denomY;
+    for (let x = 0; x < w; x++) {
+      const nx = x / denomX;
+      let t;
+      if (dir === 'tb') t = ny;
+      else if (dir === 'lr') t = nx;
+      else if (dir === 'bltr') t = (nx + (1 - ny)) * 0.5;
+      else if (dir === 'radial') t = Math.min(1, Math.hypot((x - cx) / rx, (y - cy) / ry));
+      else t = (nx + ny) * 0.5;
+      data[pos++] = Math.round(sr + (er - sr) * t);
+      data[pos++] = Math.round(sg + (eg - sg) * t);
+      data[pos++] = Math.round(sb + (eb - sb) * t);
+    }
+  }
+  fs.writeFileSync(filePath, Buffer.concat([header, data]));
+}
+
 module.exports = {
   FONT,
   IMG_EXTS,
@@ -203,4 +242,5 @@ module.exports = {
   writeConcatList,
   gifPlan,
   writeRoundedMaskPgm,
+  writeGradientPpm,
 };

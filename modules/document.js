@@ -8,6 +8,7 @@ const {
   allocUniqueMediaEntry,
   rewriteDocxMediaTargets,
   ensureDocxContentTypes,
+  updateOoxmlImageSizesKeepWidth,
 } = require('../core/doc-parser');
 const { num, imageCodecArgs } = require('../core/utils');
 const { probe, runFfmpeg, defaultOutput, defaultDirOutput } = require('../core/runner');
@@ -211,6 +212,39 @@ async function compressEmbeddedVideoFile(taskId, srcPath, { maxSide, preset }, t
   return { ext: 'mp4', buf };
 }
 
+function filterDocumentItemsBySection(parsed, sectionIds = [], sectionKeyword = '') {
+  const allItems = parsed.items || [];
+  let items = allItems;
+  let sectionTitlesUsed = [];
+
+  if (sectionIds.length) {
+    const selSet = new Set(sectionIds);
+    items = allItems.filter((it) => selSet.has(it.sectionId));
+    sectionTitlesUsed = (parsed.sections || []).filter((s) => selSet.has(s.id)).map((s) => s.title);
+  } else if (sectionKeyword) {
+    const keywords = sectionKeyword.split(/[,，]+/).map((k) => k.trim()).filter(Boolean);
+    items = allItems.filter((it) => {
+      const titles = [it.sectionTitle, ...(it.ancestorTitles || [])].filter(Boolean);
+      return titles.some((t) => {
+        const tl = t.toLowerCase();
+        return keywords.some((kw) => tl.includes(kw));
+      });
+    });
+    sectionTitlesUsed = (parsed.sections || [])
+      .filter((s) => {
+        const sl = s.title.toLowerCase();
+        return keywords.some((kw) => sl.includes(kw));
+      })
+      .map((s) => s.title);
+  }
+
+  return {
+    items,
+    sectionFiltered: Boolean(sectionIds.length || sectionKeyword),
+    sectionTitlesUsed,
+  };
+}
+
 function docExtractImages(p) {
   const outDir = p.output || defaultDirOutput(p.input, '提取图片');
   const naming = p.naming || 'order';
@@ -218,6 +252,8 @@ function docExtractImages(p) {
   const dedupe = p.dedupe !== false && p.dedupe !== 'false';
   const includeSvg = p.includeSvg !== false && p.includeSvg !== 'false';
   const pptMedia = p.pptMedia || 'images';
+  const sectionIds = Array.isArray(p.sectionIds) ? p.sectionIds.filter(Boolean) : [];
+  const sectionKeyword = String(p.sectionKeyword || '').trim().toLowerCase();
 
   return {
     output: outDir,
@@ -225,9 +261,19 @@ function docExtractImages(p) {
     async run(_taskId, onProgress) {
       onProgress?.(0.08);
       const parsed = inspectDocument(p.input);
-      const items = parsed.items || [];
-      if (!items.length) {
+      const allItems = parsed.items || [];
+      if (!allItems.length) {
         throw new Error(parsed.docType === 'pptx' ? '该 PPT 中未识别到任何图片或媒体资源' : '该文档中未识别到任何图片');
+      }
+
+      const {
+        items,
+        sectionFiltered,
+        sectionTitlesUsed,
+      } = filterDocumentItemsBySection(parsed, sectionIds, sectionKeyword);
+
+      if (sectionFiltered && !items.length) {
+        throw new Error('所选章节中未找到任何图片或媒体资源');
       }
 
       let zip = null;
@@ -394,6 +440,8 @@ function docExtractImages(p) {
         extractSummary: {
           ...summary,
           sourceDocx: isOoxml ? path.resolve(p.input) : '',
+          sectionFiltered: Boolean(sectionIds.length || sectionKeyword),
+          sectionTitles: sectionTitlesUsed,
           files: savedFiles,
         },
       };
@@ -418,11 +466,32 @@ function docCompressImages(p) {
   const maxSide = Math.max(0, Math.round(num(p.maxSide, 1920)));
   const formatMode = p.formatMode || 'auto';
   const compressVideo = isPpt && p.videoMode !== 'keep';
+  const sectionIds = Array.isArray(p.sectionIds) ? p.sectionIds.filter(Boolean) : [];
+  const sectionKeyword = String(p.sectionKeyword || '').trim().toLowerCase();
 
   return {
     output,
     async run(taskId, onProgress) {
       onProgress?.(0.05);
+      let selectedEntrySet = null;
+      let sectionFiltered = false;
+      let sectionTitlesUsed = [];
+
+      if (sectionIds.length || sectionKeyword) {
+        const parsed = inspectDocument(p.input);
+        const filtered = filterDocumentItemsBySection(parsed, sectionIds, sectionKeyword);
+        sectionFiltered = filtered.sectionFiltered;
+        sectionTitlesUsed = filtered.sectionTitlesUsed;
+        if (!filtered.items.length) {
+          throw new Error('所选章节或页面中未找到任何图片或媒体资源');
+        }
+        selectedEntrySet = new Set(
+          filtered.items
+            .map((it) => String(it.entryName || '').toLowerCase())
+            .filter(Boolean),
+        );
+      }
+
       const AdmZip = require('adm-zip');
       let zip;
       try {
@@ -440,6 +509,7 @@ function docCompressImages(p) {
         const entryName = String(e.entryName || '').replace(/\\/g, '/');
         if (e.isDirectory || !mediaRe.test(entryName)) continue;
         usedMediaSet.add(entryName.toLowerCase());
+        if (selectedEntrySet && !selectedEntrySet.has(entryName.toLowerCase())) continue;
         const mExt = path.posix.extname(entryName).slice(1).toLowerCase();
         if (e.header.size > 0 && RASTER_MEDIA_EXTS.has(mExt)) {
           targets.push({ kind: 'image', entry: e, entryName, origExt: mExt });
@@ -449,6 +519,9 @@ function docCompressImages(p) {
       }
 
       if (!targets.length) {
+        if (sectionFiltered) {
+          throw new Error(`所选章节或页面中未找到可压缩的位图图片${isPpt ? '或视频' : ''}（可能仅含矢量图${isPpt && !compressVideo ? '或已设跳过视频' : ''}）`);
+        }
         throw new Error(`该 ${docLabel} 文档内未找到可压缩的位图图片${isPpt ? '或视频' : ''}（可能仅含文字或 EMF/WMF 矢量图）`);
       }
 
@@ -520,6 +593,8 @@ function docCompressImages(p) {
             skippedCount,
             origSize,
             newSize,
+            sectionFiltered,
+            sectionTitles: sectionTitlesUsed,
           },
         };
       } finally {
@@ -611,6 +686,7 @@ function docRepackImages(p) {
   const output = p.output || defaultOutput(p.input, '已回填', isPpt ? 'pptx' : 'docx', p);
   const replaceDir = p.replaceDir || '';
   const replaceFiles = Array.isArray(p.replaceFiles) ? p.replaceFiles : [];
+  const sizeMode = p.sizeMode || 'keepWidth';
   if (!replaceDir && !replaceFiles.length) {
     throw new Error('请先选择修改/压缩后的图片文件夹或图片文件');
   }
@@ -635,9 +711,20 @@ function docRepackImages(p) {
       const manifest = readManifestNear(replaceDir, replaceFiles);
       const manifestCreatedAt = manifest?.createdAt || 0;
       const manifestByEntry = new Map();
+      const manifestStemSet = new Set();
+      const manifestFileSet = new Set();
       for (const m of manifest?.items || []) {
         if (m.entryName) manifestByEntry.set(m.entryName.toLowerCase(), m);
+        if (m.stem) manifestStemSet.add(m.stem.toLowerCase());
+        if (m.savedName) manifestFileSet.add(m.savedName.toLowerCase());
       }
+      const isCandOwnedByManifest = (cFileLower, cStemLower) => {
+        if (manifestFileSet.has(cFileLower) || manifestStemSet.has(cStemLower)) return true;
+        for (const ms of manifestStemSet) {
+          if (cStemLower.startsWith(`${ms}_`) || cStemLower.startsWith(`${ms}-`)) return true;
+        }
+        return false;
+      };
 
       const mediaEntries = [];
       const usedMediaSet = new Set();
@@ -666,7 +753,7 @@ function docRepackImages(p) {
           else if (cStemLower === mStem) matchTier = 3; // 同前缀换了扩展名（如 .png -> .jpg）
           else if (cStemLower.startsWith(`${mStem}_`) || cStemLower.startsWith(`${mStem}-`)) matchTier = 4; // 压缩/处理输出后缀
         }
-        if (!matchTier) {
+        if (!matchTier && !(manifestByEntry.size > 0 && !mInfo && isCandOwnedByManifest(cFileLower, cStemLower))) {
           if (cFileLower === origFile) matchTier = 2;
           else if (cStemLower === origStem || cStemLower.startsWith(`${origStem}_`)) matchTier = 3;
           else {
@@ -702,9 +789,11 @@ function docRepackImages(p) {
 
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vgt_doc_repack_'));
       const renameMap = new Map();
+      const sizeMapByEntry = new Map();
       const usedExts = new Set();
       let replacedCount = 0;
       let unchangedCount = 0;
+      let resizedCount = 0;
 
       try {
         for (let i = 0; i < matches.length; i++) {
@@ -712,11 +801,12 @@ function docRepackImages(p) {
           const origBuf = media.entry.getData();
           let newBuf = fs.readFileSync(cand.path);
           let newExt = cand.ext === 'jpeg' ? 'jpg' : cand.ext;
+          let probedInfo = null;
 
           // 若工具输出了 WebP / AVIF，自动转为 Office 原生兼容的 PNG/JPG
           if (!WORD_SAFE_EXTS.has(newExt)) {
-            const info = await probe(cand.path);
-            const hasAlpha = isAlphaPixFmt(info.pixFmt);
+            probedInfo = await probe(cand.path);
+            const hasAlpha = isAlphaPixFmt(probedInfo.pixFmt);
             newExt = hasAlpha ? 'png' : 'jpg';
             const tmpOut = path.join(tmpDir, `repack_${i}.${newExt}`);
             const args = ['-i', cand.path];
@@ -737,6 +827,17 @@ function docRepackImages(p) {
           } else {
             replacedCount++;
             usedExts.add(newExt);
+            if (sizeMode === 'keepWidth') {
+              try {
+                const dimInfo = probedInfo || await probe(cand.path);
+                if (dimInfo?.width > 0 && dimInfo?.height > 0) {
+                  sizeMapByEntry.set(media.entryName.toLowerCase(), {
+                    width: dimInfo.width,
+                    height: dimInfo.height,
+                  });
+                }
+              } catch {}
+            }
             if (newExt === normOrigExt || (newExt === 'jpg' && origExt === 'jpeg')) {
               zip.updateFile(media.entry.entryName, newBuf);
             } else {
@@ -750,6 +851,10 @@ function docRepackImages(p) {
           }
 
           onProgress?.(0.1 + (0.85 * (i + 1)) / matches.length);
+        }
+
+        if (sizeMode === 'keepWidth' && sizeMapByEntry.size) {
+          resizedCount = updateOoxmlImageSizesKeepWidth(zip, sizeMapByEntry);
         }
 
         if (renameMap.size) {
@@ -770,6 +875,8 @@ function docRepackImages(p) {
             matchedCount: matches.length,
             replacedCount,
             unchangedCount,
+            resizedCount,
+            sizeMode,
             origSize,
             newSize,
           },

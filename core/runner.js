@@ -48,6 +48,7 @@ function probeDoc(filePath) {
     imageCount: parsed.stats.imageCount ?? parsed.stats.total,
     videoCount: parsed.stats.videoCount || 0,
     docStats: parsed.stats,
+    sections: parsed.sections || [],
     hasAudio: false,
     hasSubtitles: false,
     subCount: 0,

@@ -136,6 +136,7 @@ const FILE_FILTERS = {
   imageStitch: { exts: IMG_EXT, multi: true },
   imageSplit: { exts: IMG_EXT },
   imageCutout: { exts: IMG_EXT },
+  imageReplaceBg: { exts: IMG_EXT },
   imageFrame: { exts: IMG_EXT },
   // SVG 矢量模块
   svgToRaster: { exts: SVG_EXT },
@@ -170,7 +171,7 @@ const FILE_FILTERS = {
   imagesTo: { exts: IMG_EXT, multi: true },
   // 第二文件（背景音乐 / 水印图片 / 分屏副视频 / 外挂字幕 / 替换图片）
   audioFile: { exts: ['mp3', 'wav', 'm4a', 'flac', 'aac', 'ogg'] },
-  imageFile: { exts: ['png', 'jpg', 'jpeg', 'webp', 'bmp'] },
+  imageFile: { exts: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'avif'] },
   replaceImageFiles: { exts: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'avif', 'gif', 'tif', 'tiff'], multi: true },
   videoGifFile: { exts: ALL_MEDIA_EXT },
   subFile: { exts: ['srt', 'ass', 'ssa', 'vtt'] },

@@ -6,9 +6,10 @@ window.VGT = window.VGT || {};
 window.VGT.DOC_FEATURES = [
   {
     id: 'docCompressImages', group: '文档', icon: '🗜️', name: 'Word / PPT 一键压缩瘦身',
-    desc: '自动识别 Word (.docx) 和 PPT (.pptx) 内的图片（含 PPT 内嵌视频），按画质与分辨率原位压缩并完整保留文字与幻灯片排版',
+    desc: '自动识别 Word (.docx) 和 PPT (.pptx) 内的图片（含 PPT 内嵌视频），支持按指定章节/页或全文原位压缩并完整保留文字与排版',
     accept: ['docx', 'pptx'],
     fields: [
+      { key: 'sectionIds', label: '压缩范围（按章节 / 页）', type: 'docSections', actionWord: '压缩', emptyTarget: 'Word / PPT 文档', fullWidth: true },
       { key: 'preset', label: '压缩强度', type: 'chips', def: 'balanced',
         options: [
           ['high', '高画质轻压'],
@@ -35,13 +36,23 @@ window.VGT.DOC_FEATURES = [
         ] },
     ],
     collect(v, ctx) {
-      return {
+      const params = {
         input: ctx.file.path,
         preset: v.preset,
         maxSide: v.maxSide,
         formatMode: v.formatMode,
         videoMode: v.videoMode,
       };
+      const sections = ctx.file?.info?.sections;
+      if (Array.isArray(sections) && sections.length > 0 && Array.isArray(window.__docSelectedSectionIds)) {
+        if (!window.__docSelectedSectionIds.length) {
+          throw new Error('请至少勾选一个要压缩的章节或页面');
+        }
+        if (window.__docSelectedSectionIds.length < sections.length) {
+          params.sectionIds = window.__docSelectedSectionIds.slice();
+        }
+      }
+      return params;
     },
   },
   {
@@ -49,6 +60,7 @@ window.VGT.DOC_FEATURES = [
     desc: '识别 Word (.docx)、PPT (.pptx) 和 Markdown (.md) 中的图片、Base64 与内联 SVG，支持单张发给其他工具或改完放回原位',
     accept: ['docx', 'pptx', 'md', 'markdown'],
     fields: [
+      { key: 'sectionIds', label: '提取范围（按章节 / 页）', type: 'docSections', fullWidth: true },
       { key: 'naming', label: '导出文件命名', type: 'chips', def: 'order',
         options: [
           ['order', '按文档顺序编号 (01_原名，推荐)'],
@@ -70,7 +82,7 @@ window.VGT.DOC_FEATURES = [
         options: [['yes', '自动去重（推荐）'], ['no', '保留全部引用']] },
     ],
     collect(v, ctx) {
-      return {
+      const params = {
         input: ctx.file.path,
         naming: v.naming,
         pptMedia: v.pptMedia,
@@ -78,6 +90,16 @@ window.VGT.DOC_FEATURES = [
         includeSvg: v.includeSvg === 'yes',
         dedupe: v.dedupe === 'yes',
       };
+      const sections = ctx.file?.info?.sections;
+      if (Array.isArray(sections) && sections.length > 0 && Array.isArray(window.__docSelectedSectionIds)) {
+        if (!window.__docSelectedSectionIds.length) {
+          throw new Error('请至少勾选一个要提取的章节或页面');
+        }
+        if (window.__docSelectedSectionIds.length < sections.length) {
+          params.sectionIds = window.__docSelectedSectionIds.slice();
+        }
+      }
+      return params;
     },
   },
   {
@@ -87,8 +109,13 @@ window.VGT.DOC_FEATURES = [
     fields: [
       { type: 'replaceSource', label: '修改/压缩后的图片', fullWidth: true,
         placeholder: '请选择提取并处理后的文件夹，或直接多选替换图片' },
+      { key: 'sizeMode', label: '版面尺寸处理', type: 'chips', def: 'keepWidth', fullWidth: true,
+        options: [
+          ['keepWidth', '保持原显示宽度，按新图比例自适应高度（防拉伸，推荐）'],
+          ['keepBox', '保持原固定宽高框（仅适合长宽比相同的图）'],
+        ] },
     ],
-    collect(_v, ctx) {
+    collect(v, ctx) {
       const src = window.__secondFile;
       if (!src || (!src.dir && !src.files?.length)) {
         throw new Error('请先选择修改/压缩后的图片文件夹或替换图片');
@@ -97,6 +124,7 @@ window.VGT.DOC_FEATURES = [
         input: ctx.file.path,
         replaceDir: src.dir || '',
         replaceFiles: src.files || [],
+        sizeMode: v.sizeMode || 'keepWidth',
       };
     },
   },

@@ -125,6 +125,15 @@
         multiConnect: false,
         required: false,
       });
+    } else if (id === 'imageReplaceBg') {
+      inputs.push({
+        id: 'bgImage',
+        label: '背景图(可选)',
+        typeId: 'image',
+        accept: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'avif'],
+        multiConnect: false,
+        required: false,
+      });
     } else if (id === 'subtitleTool') {
       inputs.push({
         id: 'subtitle',
@@ -187,6 +196,8 @@
         return { exts: ['png', 'jpg', 'webp'], isList: true };
       case 'imageCutout':
         return { exts: ['png', 'webp'], isList: false };
+      case 'imageReplaceBg':
+        return { exts: ['png', 'jpg', 'webp'], isList: false };
       case 'imageFrame':
         return { exts: ['png', 'webp', 'jpg'], isList: false };
       case 'svgToRaster':
@@ -342,6 +353,10 @@
         const fmt = p.format || 'png';
         return { exts: [fmt], typeId: 'image', isList: upstreamIsList };
       }
+      case 'imageReplaceBg': {
+        const fmt = p.format || 'png';
+        return { exts: [fmt], typeId: 'image', isList: upstreamIsList };
+      }
       case 'imageFrame': {
         const fmt = p.format || 'png';
         return { exts: [fmt], typeId: 'image', isList: upstreamIsList };
@@ -424,6 +439,8 @@
         defaults.crop = { x: 0.1, y: 0.1, w: 0.8, h: 0.8 };
       } else if (field.type === 'secondFile' || field.type === 'replaceSource') {
         defaults[`__local_${field.key || 'second'}`] = '';
+      } else if (field.type === 'docSections') {
+        defaults.sectionKeyword = '';
       } else if (field.key) {
         defaults[field.key] = field.def ?? '';
       }
@@ -448,6 +465,14 @@
         fields.push({
           ...f,
           label: `${f.label}（建议直接连线上游，或手动选文件夹）`,
+        });
+      } else if (f.type === 'docSections') {
+        fields.push({
+          key: 'sectionKeyword',
+          label: `指定章节（关键词，留空${f.actionWord || '处理'}全部）`,
+          type: 'text',
+          def: '',
+          placeholder: '如：第3章、实验结果（支持逗号分隔）',
         });
       } else {
         fields.push({ ...f });
@@ -1197,6 +1222,31 @@
             blend: v.blend ?? '0.06',
             format: v.format || 'png',
           };
+        case 'imageReplaceBg': {
+          const bgType = v.bgType || 'solid';
+          const bgImage = bgType === 'image' ? secPath('bgImage') : '';
+          if (bgType === 'image' && !bgImage) {
+            throw new Error('请连接「背景图」端口或在节点内选择背景图片');
+          }
+          return {
+            input: inputPath,
+            bgType,
+            bgColor: v.bgColor || '#438edb',
+            gradStart: v.gradStart || '#6366f1',
+            gradEnd: v.gradEnd || '#22d3ee',
+            gradDir: v.gradDir || 'tlbr',
+            bgImage,
+            bgFit: v.bgFit || 'bgOriginal',
+            fgScale: v.fgScale || 'fitAuto',
+            fgPos: v.fgPos || 'center',
+            fgMode: v.fgMode || 'auto',
+            keyColor: v.keyColor || '#ffffff',
+            cutoutScope: v.cutoutScope || 'edge',
+            similarity: v.similarity ?? '0.18',
+            blend: v.blend ?? '0.06',
+            format: v.format || 'png',
+          };
+        }
         case 'imageFrame': {
           const fmt = v.format || 'png';
           return {
@@ -1252,6 +1302,7 @@
             maxSide: v.maxSide || '1920',
             formatMode: v.formatMode || 'auto',
             videoMode: v.videoMode || 'compress',
+            sectionKeyword: v.sectionKeyword || '',
           };
         case 'docExtractImages':
           return {
@@ -1261,6 +1312,7 @@
             remoteMode: v.remoteMode || 'skip',
             includeSvg: (v.includeSvg || 'yes') === 'yes',
             dedupe: (v.dedupe || 'yes') === 'yes',
+            sectionKeyword: v.sectionKeyword || '',
           };
         case 'docRepackImages': {
           const linked = secondaryPayloads.replaceSource;

@@ -782,6 +782,97 @@ async function test(name, feature, params, check) {
     if (i.nbFrames !== 15) throw new Error(`应截取 15 帧，实际 ${i.nbFrames} 帧`);
   });
 
+  // 96. PPT (.pptx) 按指定页/章节提取图片
+  const slide2OutDir = path.join(TMP, 'deck_slide2_提取图片');
+  await test('96. PPT (.pptx) 按指定页提取图片', 'docExtractImages', {
+    input: testPptx, output: slide2OutDir, naming: 'order', pptMedia: 'images', sectionIds: ['slide_2'],
+  }, () => {
+    const files = fs.readdirSync(slide2OutDir).filter((f) => !f.startsWith('.'));
+    if (files.length !== 1 || !files[0].startsWith('01_pic_a')) {
+      throw new Error(`按页提取结果异常: ${JSON.stringify(files)}`);
+    }
+  });
+
+  // 97. 图片更换背景（白底抠除换证件蓝底）
+  await test('97. 图片更换背景 (白底→纯蓝底)', 'imageReplaceBg', {
+    input: whiteBgImg, bgType: 'solid', bgColor: '#438edb', fgMode: 'auto', keyColor: '#ffffff', cutoutScope: 'edge', similarity: 0.18, blend: 0.06, format: 'png',
+  }, (i) => { if (i.width !== 300 || i.height !== 300) throw new Error(`换背景尺寸异常: ${i.width}x${i.height}`); });
+
+  // 98. 图片更换背景（透明PNG叠加自定义背景图片）
+  const cutoutPng = path.join(TMP, 'white_bg_透明抠图.png');
+  await test('98. 图片更换背景 (透明图→自定义图片背景)', 'imageReplaceBg', {
+    input: cutoutPng, bgType: 'image', bgImage: bigPhoto, bgFit: 'cover', fgMode: 'auto', format: 'jpg',
+  }, (i) => { if (i.width !== 300 || i.height !== 300) throw new Error(`图片背景尺寸异常: ${i.width}x${i.height}`); });
+
+  // 99. 图片更换背景（以背景图原宽高为画布，不裁剪背景）
+  await test('99. 图片更换背景 (背景原宽高不裁剪)', 'imageReplaceBg', {
+    input: cutoutPng, bgType: 'image', bgImage: bigPhoto, bgFit: 'bgOriginal', fgScale: 'fitAuto', fgPos: 'bottom', fgMode: 'keepAlpha', format: 'png',
+  }, (i) => { if (i.width !== 1200 || i.height !== 900) throw new Error(`背景原宽高模式尺寸应为 1200x900，实际: ${i.width}x${i.height}`); });
+
+  // 100. PPT (.pptx) 按指定页压缩（仅压缩第2页，第1页图片保持原样）
+  const pptSlide2Cmp = path.join(TMP, 'deck_slide2_已压缩.pptx');
+  await test('100. PPT (.pptx) 按指定页压缩', 'docCompressImages', {
+    input: testPptx, output: pptSlide2Cmp, preset: 'balanced', maxSide: '1280', formatMode: 'auto', videoMode: 'compress', sectionIds: ['slide_2'],
+  }, () => {
+    const z = new AdmZip(pptSlide2Cmp);
+    const picB = z.getEntry('ppt/media/pic_b.png')?.getData();
+    if (!picB || !picB.equals(fs.readFileSync(bigPng))) {
+      throw new Error('未选中的第1页图片 pic_b.png 不应被压缩或改名');
+    }
+    if (!z.getEntry('ppt/media/clip.mp4')) {
+      throw new Error('所选第2页的 clip.mov 应已被压缩为 clip.mp4');
+    }
+  });
+
+  // 101. Word (.docx) 按指定章节压缩（仅压缩第二章，第一章图片保持原样）
+  const secDocx = path.join(TMP, 'sectioned_cmp.docx');
+  const secDocZip = new AdmZip();
+  secDocZip.addFile('[Content_Types].xml', Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/contenttypes">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Default Extension="png" ContentType="image/png"/>
+  <Default Extension="jpg" ContentType="image/jpeg"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>`, 'utf8'));
+  secDocZip.addFile('_rels/.rels', Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`, 'utf8'));
+  secDocZip.addFile('word/_rels/document.xml.rels', Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/sec1.png"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/sec2.png"/>
+</Relationships>`, 'utf8'));
+  secDocZip.addFile('word/document.xml', Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    <w:p><w:r><w:t>第一章 背景</w:t></w:r></w:p>
+    <w:p><w:r><w:drawing r:embed="rId1"/></w:r></w:p>
+    <w:p><w:r><w:t>第二章 实验</w:t></w:r></w:p>
+    <w:p><w:r><w:drawing r:embed="rId2"/></w:r></w:p>
+  </w:body>
+</w:document>`, 'utf8'));
+  secDocZip.addFile('word/media/sec1.png', fs.readFileSync(bigPhoto));
+  secDocZip.addFile('word/media/sec2.png', fs.readFileSync(bigPng));
+  secDocZip.writeZip(secDocx);
+
+  const secDocxCmp = path.join(TMP, 'sectioned_sec2_已压缩.docx');
+  await test('101. Word (.docx) 按指定章节压缩', 'docCompressImages', {
+    input: secDocx, output: secDocxCmp, preset: 'balanced', maxSide: '1280', formatMode: 'auto', sectionKeyword: '第二章',
+  }, () => {
+    const z = new AdmZip(secDocxCmp);
+    const sec1Data = z.getEntry('word/media/sec1.png')?.getData();
+    if (!sec1Data || !sec1Data.equals(fs.readFileSync(bigPhoto))) {
+      throw new Error('未选中的第一章图片 word/media/sec1.png 应保持原样不变');
+    }
+    const sec2Orig = fs.readFileSync(bigPng).length;
+    const sec2New = (z.getEntry('word/media/sec2.jpg') || z.getEntry('word/media/sec2.png'))?.getData();
+    if (!sec2New || sec2New.length >= sec2Orig) {
+      throw new Error(`所选第二章图片应已被压缩，原 ${sec2Orig}B，现 ${sec2New?.length || 0}B`);
+    }
+  });
+
   console.log(failed ? `\n❌ ${failed} 个用例失败` : '\n🎉 全部通过');
   process.exit(failed ? 1 : 0);
 })();
