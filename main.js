@@ -382,7 +382,10 @@ function getWorkflowCacheDir() {
   if (fs.existsSync('D:\\')) {
     candidates.push('D:\\temp\\vgt-workflow-cache');
   }
-  if (!candidates.length) {
+  if (app.isPackaged) {
+    candidates.push(path.join(app.getPath('temp'), 'vgt-workflow-cache'));
+    candidates.push(path.join(app.getPath('userData'), 'workflow_cache'));
+  } else if (!candidates.length) {
     candidates.push(path.join(__dirname, '.workflow_cache'));
   }
 
@@ -395,7 +398,9 @@ function getWorkflowCacheDir() {
       return dir;
     } catch {}
   }
-  const fallback = path.join(__dirname, '.workflow_cache');
+  const fallback = app.isPackaged
+    ? path.join(app.getPath('temp'), 'vgt-workflow-cache')
+    : path.join(__dirname, '.workflow_cache');
   fs.mkdirSync(fallback, { recursive: true });
   return fallback;
 }
