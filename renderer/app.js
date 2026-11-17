@@ -1801,6 +1801,15 @@ window.addEventListener('DOMContentLoaded', () => {
   const lastMode = localStorage.getItem('vgt_app_mode');
   if (lastMode === 'workflow') switchAppMode('workflow');
 
+  if (window.VGT.updater?.createUpdaterController) {
+    const updaterCtrl = window.VGT.updater.createUpdaterController({
+      toast,
+      isRunning: () => running,
+    });
+    window.VGT.updaterCtrl = updaterCtrl;
+    updaterCtrl.init();
+  }
+
   window.api.onProgress(({ taskId, ratio }) => {
     currentTaskId = taskId;
     if (wfTaskProgressCb) {

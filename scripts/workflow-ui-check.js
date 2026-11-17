@@ -15,6 +15,8 @@ function registerStubIpc() {
   ipcMain.handle('wf:scan-dir', () => ({ ok: true, files: [] }));
   ipcMain.handle('probe', () => ({ ok: false, error: 'stub' }));
   ipcMain.handle('probe-multi', () => []);
+  ipcMain.handle('hotfix:status', () => ({ builtinVersion: '2.1.9', shellVersion: '2.1.9', effectiveVersion: '2.1.9', isHotfix: false }));
+  ipcMain.handle('hotfix:check', () => ({ ok: true, status: 'up-to-date' }));
   ipcMain.on('set-progress-bar', () => {});
   ipcMain.on('notify-done', () => {});
 }
@@ -141,7 +143,18 @@ app.whenReady().then(async () => {
       const singleItems = document.querySelectorAll('#nav .nav-item:not(.wf-node-tpl)').length;
       if (singleItems !== 52) throw new Error('单工具模式导航恢复异常: ' + singleItems);
 
-      return { paletteCount, tplCount, singleItems };
+      // 8. 校验热更新弹窗开启与关闭
+      const updBtn = document.getElementById('btn-check-update');
+      if (!updBtn) throw new Error('热更新按钮缺失');
+      updBtn.click();
+      await new Promise((r) => setTimeout(r, 80));
+      const updModal = document.getElementById('update-modal');
+      if (!updModal) throw new Error('热更新弹窗未能打开');
+      document.getElementById('upd-x-close')?.click();
+      await new Promise((r) => setTimeout(r, 40));
+      if (document.getElementById('update-modal')) throw new Error('热更新弹窗未能关闭');
+
+      return { paletteCount, tplCount, singleItems, updaterChecked: true };
     })()`);
 
     if (errors.length) {

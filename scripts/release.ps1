@@ -6,6 +6,7 @@ param(
   [switch]$Force,
   [switch]$SkipTests,
   [switch]$AllowDirty,
+  [switch]$HotfixOnly,
   [switch]$DryRun
 )
 
@@ -110,13 +111,16 @@ try {
   }
 
   if ($DryRun) {
-    Write-Host "[DryRun] Ready to run: ensure-ffmpeg -> git push -> smoke-test -> npm run dist -> upload $tag to $repo (exists=$releaseExists, force=$Force)"
+    $distLabel = if ($HotfixOnly) { "build-hotfix (HotfixOnly)" } else { "npm run dist + build-hotfix" }
+    Write-Host "[DryRun] Ready to run: ensure-ffmpeg -> git push -> smoke-test -> $distLabel -> upload $tag to $repo (exists=$releaseExists, force=$Force)"
     exit 0
   }
 
-  # 7. Ensure FFmpeg binaries exist
-  node scripts/ensure-ffmpeg.js
-  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  # 7. Ensure FFmpeg binaries exist (needed for smoke tests and full dist)
+  if (-not $HotfixOnly -or -not $SkipTests) {
+    node scripts/ensure-ffmpeg.js
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  }
 
   # 8. Push commits to origin
   Write-Host "Pushing commits to origin..."
@@ -129,28 +133,44 @@ try {
     Write-Host "Running smoke tests..."
     node scripts/smoke-test.js
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    if (Test-Path 'scripts/hotfix-test.js') {
+      Write-Host "Running hotfix tests..."
+      node scripts/hotfix-test.js
+      if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    }
   }
 
-  # 10. Build Windows executables
-  Write-Host "Building Windows executables (npm run dist)..."
-  npm run dist
+  # 10. Build hotfix bundle + optional Windows executables
+  Write-Host "Building hotfix bundle..."
+  node scripts/build-hotfix.js --repo $repo
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-  # 11. Locate built artifacts
+  $hotfixBundleName = "hotfix-bundle-$ver.zip"
+  $hotfixBundlePath = Join-Path $repoRoot "release\$hotfixBundleName"
+  $hotfixManifestPath = Join-Path $repoRoot "release\hotfix-manifest.json"
+  if (-not (Test-Path $hotfixBundlePath)) { throw "Built hotfix bundle not found: $hotfixBundlePath" }
+  if (-not (Test-Path $hotfixManifestPath)) { throw "Built hotfix manifest not found: $hotfixManifestPath" }
+
   $portableName = $meta.portable.Replace('${version}', $ver)
   $setupName = $meta.nsis.Replace('${version}', $ver)
   $portablePath = Join-Path $repoRoot "release\$portableName"
   $setupPath = Join-Path $repoRoot "release\$setupName"
 
-  if (-not (Test-Path $portablePath)) { throw "Built portable exe not found: $portablePath" }
-  if (-not (Test-Path $setupPath)) { throw "Built setup exe not found: $setupPath" }
+  if (-not $HotfixOnly) {
+    Write-Host "Building Windows executables (npm run dist)..."
+    npm run dist
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-  # Stage ASCII copies so GitHub does not normalize Chinese names into colliding asset filenames
-  $portableStage = Join-Path $env:TEMP "video-gif-toolbox-$ver-portable.exe"
-  $setupStage = Join-Path $env:TEMP "video-gif-toolbox-$ver-setup.exe"
-  Copy-Item $portablePath $portableStage -Force
-  Copy-Item $setupPath $setupStage -Force
-  $tempFiles += $portableStage, $setupStage
+    if (-not (Test-Path $portablePath)) { throw "Built portable exe not found: $portablePath" }
+    if (-not (Test-Path $setupPath)) { throw "Built setup exe not found: $setupPath" }
+
+    # Stage ASCII copies so GitHub does not normalize Chinese names into colliding asset filenames
+    $portableStage = Join-Path $env:TEMP "video-gif-toolbox-$ver-portable.exe"
+    $setupStage = Join-Path $env:TEMP "video-gif-toolbox-$ver-setup.exe"
+    Copy-Item $portablePath $portableStage -Force
+    Copy-Item $setupPath $setupStage -Force
+    $tempFiles += $portableStage, $setupStage
+  }
 
   # 12. Create release if needed and upload assets sequentially
   if (-not $releaseExists) {
@@ -161,12 +181,22 @@ try {
     Write-Host "Release $tag already exists; overwriting assets (-Force)..."
   }
 
-  Write-Host "Uploading portable exe..."
-  gh release upload $tag "${portableStage}#${portableName}" --repo $repo --clobber
+  if (-not $HotfixOnly) {
+    Write-Host "Uploading portable exe..."
+    gh release upload $tag "${portableStage}#${portableName}" --repo $repo --clobber
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+    Write-Host "Uploading setup exe..."
+    gh release upload $tag "${setupStage}#${setupName}" --repo $repo --clobber
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  }
+
+  Write-Host "Uploading hotfix bundle ($hotfixBundleName)..."
+  gh release upload $tag $hotfixBundlePath --repo $repo --clobber
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-  Write-Host "Uploading setup exe..."
-  gh release upload $tag "${setupStage}#${setupName}" --repo $repo --clobber
+  Write-Host "Uploading hotfix manifest (hotfix-manifest.json)..."
+  gh release upload $tag $hotfixManifestPath --repo $repo --clobber
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   $releaseUrl = (gh release view $tag --repo $repo --json url --jq .url).Trim()

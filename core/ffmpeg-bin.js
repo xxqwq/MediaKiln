@@ -18,6 +18,12 @@ function resolveBinDir() {
       return resBin;
     }
   }
+  if (process.env.VGT_APP_ROOT) {
+    const appBin = path.join(process.env.VGT_APP_ROOT, 'bin');
+    if (BINARIES.some((name) => fs.existsSync(path.join(appBin, name)) || fs.existsSync(path.join(appBin, `${name}.br`)))) {
+      return appBin;
+    }
+  }
   return path.join(__dirname, '..', 'bin');
 }
 

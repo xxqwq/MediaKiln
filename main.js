@@ -4,9 +4,66 @@ const { app, BrowserWindow, ipcMain, dialog, shell, Menu, Notification, clipboar
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
-const ffmpeg = require('./ffmpeg');
+const hotfix = require('./core/hotfix');
 
 let win = null;
+let activeRoot = __dirname;
+let currentFfmpeg = null;
+let currentFileFilters = null;
+let bootConfirmTimer = null;
+
+function loadRuntimeFromRoot(rootDir) {
+  const nextFfmpeg = require(path.join(rootDir, 'ffmpeg.js'));
+  const nextFilters = require(path.join(rootDir, 'core', 'file-filters.js'));
+  return { ffmpeg: nextFfmpeg, filters: nextFilters };
+}
+
+function getFfmpeg() {
+  if (!currentFfmpeg) {
+    const loaded = loadRuntimeFromRoot(activeRoot);
+    currentFfmpeg = loaded.ffmpeg;
+    currentFileFilters = loaded.filters;
+  }
+  return currentFfmpeg;
+}
+
+function getFileFilters() {
+  if (!currentFileFilters) getFfmpeg();
+  return currentFileFilters;
+}
+
+function activateRuntimeRoot(newRoot, version) {
+  const prevRoot = activeRoot;
+  const prevFfmpeg = currentFfmpeg;
+  const prevFilters = currentFileFilters;
+  try {
+    if (prevRoot && prevRoot !== __dirname) {
+      hotfix.clearRequireCacheUnderRoot(prevRoot);
+    } else {
+      hotfix.clearRequireCacheUnderRoot(path.join(__dirname, 'core'));
+      hotfix.clearRequireCacheUnderRoot(path.join(__dirname, 'modules'));
+      delete require.cache[require.resolve(path.join(__dirname, 'ffmpeg.js'))];
+    }
+    const loaded = loadRuntimeFromRoot(newRoot);
+    activeRoot = newRoot;
+    currentFfmpeg = loaded.ffmpeg;
+    currentFileFilters = loaded.filters;
+    if (version) hotfix.activateAppliedRoot(newRoot, version);
+    return { ok: true };
+  } catch (err) {
+    activeRoot = prevRoot;
+    currentFfmpeg = prevFfmpeg;
+    currentFileFilters = prevFilters;
+    throw err;
+  }
+}
+
+function scheduleBootConfirm() {
+  clearTimeout(bootConfirmTimer);
+  bootConfirmTimer = setTimeout(() => {
+    try { hotfix.confirmBoot(); } catch {}
+  }, 1500);
+}
 
 function getStateFile() {
   return path.join(app.getPath('userData'), 'window-state.json');
@@ -56,9 +113,27 @@ function createWindow() {
   });
   if (state.maximized) win.maximize();
   Menu.setApplicationMenu(null);
-  win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
-  win.webContents.on('did-finish-load', () => console.log('[main] renderer loaded OK'));
-  win.webContents.on('render-process-gone', (_e, details) => console.error('[main] renderer gone:', details.reason));
+  win.loadFile(path.join(activeRoot, 'renderer', 'index.html'));
+  win.webContents.on('did-finish-load', () => {
+    console.log('[main] renderer loaded OK:', activeRoot);
+    scheduleBootConfirm();
+  });
+  win.webContents.on('render-process-gone', (_e, details) => {
+    console.error('[main] renderer gone:', details.reason);
+    clearTimeout(bootConfirmTimer);
+    const st = hotfix.getStatus();
+    if (st?.isHotfix) {
+      const rolled = hotfix.rollbackToPrevious(st.activeVersion);
+      if (rolled?.activeRoot && rolled.activeRoot !== activeRoot) {
+        try {
+          activateRuntimeRoot(rolled.activeRoot, rolled.activeVersion);
+          if (win && !win.isDestroyed()) {
+            win.loadFile(path.join(activeRoot, 'renderer', 'index.html'));
+          }
+        } catch {}
+      }
+    }
+  });
 
   let saveTimer = null;
   const scheduleSave = () => {
@@ -70,7 +145,7 @@ function createWindow() {
 
   win.on('close', (e) => {
     saveWindowState();
-    if (ffmpeg.hasRunningTasks()) {
+    if (getFfmpeg().hasRunningTasks()) {
       const choice = dialog.showMessageBoxSync(win, {
         type: 'warning',
         buttons: ['继续在后台处理', '停止任务并退出'],
@@ -83,7 +158,7 @@ function createWindow() {
         e.preventDefault();
         return;
       }
-      ffmpeg.cancelAllTasks();
+      getFfmpeg().cancelAllTasks();
     }
   });
 }
@@ -104,7 +179,27 @@ if (!gotSingleLock) {
 app.whenReady().then(() => {
   if (!gotSingleLock) return;
   try {
-    ffmpeg.ensureBinaries();
+    const status = hotfix.initHotfix({
+      shellRoot: __dirname,
+      userDataDir: app.getPath('userData'),
+    });
+    activeRoot = status.activeRoot || __dirname;
+    try {
+      activateRuntimeRoot(activeRoot);
+    } catch (err) {
+      console.error('[main] hotfix load failed, rolling back to builtin:', err);
+      const rolled = hotfix.rollbackToPrevious(status.activeVersion);
+      activeRoot = rolled?.activeRoot || __dirname;
+      activateRuntimeRoot(activeRoot);
+    }
+  } catch (err) {
+    console.error('[main] hotfix init failed:', err);
+    activeRoot = __dirname;
+    activateRuntimeRoot(__dirname);
+  }
+
+  try {
+    getFfmpeg().ensureBinaries();
   } catch (err) {
     console.error('[main] ensureBinaries failed:', err);
     dialog.showErrorBox('FFmpeg 初始化失败', err.message);
@@ -123,83 +218,8 @@ app.on('window-all-closed', () => {
 // IPC
 // ---------------------------------------------------------------------------
 
-const VIDEO_EXT = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'ts', 'm4v'];
-
-const ALL_MEDIA_EXT = [...VIDEO_EXT, 'gif'];
-const ALL_VISUAL_EXT = [...ALL_MEDIA_EXT, 'jpg', 'jpeg', 'png', 'webp', 'bmp', 'avif'];
-const AUDIO_EXT = ['mp3', 'm4a', 'wav', 'flac'];
-const IMG_EXT = ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'avif'];
-const SVG_EXT = ['svg'];
-const DOC_EXT = ['docx', 'pptx', 'md', 'markdown'];
-
-// 各功能对应的文件选择过滤器（multi: 是否允许多选）
-const FILE_FILTERS = {
-  videoToGif: { exts: VIDEO_EXT },
-  gifToVideo: { exts: ['gif'] },
-  toWebp: { exts: ALL_MEDIA_EXT },
-  convertVideo: { exts: VIDEO_EXT },
-  compressGif: { exts: ['gif'] },
-  trimGif: { exts: ['gif'] },
-  gifText: { exts: ['gif'] },
-  compressTarget: { exts: ALL_MEDIA_EXT },
-  chromaGif: { exts: ALL_MEDIA_EXT },
-  decorateMedia: { exts: ALL_MEDIA_EXT },
-  // 图片专属模块
-  imageConvert: { exts: IMG_EXT },
-  imageCompressTarget: { exts: IMG_EXT },
-  imageStitch: { exts: IMG_EXT, multi: true },
-  imageSplit: { exts: IMG_EXT },
-  imageCutout: { exts: IMG_EXT },
-  imageReplaceBg: { exts: IMG_EXT },
-  imageFrame: { exts: IMG_EXT },
-  // SVG 矢量模块
-  svgToRaster: { exts: SVG_EXT },
-  svgOptimize: { exts: SVG_EXT },
-  imageToSvg: { exts: IMG_EXT },
-  // 文档模块
-  docCompressImages: { exts: ['docx', 'pptx'] },
-  docExtractImages: { exts: DOC_EXT },
-  docRepackImages: { exts: ['docx', 'pptx'] },
-  docCleanupMedia: { exts: ['docx', 'pptx'] },
-  docStyleImages: { exts: ['docx', 'pptx'] },
-  mdOrganizeImages: { exts: ['md', 'markdown'] },
-  imagesToPdf: { exts: IMG_EXT, multi: true },
-  // 剪辑 / 工具（兼容静态图片）
-  trimVideo: { exts: VIDEO_EXT },
-  multiCut: { exts: VIDEO_EXT },
-  splitVideo: { exts: VIDEO_EXT },
-  mergeVideos: { exts: VIDEO_EXT, multi: true },
-  videoCrop: { exts: ALL_VISUAL_EXT },
-  autoCrop: { exts: ALL_MEDIA_EXT },
-  videoBlur: { exts: ALL_VISUAL_EXT },
-  aspectPad: { exts: ALL_VISUAL_EXT },
-  pipSplit: { exts: ALL_MEDIA_EXT },
-  colorStab: { exts: ALL_VISUAL_EXT },
-  watermark: { exts: ALL_VISUAL_EXT },
-  subtitleTool: { exts: VIDEO_EXT },
-  rotateFlip: { exts: ALL_VISUAL_EXT },
-  reverse: { exts: ALL_MEDIA_EXT },
-  changeSpeed: { exts: ALL_MEDIA_EXT },
-  extractAudio: { exts: [...VIDEO_EXT, ...AUDIO_EXT] },
-  audioAdjust: { exts: VIDEO_EXT },
-  addMusic: { exts: VIDEO_EXT },
-  snapshot: { exts: ALL_MEDIA_EXT },
-  contactSheet: { exts: VIDEO_EXT },
-  stripMeta: { exts: [...ALL_MEDIA_EXT, ...AUDIO_EXT, ...IMG_EXT] },
-  imagesTo: { exts: IMG_EXT, multi: true },
-  // 第二文件（背景音乐 / 水印图片 / 分屏副视频 / 外挂字幕 / 替换图片）
-  audioFile: { exts: ['mp3', 'wav', 'm4a', 'flac', 'aac', 'ogg'] },
-  imageFile: { exts: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'avif'] },
-  replaceImageFiles: { exts: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'avif', 'gif', 'tif', 'tiff'], multi: true },
-  videoGifFile: { exts: ALL_MEDIA_EXT },
-  subFile: { exts: ['srt', 'ass', 'ssa', 'vtt'] },
-  anyMedia: { exts: [...VIDEO_EXT, 'gif', ...IMG_EXT, ...SVG_EXT, ...AUDIO_EXT, 'srt', 'ass', 'ssa', 'vtt', ...DOC_EXT], multi: true },
-  anyMediaSingle: { exts: [...VIDEO_EXT, 'gif', ...IMG_EXT, ...SVG_EXT, ...AUDIO_EXT, 'srt', 'ass', 'ssa', 'vtt', ...DOC_EXT] },
-};
-
-const SINGLE_ONLY = new Set(['videoCrop', 'videoBlur', 'multiCut', 'audioFile', 'imageFile', 'videoGifFile', 'subFile', 'anyMediaSingle']);
-
 ipcMain.handle('pick-file', async (_e, feature, kind) => {
+  const { FILE_FILTERS, SINGLE_ONLY } = getFileFilters();
   const targetKey = kind || feature;
   const cfg = FILE_FILTERS[targetKey] || { exts: ['*'] };
   const filters = [
@@ -224,7 +244,7 @@ ipcMain.handle('pick-dir', async () => {
 
 ipcMain.handle('detect-hw', async () => {
   try {
-    return await ffmpeg.detectHwEncoders();
+    return await getFfmpeg().detectHwEncoders();
   } catch {
     return { available: [], primary: null };
   }
@@ -232,7 +252,7 @@ ipcMain.handle('detect-hw', async () => {
 
 ipcMain.handle('probe', async (_e, filePath) => {
   try {
-    return { ok: true, info: await ffmpeg.probe(filePath) };
+    return { ok: true, info: await getFfmpeg().probe(filePath) };
   } catch (err) {
     return { ok: false, error: err.message };
   }
@@ -240,10 +260,11 @@ ipcMain.handle('probe', async (_e, filePath) => {
 
 // 批量探测（合并/图片序列/批量处理用）
 ipcMain.handle('probe-multi', async (_e, filePaths) => {
+  const ff = getFfmpeg();
   const results = [];
   for (const p of filePaths) {
     try {
-      results.push({ path: p, info: await ffmpeg.probe(p) });
+      results.push({ path: p, info: await ff.probe(p) });
     } catch {
       results.push({ path: p, info: null });
     }
@@ -254,8 +275,10 @@ ipcMain.handle('probe-multi', async (_e, filePaths) => {
 // 提取指定时间点画面为 dataURL（可视化裁剪 / 打码 / 吸管取色用；静态图片不传 -ss）
 ipcMain.handle('first-frame', (_e, filePath, timeSec = 0.1) => {
   return new Promise((resolve) => {
+    const ff = getFfmpeg();
+    const { IMG_EXT } = getFileFilters();
     try {
-      ffmpeg.ensureBinaries();
+      ff.ensureBinaries();
     } catch {
       return resolve(null);
     }
@@ -265,7 +288,7 @@ ipcMain.handle('first-frame', (_e, filePath, timeSec = 0.1) => {
     const args = ['-hide_banner'];
     if (t > 0) args.push('-ss', t.toFixed(2));
     args.push('-i', filePath, '-vf', "scale='min(640,iw)':-1", '-frames:v', '1', '-f', 'image2', 'pipe:1');
-    const child = spawn(ffmpeg.FFMPEG, args, { windowsHide: true });
+    const child = spawn(ff.FFMPEG, args, { windowsHide: true });
     const chunks = [];
     child.stdout.on('data', (d) => chunks.push(d));
     child.on('error', () => resolve(null));
@@ -284,7 +307,7 @@ ipcMain.handle('task:start', async (_e, { feature, params }) => {
   send('task:progress', { ratio: 0 });
   if (win && !win.isDestroyed() && !params?.__batchItem) win.setProgressBar(0);
   try {
-    const result = await ffmpeg.executeTask(taskId, feature, params, (ratio) => {
+    const result = await getFfmpeg().executeTask(taskId, feature, params, (ratio) => {
       send('task:progress', { ratio });
       if (win && !win.isDestroyed() && !params?.__batchItem) {
         win.setProgressBar(Math.max(0, Math.min(1, ratio)));
@@ -314,7 +337,7 @@ ipcMain.handle('task:start', async (_e, { feature, params }) => {
   }
 });
 
-ipcMain.handle('task:cancel', (_e, taskId) => ffmpeg.cancelTask(taskId));
+ipcMain.handle('task:cancel', (_e, taskId) => getFfmpeg().cancelTask(taskId));
 
 ipcMain.on('set-progress-bar', (_e, ratio) => {
   if (win && !win.isDestroyed()) {
@@ -575,7 +598,7 @@ ipcMain.handle('wf:cache-info', () => {
 });
 
 ipcMain.handle('wf:clear-cache', () => {
-  if (ffmpeg.hasRunningTasks()) {
+  if (getFfmpeg().hasRunningTasks()) {
     return { ok: false, error: '有任务正在运行，无法清理缓存' };
   }
   const dir = getWorkflowCacheDir();
@@ -748,3 +771,111 @@ ipcMain.handle('wf:import-json', async () => {
     return { ok: false, error: `JSON 解析失败：${err.message}` };
   }
 });
+
+// ---------------------------------------------------------------------------
+// 业务热更新 IPC
+// ---------------------------------------------------------------------------
+
+ipcMain.handle('hotfix:status', () => hotfix.getStatus());
+
+ipcMain.handle('hotfix:check', async (_e, opts = {}) => {
+  try {
+    return await hotfix.checkForUpdates(opts);
+  } catch (err) {
+    return { ok: false, error: err?.message || '检查更新失败' };
+  }
+});
+
+ipcMain.handle('hotfix:apply', async (_e, opts = {}) => {
+  try {
+    const manifest = opts.manifest;
+    if (!manifest) return { ok: false, error: '缺少更新清单参数' };
+
+    const sendProgress = (p) => {
+      if (win && !win.isDestroyed()) win.webContents.send('hotfix:progress', p);
+    };
+
+    const res = await hotfix.downloadAndInstall(manifest, {
+      mirror: opts.mirror || 'auto',
+      preferredMirror: opts.preferredMirror || '',
+      onProgress: sendProgress,
+      validateBundleFn: (stagingDir) => {
+        const loaded = loadRuntimeFromRoot(stagingDir);
+        if (!loaded?.ffmpeg?.executeTask || !loaded?.filters?.FILE_FILTERS) {
+          throw new Error('热更新包缺少有效的任务执行器或文件过滤器');
+        }
+      },
+    });
+
+    if (getFfmpeg().hasRunningTasks()) {
+      hotfix.setPendingRestart(true);
+      return { ok: true, version: res.version, busy: true, needsReload: true, status: hotfix.getStatus() };
+    }
+
+    activateRuntimeRoot(res.releaseDir, res.version);
+    if (win && !win.isDestroyed()) {
+      setTimeout(() => {
+        if (win && !win.isDestroyed()) {
+          win.loadFile(path.join(activeRoot, 'renderer', 'index.html'));
+        }
+      }, 150);
+    }
+    return { ok: true, version: res.version, reloaded: true, status: hotfix.getStatus() };
+  } catch (err) {
+    return { ok: false, error: err?.message || '热更新安装失败' };
+  }
+});
+
+ipcMain.handle('hotfix:reload-now', () => {
+  if (getFfmpeg().hasRunningTasks()) {
+    return { ok: false, error: '有任务正在运行，请等待任务结束后再刷新生效' };
+  }
+  const st = hotfix.getStatus();
+  if (!st?.activeRoot) return { ok: false, error: '没有可生效的更新目录' };
+  try {
+    activateRuntimeRoot(st.activeRoot, st.activeVersion);
+    if (win && !win.isDestroyed()) {
+      win.loadFile(path.join(activeRoot, 'renderer', 'index.html'));
+    }
+    return { ok: true };
+  } catch (err) {
+    const rolled = hotfix.rollbackToPrevious(st.activeVersion);
+    if (rolled?.activeRoot) {
+      activateRuntimeRoot(rolled.activeRoot, rolled.activeVersion);
+    }
+    return { ok: false, error: `加载新版本失败，已自动回滚：${err.message}` };
+  }
+});
+
+ipcMain.handle('hotfix:relaunch', () => {
+  if (getFfmpeg().hasRunningTasks()) {
+    return { ok: false, error: '有任务正在运行，无法立即重启' };
+  }
+  app.relaunch();
+  app.exit(0);
+  return { ok: true };
+});
+
+ipcMain.handle('hotfix:rollback', () => {
+  if (getFfmpeg().hasRunningTasks()) {
+    return { ok: false, error: '有任务正在运行，请等待任务结束后再回滚' };
+  }
+  try {
+    const st = hotfix.rollbackToBuiltin();
+    activateRuntimeRoot(st.activeRoot);
+    if (win && !win.isDestroyed()) {
+      win.loadFile(path.join(activeRoot, 'renderer', 'index.html'));
+    }
+    return { ok: true, status: st };
+  } catch (err) {
+    return { ok: false, error: err?.message || '回滚失败' };
+  }
+});
+
+ipcMain.handle('hotfix:open-external', async (_e, targetUrl) => {
+  const u = String(targetUrl || '').trim();
+  if (!/^https:\/\//i.test(u)) return { ok: false, error: '仅允许打开 HTTPS 链接' };
+  await shell.openExternal(u);
+  return { ok: true };
+});
+

@@ -27,6 +27,7 @@ Windows 本地离线多媒体与文档处理桌面应用，基于 Electron + FFm
   - 支持连接类型校验、**文件夹递归扫描**、**按格式/条件多路分流**（空分支自动跳过，多分支汇总导出）、分支并排对比、节点 Bypass 旁路跳过、**增量智能缓存**（修改下游参数时上游已缓存节点秒级命中，支持单节点及下游强制重跑）、多选节点对齐以及工作流 JSON 导入导出。
 - **📦 批量队列处理**：除需交互框选/标段或原位回填的功能（画面裁剪、局部打码、多段剪辑、图片放回原位）及 4 个多文件合并/拼图/转 PDF 功能外，其余 **44 个功能**均支持一次选择或拖入多个文件顺序批量处理（支持随时 `+ 添加文件`、移除队列项、独立定位输出文件与中途取消）。
 - **🔍 放大预览与对比**：处理完成后点击预览图或「⛶ 放大对比」，支持**并排同步缩放/平移**与**卷帘对比**（支持视频、GIF、位图与 SVG 矢量 vs 位图）。
+- **⚡ 轻量级业务热更新**：支持应用内检查更新与几百 KB 级别的业务热更新包（覆盖前端界面、工作流与任务执行模块，**便携版与安装版通用**），支持自动择优/国内镜像加速、SHA-256 校验、秒级热重载生效以及启动异常自动回滚；涉及底层 Electron / FFmpeg 升级时自动提示下载完整安装包。
 - **⚙️ 全局输出与硬件加速**：支持设置输出位置（源文件同目录 / `output` 子目录 / 自定义文件夹）、防覆盖自动编号，以及视频硬件编码加速（CPU / 自动检测 GPU / NVIDIA NVENC / Intel QSV / AMD AMF）。
 
 ---
@@ -126,8 +127,10 @@ npm install                    # 安装依赖并自动从 bin/*.exe.br 解压 FF
 npm start                      # 启动 Electron 应用
 node scripts/smoke-test.js     # 冒烟测试（自动生成素材，114 用例覆盖全部功能）
 node scripts/workflow-test.js  # 工作流引擎与真实媒体流水线端到端测试（9 项）
+node scripts/hotfix-test.js    # 热更新打包、SHA-256 校验与崩溃回滚测试（7 项）
+npm run hotfix:build           # 仅生成几百 KB 的热更新包与清单到 release/
 npm run dist                   # 打包便携版 + 安装版到 release/
-npm run release                # 一键发布（支持 -Bump patch/minor/major）
+npm run release                # 一键发布（支持 -Bump patch/minor/major 与 -HotfixOnly）
 ```
 
 > 若在无头环境下运行 Electron UI 自检（`scripts/workflow-ui-check.js`），请先清空环境变量 `ELECTRON_RUN_AS_NODE` 后再用 `node_modules\electron\dist\electron.exe scripts\workflow-ui-check.js` 启动。
@@ -135,10 +138,12 @@ npm run release                # 一键发布（支持 -Bump patch/minor/major�
 ## 代码结构
 
 ```
-main.js                 Electron 主进程：窗口、IPC（文件对话框、硬件编码探测、首帧提取、工作流缓存与导出）
+main.js                 Electron 主进程：窗口、热更新加载调度、IPC（文件对话框、硬件编码探测、首帧提取、工作流缓存与导出）
 ffmpeg.js               统一门面：组合 core 与 modules，保持 IPC 调用接口兼容
 启动工具箱.bat          Windows 源码一键启动脚本（自动清理 ELECTRON_RUN_AS_NODE 并在缺依赖时安装）
 core/
+  ├── hotfix.js         业务热更新管理器：镜像拉取、SHA-256 与路径穿越校验、崩溃自回滚
+  ├── file-filters.js   文件选择过滤器与单/多选规则（支持随热更新同步新增功能）
   ├── ffmpeg-bin.js     内置 FFmpeg 路径解析、Brotli 自动解压与 SHA-256 校验
   ├── runner.js         ffprobe / ffmpeg / SVG / PDF / 文档探测与任务执行器
   ├── doc-parser.js     DOCX / PPTX / MD 媒体解析、冗余关系扫描与安全替换回填
@@ -148,10 +153,10 @@ preload.js              contextBridge 安全桥接（含 webUtils.getPathForFile
 renderer/
   ├── app.js            单工具主界面、批量队列与交互编排
   ├── features/         52 个功能注册表（video-gif.js、image.js、svg.js、document.js）
-  ├── ui/               参数面板、裁剪画布、放大对比弹窗
+  ├── ui/               参数面板、裁剪画布、放大对比弹窗、热更新弹窗
   └── workflow/         节点画布、拓扑执行引擎、61 节点注册表与 7 套预设模板
 bin/                    内置 FFmpeg 9.0.2（gyan.dev）：仓库内置 .br 压缩包（每件 ~28MB）与 binaries.json；安装/启动自动解压，打包时经 extraResources 释放
-scripts/                ensure-ffmpeg.js、smoke-test.js、workflow-test.js、workflow-ui-check.js、webp-check.js、release.ps1
+scripts/                ensure-ffmpeg.js、build-hotfix.js、hotfix-test.js、smoke-test.js、workflow-test.js、workflow-ui-check.js、webp-check.js、release.ps1
 website/                产品官网（Astro 静态站点，构建时自动读取功能/节点/模板注册表；见 website/README.md）
 ```
 

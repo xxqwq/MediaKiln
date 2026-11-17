@@ -1,0 +1,257 @@
+'use strict';
+
+const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const AdmZip = require('adm-zip');
+
+const hotfix = require('../core/hotfix');
+const { buildHotfix } = require('./build-hotfix');
+
+const ROOT = path.resolve(__dirname, '..');
+
+function makeTempDir(prefix) {
+  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+}
+
+function makeMockFetch(routes) {
+  return async function mockFetch(url) {
+    const cleanUrl = String(url).split('?')[0];
+    const hit = routes[cleanUrl];
+    if (!hit) {
+      return { ok: false, status: 404, async json() { return {}; }, async arrayBuffer() { return new ArrayBuffer(0); } };
+    }
+    if (hit.json) {
+      return {
+        ok: true,
+        status: 200,
+        async json() { return hit.json; },
+      };
+    }
+    const buf = hit.buffer;
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: (k) => (k.toLowerCase() === 'content-length' ? String(buf.length) : null) },
+      async arrayBuffer() { return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength); },
+    };
+  };
+}
+
+function createFakeBundleZip({ version = '2.9.9', minShellVersion = '2.1.9', extraFiles = {} }) {
+  const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+  const zip = new AdmZip();
+  const filesSha256 = {};
+
+  const addReal = (rel) => {
+    const buf = fs.readFileSync(path.join(ROOT, rel));
+    filesSha256[rel] = hotfix.sha256Buffer(buf);
+    zip.addFile(rel, buf);
+  };
+  addReal('ffmpeg.js');
+  addReal('core/runner.js');
+  addReal('core/utils.js');
+  addReal('core/doc-parser.js');
+  addReal('core/ffmpeg-bin.js');
+  addReal('core/file-filters.js');
+  addReal('modules/video.js');
+  addReal('modules/image.js');
+  addReal('modules/svg.js');
+  addReal('modules/document.js');
+  addReal('renderer/index.html');
+
+  for (const [rel, content] of Object.entries(extraFiles)) {
+    const buf = Buffer.isBuffer(content) ? content : Buffer.from(String(content), 'utf8');
+    filesSha256[rel] = hotfix.sha256Buffer(buf);
+    zip.addFile(rel, buf);
+  }
+
+  const meta = {
+    version,
+    shellVersion: String(pkg.shellVersion || pkg.version),
+    minShellVersion,
+    builtAt: new Date().toISOString(),
+    filesSha256,
+  };
+  zip.addFile('bundle-meta.json', Buffer.from(JSON.stringify(meta, null, 2), 'utf8'));
+  return zip.toBuffer();
+}
+
+async function run() {
+  const tmpOut = makeTempDir('vgt-hotfix-out-');
+  const tmpUserData = makeTempDir('vgt-hotfix-ud-');
+  const tmpShellUpgrade = makeTempDir('vgt-hotfix-shell-');
+
+  try {
+    // 1. 打包测试
+    const built = buildHotfix({ outDir: tmpOut, notes: '测试热更新发布说明' });
+    assert(fs.existsSync(built.bundlePath), 'bundle zip should exist');
+    assert(fs.existsSync(built.manifestPath), 'manifest json should exist');
+    assert(built.bundleSize > 10000 && built.bundleSize < 2 * 1024 * 1024, `unexpected bundle size: ${built.bundleSize}`);
+
+    const builtZip = new AdmZip(built.bundlePath);
+    const entryNames = builtZip.getEntries().map((e) => e.entryName);
+    assert(entryNames.includes('ffmpeg.js'), 'bundle must include ffmpeg.js');
+    assert(entryNames.includes('core/file-filters.js'), 'bundle must include core/file-filters.js');
+    assert(entryNames.includes('renderer/index.html'), 'bundle must include renderer/index.html');
+    assert(!entryNames.includes('core/hotfix.js'), 'bundle must NOT include core/hotfix.js');
+    console.log(`[1/7] buildHotfix OK (${(built.bundleSize / 1024).toFixed(1)} KB, ${built.fileCount} files)`);
+
+    // 2. 初始化测试
+    const st0 = hotfix.initHotfix({ shellRoot: ROOT, userDataDir: tmpUserData });
+    assert.strictEqual(st0.isHotfix, false);
+    assert.strictEqual(st0.activeRoot, ROOT);
+    console.log('[2/7] initHotfix baseline OK');
+
+    // 3. 检查更新状态分支测试
+    const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+    const curVer = pkg.version;
+    const bundle299 = createFakeBundleZip({ version: '2.9.9', minShellVersion: pkg.shellVersion || curVer });
+    const sha299 = hotfix.sha256Buffer(bundle299);
+
+    const manifestUrl = 'https://example.test/hotfix-manifest.json';
+    const bundleUrl = 'https://example.test/hotfix-bundle-2.9.9.zip';
+
+    const upToDateRes = await hotfix.checkForUpdates({
+      mirror: 'official',
+      manifestUrl,
+      fetchImpl: makeMockFetch({
+        [manifestUrl]: {
+          json: {
+            version: curVer,
+            minShellVersion: '1.0.0',
+            bundleUrl,
+            bundleSha256: sha299,
+          },
+        },
+      }),
+    });
+    assert.strictEqual(upToDateRes.status, 'up-to-date');
+
+    const shellUpgradeRes = await hotfix.checkForUpdates({
+      mirror: 'official',
+      manifestUrl,
+      fetchImpl: makeMockFetch({
+        [manifestUrl]: {
+          json: {
+            version: '9.0.0',
+            minShellVersion: '9.0.0',
+            bundleUrl,
+            bundleSha256: sha299,
+          },
+        },
+      }),
+    });
+    assert.strictEqual(shellUpgradeRes.status, 'shell-upgrade-required');
+
+    const availRes = await hotfix.checkForUpdates({
+      mirror: 'official',
+      manifestUrl,
+      fetchImpl: makeMockFetch({
+        [manifestUrl]: {
+          json: {
+            version: '2.9.9',
+            minShellVersion: pkg.shellVersion || curVer,
+            bundleUrl,
+            bundleSize: bundle299.length,
+            bundleSha256: sha299,
+            notes: '测试新版本',
+          },
+        },
+      }),
+    });
+    assert.strictEqual(availRes.status, 'hotfix-available');
+    console.log('[3/7] checkForUpdates branches OK');
+
+    // 4. SHA-256 篡改拒绝 + 路径穿越拒绝
+    await assert.rejects(
+      () => hotfix.downloadAndInstall(
+        { ...availRes.manifest, bundleSha256: '0'.repeat(64) },
+        { mirror: 'official', fetchImpl: makeMockFetch({ [bundleUrl]: { buffer: bundle299 } }) },
+      ),
+      /SHA-256/,
+    );
+
+    const evilZip = new AdmZip();
+    evilZip.addFile('core/x.js', Buffer.from('bad'));
+    evilZip.getEntry('core/x.js').entryName = 'core/../evil.js';
+    const evilBuf = evilZip.toBuffer();
+    await assert.rejects(
+      () => hotfix.downloadAndInstall(
+        { ...availRes.manifest, bundleSha256: hotfix.sha256Buffer(evilBuf) },
+        { mirror: 'official', fetchImpl: makeMockFetch({ [bundleUrl]: { buffer: evilBuf } }) },
+      ),
+      /非法路径/,
+    );
+    assert.strictEqual(hotfix.getStatus().isHotfix, false);
+    console.log('[4/7] SHA-256 & zip-slip guard OK');
+
+    // 5. 合法热更新下载、解压、外部目录 require() 与 FFmpeg 路径解析
+    let loadedFfmpegFromHotfix = null;
+    const applyRes = await hotfix.downloadAndInstall(availRes.manifest, {
+      mirror: 'official',
+      fetchImpl: makeMockFetch({ [bundleUrl]: { buffer: bundle299 } }),
+      validateBundleFn: (stagingDir) => {
+        const ff = require(path.join(stagingDir, 'ffmpeg.js'));
+        const filters = require(path.join(stagingDir, 'core', 'file-filters.js'));
+        assert(typeof ff.executeTask === 'function', 'executeTask must exist');
+        assert(typeof ff.probe === 'function', 'probe must exist');
+        assert(filters.FILE_FILTERS?.videoToGif, 'FILE_FILTERS must exist');
+        assert(fs.existsSync(ff.FFMPEG), `FFMPEG path from hotfix must resolve: ${ff.FFMPEG}`);
+        loadedFfmpegFromHotfix = ff;
+      },
+    });
+    assert.strictEqual(applyRes.ok, true);
+    assert.strictEqual(applyRes.version, '2.9.9');
+    assert(loadedFfmpegFromHotfix);
+
+    // 模拟冷启动 + confirmBoot
+    hotfix.confirmBoot('2.9.9');
+    const stAfterBoot = hotfix.initHotfix({ shellRoot: ROOT, userDataDir: tmpUserData });
+    assert.strictEqual(stAfterBoot.isHotfix, true);
+    assert.strictEqual(stAfterBoot.effectiveVersion, '2.9.9');
+    hotfix.confirmBoot('2.9.9');
+    console.log('[5/7] downloadAndInstall + external module/bin resolution + confirmBoot OK');
+
+    // 6. 模拟启动未确认即崩溃 -> 自动回滚并标坏
+    const stCrashInit = hotfix.initHotfix({ shellRoot: ROOT, userDataDir: tmpUserData });
+    assert.strictEqual(stCrashInit.isHotfix, true); // 设置 pendingVersion = 2.9.9，故意不调用 confirmBoot()
+
+    const stRecovered = hotfix.initHotfix({ shellRoot: ROOT, userDataDir: tmpUserData });
+    assert.strictEqual(stRecovered.isHotfix, false);
+    assert.strictEqual(stRecovered.rolledBackFrom, '2.9.9');
+    assert(stRecovered.badVersions.includes('2.9.9'));
+
+    const skippedRes = await hotfix.checkForUpdates({
+      mirror: 'official',
+      manifestUrl,
+      fetchImpl: makeMockFetch({
+        [manifestUrl]: { json: availRes.manifest },
+      }),
+    });
+    assert.strictEqual(skippedRes.status, 'skipped-bad');
+    console.log('[6/7] crash-loop auto-rollback & badVersions skip OK');
+
+    // 7. 新版安装包覆盖旧热更新（builtinVersion >= activeVersion）
+    fs.writeFileSync(
+      path.join(tmpShellUpgrade, 'package.json'),
+      JSON.stringify({ version: '3.0.0', shellVersion: '3.0.0' }),
+    );
+    const stShellUpgraded = hotfix.initHotfix({ shellRoot: tmpShellUpgrade, userDataDir: tmpUserData });
+    assert.strictEqual(stShellUpgraded.isHotfix, false);
+    assert.strictEqual(stShellUpgraded.effectiveVersion, '3.0.0');
+    console.log('[7/7] builtin shell upgrade precedence OK');
+
+    console.log('HOTFIX_TEST_OK');
+  } finally {
+    fs.rmSync(tmpOut, { recursive: true, force: true });
+    fs.rmSync(tmpUserData, { recursive: true, force: true });
+    fs.rmSync(tmpShellUpgrade, { recursive: true, force: true });
+  }
+}
+
+run().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

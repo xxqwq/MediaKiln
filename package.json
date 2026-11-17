@@ -1,6 +1,7 @@
 {
   "name": "video-gif-toolbox",
   "version": "2.1.8",
+  "shellVersion": "2.1.9",
   "description": "视频 · GIF · 图片 · SVG · 文档工具箱：52 个功能，全部本地离线处理",
   "main": "main.js",
   "author": "user",
@@ -13,6 +14,8 @@
     "predist": "node scripts/ensure-ffmpeg.js",
     "pack": "electron-builder --win portable --dir",
     "dist": "electron-builder --win portable nsis",
+    "hotfix:build": "node scripts/build-hotfix.js",
+    "hotfix:release": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release.ps1 -HotfixOnly",
     "release": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release.ps1"
   },
   "dependencies": {

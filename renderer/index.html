@@ -27,6 +27,12 @@
     </div>
     <input type="search" id="nav-search" class="nav-search" placeholder="搜索功能（gif / 图片 / svg / word / md…）" />
     <nav id="nav"></nav>
+    <div class="sidebar-ver-bar" id="sidebar-ver-bar">
+      <button type="button" class="ver-pill" id="btn-check-update" title="检查更新 / 热更新设置">
+        <span class="ver-dot hidden" id="ver-dot"></span>
+        <span id="ver-label">v— · 检查更新</span>
+      </button>
+    </div>
     <div class="sidebar-foot" id="sidebar-foot">本地 FFmpeg 9.0 · Ctrl+O 选文件 · 空格播放</div>
   </aside>
 
@@ -111,6 +117,7 @@
   <script src="ui/crop-canvas.js"></script>
   <script src="ui/params-panel.js"></script>
   <script src="ui/lightbox.js"></script>
+  <script src="ui/updater.js"></script>
   <script src="features/video-gif.js"></script>
   <script src="features/image.js"></script>
   <script src="features/svg.js"></script>
