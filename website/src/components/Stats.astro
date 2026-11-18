@@ -1,5 +1,6 @@
 ---
 import { data } from '../lib/site';
+import { iconSvg } from '../lib/icons';
 const s = data.stats;
 const items = [
   { n: s.features, unit: '个', label: '本地处理功能' },
@@ -10,10 +11,10 @@ const items = [
 ];
 
 const formatGroups = [
-  { label: '🎬 视频 / 动图', exts: 'MP4 · MKV · MOV · WebM · AVI · GIF · WebP' },
-  { label: '🖼️ 图片 / 矢量', exts: 'PNG · JPG · WebP · AVIF · ICO · BMP · SVG' },
-  { label: '📑 办公文档', exts: 'DOCX · PPTX · Markdown · PDF' },
-  { label: '🎵 音频 / 字幕', exts: 'MP3 · M4A · WAV · FLAC · SRT · ASS · VTT' },
+  { icon: 'film', color: '#8b84ff', label: '视频 / 动图', exts: 'MP4 · MKV · MOV · WebM · GIF · APNG · WebP' },
+  { icon: 'image', color: '#67c7e6', label: '图片 / 矢量', exts: 'PNG · JPG · WebP · AVIF · ICO · BMP · SVG' },
+  { icon: 'files', color: '#60a5fa', label: '办公文档', exts: 'DOCX · PPTX · Markdown · HTML · PDF' },
+  { icon: 'music', color: '#3dd68c', label: '音频 / 字幕', exts: 'MP3 · M4A · WAV · FLAC · OGG · OPUS · SRT · ASS · VTT' },
 ];
 ---
 
@@ -31,7 +32,10 @@ const formatGroups = [
     <div class="format-bar reveal" aria-label="支持格式全览">
       {formatGroups.map((g) => (
         <div class="fmt-group">
-          <span class="fmt-label">{g.label}</span>
+          <span class="fmt-label">
+            <span class="fmt-ico" style={`color:${g.color}`} set:html={iconSvg(g.icon, 14)} />
+            <span>{g.label}</span>
+          </span>
           <span class="fmt-exts">{g.exts}</span>
         </div>
       ))}
@@ -79,7 +83,8 @@ const formatGroups = [
     background: rgba(255, 255, 255, .02);
     border: 1px solid var(--border);
   }
-  .fmt-label { font-size: 12.5px; font-weight: 600; color: var(--text-2); }
+  .fmt-label { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--text-2); }
+  .fmt-ico { display: inline-flex; align-items: center; }
   .fmt-exts {
     font-family: var(--mono);
     font-size: 11.5px;

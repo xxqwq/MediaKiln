@@ -1,10 +1,11 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu, Notification, clipboard, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, Notification, clipboard, nativeImage, screen } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const hotfix = require('./core/hotfix');
+const { mapConcurrent } = require('./core/utils');
 
 let win = null;
 let activeRoot = __dirname;
@@ -69,15 +70,32 @@ function getStateFile() {
   return path.join(app.getPath('userData'), 'window-state.json');
 }
 
+function isBoundsVisibleOnDisplays({ x, y, width, height }) {
+  if (typeof x !== 'number' || typeof y !== 'number') return false;
+  try {
+    const displays = screen.getAllDisplays();
+    return displays.some((d) => {
+      const wa = d.workArea;
+      const overlapW = Math.min(x + width, wa.x + wa.width) - Math.max(x, wa.x);
+      const overlapH = Math.min(y + height, wa.y + wa.height) - Math.max(y, wa.y);
+      return overlapW >= 120 && overlapH >= 80;
+    });
+  } catch {
+    return false;
+  }
+}
+
 function loadWindowState() {
   try {
     const data = JSON.parse(fs.readFileSync(getStateFile(), 'utf8'));
     if (data && typeof data.width === 'number' && typeof data.height === 'number') {
+      const width = Math.max(960, data.width);
+      const height = Math.max(640, data.height);
+      const visible = isBoundsVisibleOnDisplays({ x: data.x, y: data.y, width, height });
       return {
-        width: Math.max(960, data.width),
-        height: Math.max(640, data.height),
-        x: typeof data.x === 'number' ? data.x : undefined,
-        y: typeof data.y === 'number' ? data.y : undefined,
+        width,
+        height,
+        ...(visible ? { x: data.x, y: data.y } : {}),
         maximized: !!data.maximized,
       };
     }
@@ -198,6 +216,7 @@ app.whenReady().then(() => {
     activateRuntimeRoot(__dirname);
   }
 
+
   try {
     getFfmpeg().ensureBinaries();
   } catch (err) {
@@ -205,6 +224,9 @@ app.whenReady().then(() => {
     dialog.showErrorBox('FFmpeg 初始化失败', err.message);
   }
   createWindow();
+  setTimeout(() => {
+    try { pruneWorkflowCache(); } catch {}
+  }, 5000);
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
@@ -258,18 +280,17 @@ ipcMain.handle('probe', async (_e, filePath) => {
   }
 });
 
-// 批量探测（合并/图片序列/批量处理用）
+// 批量探测（合并/图片序列/批量处理用，受控并发 6）
 ipcMain.handle('probe-multi', async (_e, filePaths) => {
   const ff = getFfmpeg();
-  const results = [];
-  for (const p of filePaths) {
+  const list = Array.isArray(filePaths) ? filePaths : [];
+  return mapConcurrent(list, 6, async (p) => {
     try {
-      results.push({ path: p, info: await ff.probe(p) });
+      return { path: p, info: await ff.probe(p) };
     } catch {
-      results.push({ path: p, info: null });
+      return { path: p, info: null };
     }
-  }
-  return results;
+  });
 });
 
 // 提取指定时间点画面为 dataURL（可视化裁剪 / 打码 / 吸管取色用；静态图片不传 -ss）
@@ -300,7 +321,9 @@ ipcMain.handle('first-frame', (_e, filePath, timeSec = 0.1) => {
 });
 
 ipcMain.handle('task:start', async (_e, { feature, params }) => {
-  const taskId = `t${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+  const taskId = (typeof params?.__clientTaskId === 'string' && params.__clientTaskId)
+    ? params.__clientTaskId
+    : `t${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
   const send = (channel, payload) => {
     if (win && !win.isDestroyed()) win.webContents.send(channel, { taskId, ...payload });
   };
@@ -313,18 +336,21 @@ ipcMain.handle('task:start', async (_e, { feature, params }) => {
         win.setProgressBar(Math.max(0, Math.min(1, ratio)));
       }
     });
+    const summaryFields = {};
+    if (result && typeof result === 'object') {
+      for (const [k, v] of Object.entries(result)) {
+        if (k.endsWith('Summary') && v !== undefined) {
+          summaryFields[k] = v;
+        }
+      }
+    }
     const payload = {
       output: result.output,
       outputType: result.outputType || 'file',
       targetReached: result.targetReached,
       targetMB: result.targetMB,
-      ...(result.extractSummary ? { extractSummary: result.extractSummary } : {}),
-      ...(result.docCompressSummary ? { docCompressSummary: result.docCompressSummary } : {}),
-      ...(result.docRepackSummary ? { docRepackSummary: result.docRepackSummary } : {}),
-      ...(result.docCleanupSummary ? { docCleanupSummary: result.docCleanupSummary } : {}),
-      ...(result.docStyleSummary ? { docStyleSummary: result.docStyleSummary } : {}),
-      ...(result.mdOrganizeSummary ? { mdOrganizeSummary: result.mdOrganizeSummary } : {}),
-      ...(result.pdfSummary ? { pdfSummary: result.pdfSummary } : {}),
+      ...(result.targetKB !== undefined ? { targetKB: result.targetKB } : {}),
+      ...summaryFields,
     };
     if (win && !win.isDestroyed() && !params?.__batchItem) win.setProgressBar(-1);
     send('task:done', payload);
@@ -495,6 +521,45 @@ ipcMain.handle('replace-extracted-image', (_e, opts = {}) => {
   }
 });
 
+ipcMain.handle('clipboard:read-media', () => {
+  try {
+    const clipFile = readClipboardFilePath();
+    if (clipFile && fs.existsSync(clipFile)) {
+      try {
+        if (fs.statSync(clipFile).isFile()) {
+          return { ok: true, paths: [clipFile], source: 'file' };
+        }
+      } catch {}
+    }
+
+    const clipImg = clipboard.readImage();
+    if (clipImg && !clipImg.isEmpty()) {
+      const clipDir = path.join(app.getPath('temp'), 'vgt-clipboard');
+      fs.mkdirSync(clipDir, { recursive: true });
+      const now = Date.now();
+      const maxClipAgeMs = 24 * 3600 * 1000;
+      try {
+        for (const name of fs.readdirSync(clipDir)) {
+          const full = path.join(clipDir, name);
+          try {
+            const st = fs.statSync(full);
+            if (st.isFile() && now - st.mtimeMs > maxClipAgeMs) {
+              fs.unlinkSync(full);
+            }
+          } catch {}
+        }
+      } catch {}
+      const pngPath = path.join(clipDir, `paste_${now}.png`);
+      fs.writeFileSync(pngPath, clipImg.toPNG());
+      return { ok: true, paths: [pngPath], source: 'image' };
+    }
+
+    return { ok: false, error: '剪贴板中没有可用的图片或媒体文件' };
+  } catch (err) {
+    return { ok: false, error: err?.message || '读取剪贴板失败' };
+  }
+});
+
 const FALLBACK_DRAG_ICON = nativeImage.createFromDataURL(
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
 );
@@ -513,19 +578,80 @@ ipcMain.on('start-drag', (e, filePath) => {
 // 节点工作流缓存与导入导出 IPC
 // ---------------------------------------------------------------------------
 
+function getMainPrefsFile() {
+  return path.join(app.getPath('userData'), 'main-prefs.json');
+}
+
+function readMainPrefs() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(getMainPrefsFile(), 'utf8'));
+    return raw && typeof raw === 'object' ? raw : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeMainPrefs(patch) {
+  const cur = readMainPrefs();
+  const next = { ...cur, ...patch };
+  fs.mkdirSync(path.dirname(getMainPrefsFile()), { recursive: true });
+  fs.writeFileSync(getMainPrefsFile(), JSON.stringify(next, null, 2) + '\n', 'utf8');
+  return next;
+}
+
+function hasEnoughFreeSpace(dirOrRoot, minBytes = 2 * 1024 ** 3) {
+  try {
+    if (typeof fs.statfsSync !== 'function') return true;
+    let target = path.resolve(String(dirOrRoot || ''));
+    while (target && !fs.existsSync(target)) {
+      const parent = path.dirname(target);
+      if (parent === target) break;
+      target = parent;
+    }
+    if (!target || !fs.existsSync(target)) return false;
+    const st = fs.statfsSync(target);
+    const freeBytes = Number(st.bavail) * Number(st.bsize);
+    return Number.isFinite(freeBytes) && freeBytes >= minBytes;
+  } catch {
+    return false;
+  }
+}
+
 function isCDrivePath(p) {
   return /^c:/i.test(path.resolve(String(p || '')));
 }
 
+function isWritableDir(dir) {
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    const probeFile = path.join(dir, `.probe_${process.pid}`);
+    fs.writeFileSync(probeFile, '1');
+    fs.unlinkSync(probeFile);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function getWorkflowCacheDir() {
+  const prefs = readMainPrefs();
+  const customDir = typeof prefs.customWorkflowCacheDir === 'string' ? prefs.customWorkflowCacheDir.trim() : '';
+  if (customDir && isWritableDir(customDir)) {
+    return customDir;
+  }
+
   const candidates = [];
   if (app.isPackaged) {
     const exeDir = path.dirname(process.execPath);
-    if (!isCDrivePath(exeDir)) candidates.push(path.join(exeDir, '.workflow_cache'));
+    if (!isCDrivePath(exeDir) && hasEnoughFreeSpace(exeDir)) {
+      candidates.push(path.join(exeDir, '.workflow_cache'));
+    }
   } else {
-    if (!isCDrivePath(__dirname)) candidates.push(path.join(__dirname, '.workflow_cache'));
+    if (!isCDrivePath(__dirname) && hasEnoughFreeSpace(__dirname)) {
+      candidates.push(path.join(__dirname, '.workflow_cache'));
+    }
   }
-  if (fs.existsSync('D:\\')) {
+  if (fs.existsSync('D:\\') && hasEnoughFreeSpace('D:\\')) {
     candidates.push('D:\\temp\\vgt-workflow-cache');
   }
   if (app.isPackaged) {
@@ -536,13 +662,7 @@ function getWorkflowCacheDir() {
   }
 
   for (const dir of candidates) {
-    try {
-      fs.mkdirSync(dir, { recursive: true });
-      const probeFile = path.join(dir, `.probe_${process.pid}`);
-      fs.writeFileSync(probeFile, '1');
-      fs.unlinkSync(probeFile);
-      return dir;
-    } catch {}
+    if (isWritableDir(dir)) return dir;
   }
   const fallback = app.isPackaged
     ? path.join(app.getPath('temp'), 'vgt-workflow-cache')
@@ -554,23 +674,90 @@ function getWorkflowCacheDir() {
 function statDirRecursive(dir) {
   let sizeBytes = 0;
   let fileCount = 0;
+  let maxMtimeMs = 0;
   const walk = (cur) => {
     let entries = [];
     try { entries = fs.readdirSync(cur, { withFileTypes: true }); } catch { return; }
     for (const ent of entries) {
       const full = path.join(cur, ent.name);
       if (ent.isDirectory()) {
+        try {
+          const st = fs.statSync(full);
+          if (st.mtimeMs > maxMtimeMs) maxMtimeMs = st.mtimeMs;
+        } catch {}
         walk(full);
       } else if (ent.isFile()) {
         try {
-          sizeBytes += fs.statSync(full).size;
+          const st = fs.statSync(full);
+          sizeBytes += st.size;
+          if (st.mtimeMs > maxMtimeMs) maxMtimeMs = st.mtimeMs;
           fileCount++;
         } catch {}
       }
     }
   };
+  try {
+    const rootSt = fs.statSync(dir);
+    maxMtimeMs = rootSt.mtimeMs;
+  } catch {}
   walk(dir);
-  return { sizeBytes, fileCount };
+  return { sizeBytes, fileCount, maxMtimeMs };
+}
+
+function pruneWorkflowCache({ maxAgeMs = 7 * 86400 * 1000, maxBytes = 5 * 1024 ** 3 } = {}) {
+  if (getFfmpeg().hasRunningTasks()) {
+    return { ok: false, skipped: true, error: '有任务正在运行，暂不清理缓存', removedCount: 0, freedBytes: 0 };
+  }
+  const dir = getWorkflowCacheDir();
+  const now = Date.now();
+  let entries = [];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch (err) {
+    return { ok: false, error: err.message, removedCount: 0, freedBytes: 0 };
+  }
+
+  const nodeDirs = [];
+  for (const ent of entries) {
+    if (!ent.isDirectory() || !ent.name.startsWith('node_')) continue;
+    const full = path.join(dir, ent.name);
+    const { sizeBytes, maxMtimeMs } = statDirRecursive(full);
+    nodeDirs.push({ name: ent.name, full, sizeBytes, mtimeMs: maxMtimeMs || now });
+  }
+
+  let removedCount = 0;
+  let freedBytes = 0;
+  const kept = [];
+
+  for (const item of nodeDirs) {
+    if (now - item.mtimeMs > maxAgeMs) {
+      try {
+        fs.rmSync(item.full, { recursive: true, force: true });
+        removedCount++;
+        freedBytes += item.sizeBytes;
+      } catch {
+        kept.push(item);
+      }
+    } else {
+      kept.push(item);
+    }
+  }
+
+  let totalBytes = kept.reduce((acc, it) => acc + it.sizeBytes, 0);
+  if (totalBytes > maxBytes) {
+    kept.sort((a, b) => a.mtimeMs - b.mtimeMs);
+    for (const item of kept) {
+      if (totalBytes <= maxBytes) break;
+      try {
+        fs.rmSync(item.full, { recursive: true, force: true });
+        removedCount++;
+        freedBytes += item.sizeBytes;
+        totalBytes -= item.sizeBytes;
+      } catch {}
+    }
+  }
+
+  return { ok: true, dir, removedCount, freedBytes, remainingBytes: totalBytes };
 }
 
 function uniqueExportPath(targetPath, noOverwrite) {
@@ -594,8 +781,28 @@ function uniqueExportDir(baseDir, folderName, noOverwrite) {
 ipcMain.handle('wf:cache-info', () => {
   const dir = getWorkflowCacheDir();
   const { sizeBytes, fileCount } = statDirRecursive(dir);
-  return { dir, sizeBytes, fileCount };
+  const customDir = readMainPrefs().customWorkflowCacheDir || '';
+  return { dir, sizeBytes, fileCount, customDir };
 });
+
+ipcMain.handle('wf:set-cache-dir', (_e, dirPath) => {
+  const clean = String(dirPath || '').trim();
+  if (!clean) {
+    writeMainPrefs({ customWorkflowCacheDir: '' });
+    const dir = getWorkflowCacheDir();
+    const { sizeBytes, fileCount } = statDirRecursive(dir);
+    return { ok: true, dir, sizeBytes, fileCount, customDir: '' };
+  }
+  const resolved = path.resolve(clean);
+  if (!isWritableDir(resolved)) {
+    return { ok: false, error: '所选目录不可写，请更换其他目录' };
+  }
+  writeMainPrefs({ customWorkflowCacheDir: resolved });
+  const { sizeBytes, fileCount } = statDirRecursive(resolved);
+  return { ok: true, dir: resolved, sizeBytes, fileCount, customDir: resolved };
+});
+
+ipcMain.handle('wf:prune-cache', (_e, opts = {}) => pruneWorkflowCache(opts));
 
 ipcMain.handle('wf:clear-cache', () => {
   if (getFfmpeg().hasRunningTasks()) {

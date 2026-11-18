@@ -66,7 +66,10 @@
   }
 
   function toFileUrl(p) {
-    return encodeURI('file:///' + String(p || '').replace(/\\/g, '/'));
+    if (typeof window !== 'undefined' && window.api?.toFileUrl) return window.api.toFileUrl(p);
+    const norm = String(p || '').replace(/\\/g, '/');
+    const parts = norm.split('/').map((seg, i) => (i === 0 && /^[a-zA-Z]:$/.test(seg)) ? seg : encodeURIComponent(seg));
+    return 'file:///' + parts.join('/').replace(/^\/+/, '');
   }
 
   function extOf(p) {
@@ -77,17 +80,42 @@
   const FOLDER_FILTER_EXTS = {
     all: [
       'mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'ts', 'm4v',
-      'gif', 'jpg', 'jpeg', 'png', 'webp', 'bmp', 'avif', 'ico',
-      'svg', 'mp3', 'm4a', 'wav', 'flac', 'aac', 'ogg',
-      'srt', 'ass', 'ssa', 'vtt', 'docx', 'pptx', 'md', 'markdown', 'pdf',
+      'gif', 'apng', 'jpg', 'jpeg', 'png', 'webp', 'bmp', 'avif', 'ico',
+      'svg', 'mp3', 'm4a', 'wav', 'flac', 'aac', 'ogg', 'opus',
+      'srt', 'ass', 'ssa', 'vtt', 'docx', 'pptx', 'md', 'markdown', 'html', 'htm', 'pdf',
     ],
-    videoAnim: ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'ts', 'm4v', 'gif'],
+    videoAnim: ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'ts', 'm4v', 'gif', 'apng'],
     image: ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'avif', 'ico'],
     gif: ['gif'],
     svg: ['svg'],
-    audio: ['mp3', 'm4a', 'wav', 'flac', 'aac', 'ogg'],
-    doc: ['docx', 'pptx', 'md', 'markdown'],
+    audio: ['mp3', 'm4a', 'wav', 'flac', 'aac', 'ogg', 'opus'],
+    doc: ['docx', 'pptx', 'md', 'markdown', 'html', 'htm'],
+    pdf: ['pdf'],
   };
+
+  const NOTE_COLORS = [
+    { id: 'indigo', label: '靛蓝', bg: 'rgba(99, 102, 241, 0.12)', border: 'rgba(124, 116, 255, 0.42)' },
+    { id: 'emerald', label: '翠绿', bg: 'rgba(16, 185, 129, 0.12)', border: 'rgba(52, 211, 153, 0.42)' },
+    { id: 'amber', label: '琥珀', bg: 'rgba(245, 158, 11, 0.12)', border: 'rgba(251, 191, 36, 0.42)' },
+    { id: 'rose', label: '玫红', bg: 'rgba(244, 63, 94, 0.12)', border: 'rgba(251, 113, 133, 0.42)' },
+    { id: 'slate', label: '中性', bg: 'rgba(148, 163, 184, 0.1)', border: 'rgba(148, 163, 184, 0.36)' },
+  ];
+
+  function normalizeNotes(rawNotes) {
+    if (!Array.isArray(rawNotes)) return [];
+    return rawNotes
+      .filter((n) => n && typeof n === 'object')
+      .map((n, idx) => ({
+        id: String(n.id || `note_${Date.now()}_${idx}`),
+        x: Number.isFinite(Number(n.x)) ? Number(n.x) : 80,
+        y: Number.isFinite(Number(n.y)) ? Number(n.y) : 80,
+        w: Math.max(200, Number.isFinite(Number(n.w)) ? Number(n.w) : 320),
+        h: Math.max(110, Number.isFinite(Number(n.h)) ? Number(n.h) : 180),
+        title: typeof n.title === 'string' ? n.title : '分组备注',
+        text: typeof n.text === 'string' ? n.text : '',
+        color: NOTE_COLORS.some((c) => c.id === n.color) ? n.color : 'indigo',
+      }));
+  }
 
   function initWorkflowCanvas(containerEl, bridge) {
     const reg = window.VGT.wfRegistry;
@@ -102,13 +130,15 @@
     // 编辑器状态
     // -----------------------------------------------------------------------
     const DEFAULT_NODE_W = 336;
-    let graph = { version: 1, name: '新建工作流', nodes: [], edges: [] };
+    let graph = { version: 1, name: '新建工作流', nodes: [], edges: [], notes: [] };
     let view = { panX: 40, panY: 40, zoom: 0.92 };
     let userAdjustedView = false;
     let selectedNodes = new Set();
     let selectedEdgeId = null;
     let nodeStates = new Map(); // nodeId -> { status, progress, payload, errorMsg, savedPaths, targetDir }
     let nodeEls = new Map(); // nodeId -> HTMLElement
+    let edgeDomMap = new Map(); // edgeId -> { edge, grad, hit, path }
+    let minimapRafId = 0;
     let wireHover = null;
     let activeController = null;
     let isRunning = false;
@@ -116,6 +146,7 @@
     let draggingWire = null; // { fromNode, fromPort, exts, x0, y0, x1, y1 }
     let popupEl = null;
     let ctxMenuEl = null;
+    const collapsedPaletteGroups = new Set();
 
     const undoStack = [];
     const redoStack = [];
@@ -123,6 +154,13 @@
 
     const allocNodeId = () => `n${Date.now().toString(36)}_${nextIdSeq++}`;
     const allocEdgeId = () => `e${Date.now().toString(36)}_${nextIdSeq++}`;
+    const allocNoteId = () => `note_${Date.now().toString(36)}_${nextIdSeq++}`;
+
+    function normalizeGraphWithNotes(raw) {
+      const normalized = tplMod.normalizeGraphData(raw, reg);
+      normalized.notes = normalizeNotes(raw?.notes);
+      return normalized;
+    }
 
     // -----------------------------------------------------------------------
     // 骨架 DOM 构建
@@ -131,22 +169,27 @@
       <header class="wf-toolbar">
         <div class="wf-toolbar-left">
           <input type="text" id="wf-name-input" class="wf-name-input" value="新建工作流" title="编辑当前工作流名称" />
+          <span class="wf-tb-sep" aria-hidden="true"></span>
           <button class="btn btn-ghost btn-sm" id="wf-btn-tpl">📋 模板 / 存档</button>
           <button class="btn btn-ghost btn-sm" id="wf-btn-import">📥 导入</button>
           <button class="btn btn-ghost btn-sm" id="wf-btn-export">📤 导出</button>
+          <span class="wf-tb-sep" aria-hidden="true"></span>
           <button class="btn btn-ghost btn-sm" id="wf-btn-layout" title="按拓扑层级自动整理节点位置">🧹 自动整理</button>
+          <button class="btn btn-ghost btn-sm" id="wf-btn-note" title="在画布添加分组备注便签">📝 便签</button>
           <button class="btn btn-ghost btn-sm" id="wf-btn-clear">🗑️ 清空</button>
         </div>
         <div class="wf-toolbar-right">
           <span class="wf-progress-pill hidden" id="wf-progress-pill"></span>
-          <button class="btn btn-ghost btn-sm" id="wf-btn-cache" title="点击清理 .workflow_cache 中间产物缓存">🧹 缓存 0 B</button>
+          <button class="btn btn-ghost btn-sm" id="wf-btn-cache" title="左键清空缓存 · 右键设置缓存目录">🧹 缓存 0 B</button>
           <button class="btn btn-ghost btn-sm" id="wf-btn-force" title="忽略缓存从头重新执行所有节点">↻ 强制重跑</button>
+          <span class="wf-tb-sep" aria-hidden="true"></span>
           <button class="btn btn-primary btn-sm" id="wf-btn-run">▶ 运行工作流</button>
           <button class="btn btn-danger btn-sm hidden" id="wf-btn-stop">⏹ 停止运行</button>
         </div>
       </header>
       <div class="wf-viewport" id="wf-viewport">
         <div class="wf-stage" id="wf-stage">
+          <div class="wf-notes" id="wf-notes"></div>
           <svg class="wf-wires" id="wf-wires" width="1" height="1">
             <defs id="wf-wire-defs"></defs>
             <g id="wf-wire-layer"></g>
@@ -180,6 +223,7 @@
 
     const vpEl = containerEl.querySelector('#wf-viewport');
     const stageEl = containerEl.querySelector('#wf-stage');
+    const notesLayerEl = containerEl.querySelector('#wf-notes');
     const wireLayerEl = containerEl.querySelector('#wf-wire-layer');
     const wireDefsEl = containerEl.querySelector('#wf-wire-defs');
     const wirePreviewEl = containerEl.querySelector('#wf-wire-preview');
@@ -212,7 +256,7 @@
       if (isRunning || !undoStack.length) return;
       redoStack.push(JSON.stringify(graph));
       const prev = JSON.parse(undoStack.pop());
-      graph = tplMod.normalizeGraphData(prev, reg);
+      graph = normalizeGraphWithNotes(prev);
       selectedNodes.clear();
       selectedEdgeId = null;
       persistCurrent();
@@ -224,7 +268,7 @@
       if (isRunning || !redoStack.length) return;
       undoStack.push(JSON.stringify(graph));
       const nxt = JSON.parse(redoStack.pop());
-      graph = tplMod.normalizeGraphData(nxt, reg);
+      graph = normalizeGraphWithNotes(nxt);
       selectedNodes.clear();
       selectedEdgeId = null;
       persistCurrent();
@@ -250,7 +294,7 @@
       const s2 = 120 * view.zoom;
       vpEl.style.backgroundSize = `${s1}px ${s1}px, ${s2}px ${s2}px`;
       zoomReadout.textContent = `${Math.round(view.zoom * 100)}%`;
-      drawMinimap();
+      scheduleDrawMinimap();
     }
 
     function zoomAt(nextZoom, clientX, clientY) {
@@ -277,11 +321,17 @@
         maxX = Math.max(maxX, n.x + w);
         maxY = Math.max(maxY, n.y + h);
       }
+      for (const note of graph.notes || []) {
+        minX = Math.min(minX, note.x);
+        minY = Math.min(minY, note.y);
+        maxX = Math.max(maxX, note.x + (note.w || 320));
+        maxY = Math.max(maxY, note.y + (note.h || 180));
+      }
       return { minX, minY, maxX, maxY };
     }
 
     function fitView() {
-      if (!graph.nodes.length) {
+      if (!graph.nodes.length && !(graph.notes?.length)) {
         view = { panX: 40, panY: 40, zoom: 1 };
         applyViewTransform();
         return;
@@ -365,13 +415,14 @@
     }
 
     // -----------------------------------------------------------------------
-    // 缓存体积显示
+    // 缓存体积与目录显示
     // -----------------------------------------------------------------------
     async function refreshCacheInfo() {
       try {
         const info = await window.api.wfCacheInfo();
-        cacheBtn.textContent = `🧹 缓存 ${fmtSize(info?.sizeBytes || 0)}`;
-        cacheBtn.title = `缓存目录：${info?.dir || ''}\n共 ${info?.fileCount || 0} 个中间文件（点击清空）`;
+        const hasCustom = !!info?.customDir;
+        cacheBtn.textContent = `🧹 缓存 ${fmtSize(info?.sizeBytes || 0)}${hasCustom ? ' · 自定义' : ''}`;
+        cacheBtn.title = `缓存目录：${info?.dir || ''}${hasCustom ? '（自定义）' : '（默认）'}\n共 ${info?.fileCount || 0} 个中间文件\n左键清空缓存 · 右键或 Shift+点击设置缓存目录`;
       } catch {}
     }
 
@@ -402,9 +453,48 @@
       return `M ${x0} ${y0} C ${x0 + dx} ${y0}, ${x1 - dx} ${y1}, ${x1} ${y1}`;
     }
 
+    function updateWirePreview() {
+      if (draggingWire) {
+        wirePreviewEl.classList.remove('hidden');
+        wirePreviewEl.setAttribute('d', bezierPath(draggingWire.x0, draggingWire.y0, draggingWire.x1, draggingWire.y1));
+      } else {
+        wirePreviewEl.classList.add('hidden');
+      }
+    }
+
+    function updateWiresForNodes(nodeIds) {
+      const idSet = nodeIds instanceof Set ? nodeIds : new Set(nodeIds || []);
+      if (!idSet.size) return;
+      let missing = false;
+      for (const edge of graph.edges) {
+        if (!idSet.has(edge.fromNode) && !idSet.has(edge.toNode)) continue;
+        const entry = edgeDomMap.get(edge.id);
+        if (!entry) {
+          missing = true;
+          continue;
+        }
+        const p0 = getPortCanvasPos(edge.fromNode, edge.fromPort, true);
+        const p1 = getPortCanvasPos(edge.toNode, edge.toPort, false);
+        if (!p0 || !p1) continue;
+        entry.grad.setAttribute('x1', String(p0.x));
+        entry.grad.setAttribute('y1', String(p0.y));
+        entry.grad.setAttribute('x2', String(p1.x === p0.x ? p1.x + 1 : p1.x));
+        entry.grad.setAttribute('y2', String(p1.y === p0.y ? p1.y + 1 : p1.y));
+        const d = bezierPath(p0.x, p0.y, p1.x, p1.y);
+        entry.hit.setAttribute('d', d);
+        entry.path.setAttribute('d', d);
+      }
+      if (missing) {
+        renderWires();
+        return;
+      }
+      scheduleDrawMinimap();
+    }
+
     function renderWires() {
       wireLayerEl.innerHTML = '';
       wireDefsEl.innerHTML = '';
+      edgeDomMap.clear();
 
       for (const edge of graph.edges) {
         const p0 = getPortCanvasPos(edge.fromNode, edge.fromPort, true);
@@ -461,15 +551,19 @@
 
         wireLayerEl.appendChild(hit);
         wireLayerEl.appendChild(path);
+        edgeDomMap.set(edge.id, { edge, grad, hit, path });
       }
 
-      if (draggingWire) {
-        wirePreviewEl.classList.remove('hidden');
-        wirePreviewEl.setAttribute('d', bezierPath(draggingWire.x0, draggingWire.y0, draggingWire.x1, draggingWire.y1));
-      } else {
-        wirePreviewEl.classList.add('hidden');
-      }
-      drawMinimap();
+      updateWirePreview();
+      scheduleDrawMinimap();
+    }
+
+    function scheduleDrawMinimap() {
+      if (minimapRafId) return;
+      minimapRafId = requestAnimationFrame(() => {
+        minimapRafId = 0;
+        drawMinimap();
+      });
     }
 
     function drawMinimap() {
@@ -477,7 +571,7 @@
       const W = minimapCanvas.width;
       const H = minimapCanvas.height;
       ctx.clearRect(0, 0, W, H);
-      if (!graph.nodes.length) return;
+      if (!graph.nodes.length && !(graph.notes?.length)) return;
 
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
       for (const n of graph.nodes) {
@@ -488,6 +582,12 @@
         minY = Math.min(minY, n.y);
         maxX = Math.max(maxX, n.x + nw);
         maxY = Math.max(maxY, n.y + nh);
+      }
+      for (const note of graph.notes || []) {
+        minX = Math.min(minX, note.x);
+        minY = Math.min(minY, note.y);
+        maxX = Math.max(maxX, note.x + (note.w || 320));
+        maxY = Math.max(maxY, note.y + (note.h || 180));
       }
       const vr = vpEl.getBoundingClientRect();
       const vx0 = -view.panX / view.zoom;
@@ -504,6 +604,14 @@
       const oy = (H - (maxY - minY) * scale) / 2;
       const tx = (x) => ox + (x - minX) * scale;
       const ty = (y) => oy + (y - minY) * scale;
+
+      for (const note of graph.notes || []) {
+        ctx.fillStyle = 'rgba(124,116,255,0.1)';
+        ctx.strokeStyle = 'rgba(124,116,255,0.28)';
+        ctx.lineWidth = 0.8;
+        ctx.fillRect(tx(note.x), ty(note.y), Math.max(8, (note.w || 320) * scale), Math.max(6, (note.h || 180) * scale));
+        ctx.strokeRect(tx(note.x), ty(note.y), Math.max(8, (note.w || 320) * scale), Math.max(6, (note.h || 180) * scale));
+      }
 
       ctx.strokeStyle = 'rgba(255,255,255,0.14)';
       ctx.lineWidth = 1;
@@ -684,7 +792,7 @@
               nel.style.top = `${t.node.y}px`;
             }
           }
-          renderWires();
+          updateWiresForNodes(moveTargets.map((t) => t.node.id));
         };
         const onUp = () => {
           window.removeEventListener('mousemove', onMove);
@@ -1139,7 +1247,8 @@
 
       const upSpec = def.inputs?.[0] ? reg.getUpstreamSpecForPort(graph, nodeId, def.inputs[0].id) : null;
       const isImage = !!(upSpec?.exts?.length && upSpec.exts.every((e) => reg.IMG_EXTS.includes(e)));
-      const ctx = { isImage };
+      const isGif = !!(upSpec?.exts?.length && upSpec.exts.every((e) => e === 'gif'));
+      const ctx = { isImage, isGif };
       const vals = node.params || {};
 
       for (const field of def.fields) {
@@ -1278,7 +1387,7 @@
         const firstInfo = st.payload.infos?.[0] || {};
         const ext = extOf(firstPath);
         const count = st.payload.paths.length;
-        const isImgLike = ['gif', 'webp', 'ico', 'svg', ...reg.IMG_EXTS].includes(ext);
+        const isImgLike = ['gif', 'apng', 'webp', 'ico', 'svg', ...reg.IMG_EXTS].includes(ext);
         const isVideo = ['mp4', 'webm', 'mkv', 'mov', 'm4v'].includes(ext);
         const isAudio = reg.AUDIO_EXTS.includes(ext);
 
@@ -1423,7 +1532,7 @@
         const cp = screenToCanvas(ev.clientX, ev.clientY);
         draggingWire.x1 = cp.x;
         draggingWire.y1 = cp.y;
-        renderWires();
+        updateWirePreview();
       };
 
       const onUp = (ev) => {
@@ -1594,6 +1703,75 @@
       ctxMenuEl = menu;
     }
 
+    function openCanvasContextMenu(clientX, clientY) {
+      closePopups();
+      const menu = document.createElement('div');
+      menu.className = 'wf-ctx-menu';
+      menu.style.left = `${Math.min(clientX, window.innerWidth - 230)}px`;
+      menu.style.top = `${Math.min(clientY, window.innerHeight - 320)}px`;
+
+      const pt = screenToCanvas(clientX, clientY);
+      const items = [
+        { label: '🔍 搜索添加节点…', act: () => openQuickNodeMenu(clientX, clientY) },
+        { label: '📋 粘贴剪贴板文件 (Ctrl+V)', act: () => pasteFromClipboard({ x: clientX, y: clientY }) },
+        { sep: true },
+        {
+          label: '📂 添加「加载文件」节点',
+          act: () => {
+            const created = addNode('io.loadFile', pt.x - DEFAULT_NODE_W / 2, pt.y - 30);
+            ensureNodeVisible(created);
+          },
+        },
+        {
+          label: '📚 添加「批量加载」节点',
+          act: () => {
+            const created = addNode('io.loadBatch', pt.x - DEFAULT_NODE_W / 2, pt.y - 30);
+            ensureNodeVisible(created);
+          },
+        },
+        {
+          label: '💾 添加「保存 / 导出」节点',
+          act: () => {
+            const created = addNode('io.save', pt.x - DEFAULT_NODE_W / 2, pt.y - 30);
+            ensureNodeVisible(created);
+          },
+        },
+        {
+          label: '📝 添加画布分组便签',
+          act: () => addNote(pt.x - 160, pt.y - 40),
+        },
+        { sep: true },
+        {
+          label: '🧹 自动整理布局',
+          act: () => containerEl.querySelector('#wf-btn-layout')?.click(),
+        },
+        {
+          label: '⊡ 适应全部节点',
+          act: () => {
+            userAdjustedView = false;
+            fitView();
+            renderWires();
+          },
+        },
+      ];
+
+      for (const it of items) {
+        if (it.sep) {
+          const sep = document.createElement('div');
+          sep.className = 'wf-ctx-sep';
+          menu.appendChild(sep);
+          continue;
+        }
+        const btn = document.createElement('button');
+        btn.className = 'wf-ctx-item';
+        btn.textContent = it.label;
+        btn.onclick = () => { closePopups(); it.act(); };
+        menu.appendChild(btn);
+      }
+      document.body.appendChild(menu);
+      ctxMenuEl = menu;
+    }
+
     // -----------------------------------------------------------------------
     // 快捷键操作（旁路 / 复制 / 对齐 / 向上游追溯参考画面）
     // -----------------------------------------------------------------------
@@ -1620,7 +1798,7 @@
         });
       }
       persistCurrent();
-      renderWires();
+      updateWiresForNodes(selectedNodes);
       bridge.toast(axis === 'top' ? '已顶部水平对齐选中节点' : '已左侧垂直对齐选中节点');
     }
 
@@ -1758,10 +1936,185 @@
     }
 
     // -----------------------------------------------------------------------
+    // 画布分组便签（Comments / Notes）
+    // -----------------------------------------------------------------------
+    function addNote(x, y, preset = null) {
+      if (!Array.isArray(graph.notes)) graph.notes = [];
+      snapshotUndo();
+      const note = {
+        id: allocNoteId(),
+        x: Math.round(x),
+        y: Math.round(y),
+        w: 320,
+        h: 180,
+        title: '分组备注',
+        text: '',
+        color: 'indigo',
+        ...(preset || {}),
+      };
+      graph.notes.push(note);
+      persistCurrent();
+      renderNotes();
+      guideEl.classList.toggle('hidden', graph.nodes.length > 0 || graph.notes.length > 0);
+      scheduleDrawMinimap();
+      return note;
+    }
+
+    function renderNotes() {
+      if (!notesLayerEl) return;
+      notesLayerEl.innerHTML = '';
+      if (!Array.isArray(graph.notes)) graph.notes = [];
+
+      for (const note of graph.notes) {
+        const theme = NOTE_COLORS.find((c) => c.id === note.color) || NOTE_COLORS[0];
+        const el = document.createElement('div');
+        el.className = 'wf-note';
+        el.dataset.noteId = note.id;
+        el.style.left = `${note.x}px`;
+        el.style.top = `${note.y}px`;
+        el.style.width = `${note.w}px`;
+        el.style.height = `${note.h}px`;
+        el.style.setProperty('--note-bg', theme.bg);
+        el.style.setProperty('--note-border', theme.border);
+
+        el.innerHTML = `
+          <div class="wf-note-head">
+            <span class="wf-note-grip" title="拖动便签">📝</span>
+            <input type="text" class="wf-note-title" value="${esc(note.title || '')}" placeholder="分组标题…" />
+            <button type="button" class="wf-note-btn" data-note-act="color" title="切换便签颜色">🎨</button>
+            <button type="button" class="wf-note-btn" data-note-act="remove" title="删除便签">✕</button>
+          </div>
+          <div class="wf-note-body">
+            <textarea class="wf-note-text" placeholder="写下流程说明、参数提醒或分组备注…">${esc(note.text || '')}</textarea>
+          </div>
+          <div class="wf-note-resize" title="拖拽调整大小"></div>
+        `;
+
+        el.addEventListener('mousedown', (e) => {
+          closePopups();
+          if (e.button === 0 && !spacePressed) e.stopPropagation();
+        });
+        el.addEventListener('dblclick', (e) => e.stopPropagation());
+        el.addEventListener('contextmenu', (e) => e.stopPropagation());
+
+        const headEl = el.querySelector('.wf-note-head');
+        const titleEl = el.querySelector('.wf-note-title');
+        const textEl = el.querySelector('.wf-note-text');
+        const resizeEl = el.querySelector('.wf-note-resize');
+
+        headEl.addEventListener('mousedown', (e) => {
+          if (e.target.closest('.wf-note-title') || e.target.closest('.wf-note-btn')) return;
+          if (e.button !== 0 || spacePressed) return;
+          e.stopPropagation();
+          const sx = e.clientX;
+          const sy = e.clientY;
+          const bx = note.x;
+          const by = note.y;
+          let moved = false;
+
+          const onMove = (ev) => {
+            const dx = (ev.clientX - sx) / view.zoom;
+            const dy = (ev.clientY - sy) / view.zoom;
+            if (!moved && (Math.abs(dx) > 2 || Math.abs(dy) > 2)) {
+              snapshotUndo();
+              moved = true;
+            }
+            if (!moved) return;
+            note.x = Math.round(bx + dx);
+            note.y = Math.round(by + dy);
+            el.style.left = `${note.x}px`;
+            el.style.top = `${note.y}px`;
+            scheduleDrawMinimap();
+          };
+          const onUp = () => {
+            window.removeEventListener('mousemove', onMove);
+            window.removeEventListener('mouseup', onUp);
+            if (moved) persistCurrent();
+          };
+          window.addEventListener('mousemove', onMove);
+          window.addEventListener('mouseup', onUp);
+        });
+
+        resizeEl.addEventListener('mousedown', (e) => {
+          if (e.button !== 0 || spacePressed) return;
+          e.stopPropagation();
+          e.preventDefault();
+          const sx = e.clientX;
+          const sy = e.clientY;
+          const bw = note.w;
+          const bh = note.h;
+          let resized = false;
+
+          const onMove = (ev) => {
+            const dx = (ev.clientX - sx) / view.zoom;
+            const dy = (ev.clientY - sy) / view.zoom;
+            if (!resized && (Math.abs(dx) > 1 || Math.abs(dy) > 1)) {
+              snapshotUndo();
+              resized = true;
+            }
+            if (!resized) return;
+            note.w = Math.max(200, Math.round(bw + dx));
+            note.h = Math.max(110, Math.round(bh + dy));
+            el.style.width = `${note.w}px`;
+            el.style.height = `${note.h}px`;
+            scheduleDrawMinimap();
+          };
+          const onUp = () => {
+            window.removeEventListener('mousemove', onMove);
+            window.removeEventListener('mouseup', onUp);
+            if (resized) persistCurrent();
+          };
+          window.addEventListener('mousemove', onMove);
+          window.addEventListener('mouseup', onUp);
+        });
+
+        let titleSnapped = false;
+        titleEl.onfocus = () => { titleSnapped = false; };
+        titleEl.oninput = () => {
+          if (!titleSnapped) { snapshotUndo(); titleSnapped = true; }
+          note.title = titleEl.value;
+          persistCurrent();
+        };
+
+        let textSnapped = false;
+        textEl.onfocus = () => { textSnapped = false; };
+        textEl.oninput = () => {
+          if (!textSnapped) { snapshotUndo(); textSnapped = true; }
+          note.text = textEl.value;
+          persistCurrent();
+        };
+
+        el.querySelector('[data-note-act="color"]').onclick = (e) => {
+          e.stopPropagation();
+          snapshotUndo();
+          const idx = NOTE_COLORS.findIndex((c) => c.id === note.color);
+          const next = NOTE_COLORS[(idx + 1) % NOTE_COLORS.length];
+          note.color = next.id;
+          el.style.setProperty('--note-bg', next.bg);
+          el.style.setProperty('--note-border', next.border);
+          persistCurrent();
+        };
+
+        el.querySelector('[data-note-act="remove"]').onclick = (e) => {
+          e.stopPropagation();
+          snapshotUndo();
+          graph.notes = graph.notes.filter((n) => n.id !== note.id);
+          persistCurrent();
+          renderNotes();
+          guideEl.classList.toggle('hidden', graph.nodes.length > 0 || graph.notes.length > 0);
+          scheduleDrawMinimap();
+        };
+
+        notesLayerEl.appendChild(el);
+      }
+    }
+
+    // -----------------------------------------------------------------------
     // 画布全量渲染
     // -----------------------------------------------------------------------
     function renderAll() {
       nameInput.value = graph.name || '未命名工作流';
+      renderNotes();
       nodesLayerEl.innerHTML = '';
       nodeEls.clear();
 
@@ -1773,7 +2126,7 @@
         }
       }
 
-      guideEl.classList.toggle('hidden', graph.nodes.length > 0);
+      guideEl.classList.toggle('hidden', graph.nodes.length > 0 || (graph.notes?.length || 0) > 0);
       renderNodeDynamicPorts();
       applyViewTransform();
       // 等待一帧让浏览器计算各端口坐标后再连线
@@ -1799,6 +2152,22 @@
       setRunningUI(true);
       progressPill.textContent = '准备执行工作流…';
 
+      const activeTaskCallbacks = new Map(); // taskId -> { onTid, onProg, resolvedTid }
+      const pendingTaskWaiters = [];
+      bridge.setActiveTaskCallbacks(null, (ratio, tid) => {
+        if (!tid) return;
+        let entry = activeTaskCallbacks.get(tid);
+        if (!entry) {
+          entry = pendingTaskWaiters.shift();
+          if (entry) {
+            entry.resolvedTid = tid;
+            activeTaskCallbacks.set(tid, entry);
+            entry.onTid?.(tid);
+          }
+        }
+        entry?.onProg?.(ratio);
+      });
+
       const prefs = bridge.getGlobalPrefs();
       const runtime = {
         probe: (p) => window.api.probe(p),
@@ -1810,16 +2179,26 @@
         exportFiles: (opts) => window.api.wfExportFiles(opts),
         cancelTask: (tid) => window.api.cancelTask(tid),
         startTask(feature, params, onTid, onProg) {
-          let tidKnown = false;
-          bridge.setActiveTaskCallbacks(onTid, (ratio, tid) => {
-            if (!tidKnown && tid) {
-              tidKnown = true;
-              onTid?.(tid);
+          const clientTid = `twf_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+          const waiter = { onTid, onProg, resolvedTid: clientTid };
+          activeTaskCallbacks.set(clientTid, waiter);
+          pendingTaskWaiters.push(waiter);
+          onTid?.(clientTid);
+          const nextParams = params && typeof params === 'object'
+            ? { ...params, __clientTaskId: clientTid }
+            : { __clientTaskId: clientTid };
+          return window.api.startTask(feature, nextParams).then((res) => {
+            if (res?.taskId && res.taskId !== clientTid) {
+              activeTaskCallbacks.set(res.taskId, waiter);
+              waiter.resolvedTid = res.taskId;
+              onTid?.(res.taskId);
             }
-            onProg?.(ratio);
-          });
-          return window.api.startTask(feature, params).finally(() => {
-            bridge.clearActiveTaskCallbacks();
+            return res;
+          }).finally(() => {
+            const idx = pendingTaskWaiters.indexOf(waiter);
+            if (idx >= 0) pendingTaskWaiters.splice(idx, 1);
+            activeTaskCallbacks.delete(clientTid);
+            if (waiter.resolvedTid) activeTaskCallbacks.delete(waiter.resolvedTid);
           });
         },
       };
@@ -1859,6 +2238,7 @@
           bridge.toast(err.message || '工作流运行出错', true);
         }
       } finally {
+        bridge.clearActiveTaskCallbacks();
         activeController = null;
         setRunningUI(false);
         refreshCacheInfo();
@@ -1879,6 +2259,7 @@
       vpEl.addEventListener('mousedown', (e) => {
         closePopups();
         if (e.target.closest('.wf-node') || e.target.closest('.wf-zoom-hud') || e.target.closest('.wf-empty-guide')) return;
+        if (e.target.closest('.wf-note') && e.button === 0 && !spacePressed) return;
 
         // Shift + 左键拉框多选
         if (e.button === 0 && e.shiftKey) {
@@ -1952,14 +2333,14 @@
       });
 
       vpEl.addEventListener('dblclick', (e) => {
-        if (e.target.closest('.wf-node') || e.target.closest('.wf-zoom-hud') || e.target.closest('.wf-empty-guide')) return;
+        if (e.target.closest('.wf-node') || e.target.closest('.wf-zoom-hud') || e.target.closest('.wf-empty-guide') || e.target.closest('.wf-note')) return;
         openQuickNodeMenu(e.clientX, e.clientY);
       });
 
       vpEl.addEventListener('contextmenu', (e) => {
-        if (e.target.closest('.wf-node') || e.target.closest('.wf-zoom-hud')) return;
+        if (e.target.closest('.wf-node') || e.target.closest('.wf-zoom-hud') || e.target.closest('.wf-note')) return;
         e.preventDefault();
-        openQuickNodeMenu(e.clientX, e.clientY);
+        openCanvasContextMenu(e.clientX, e.clientY);
       });
 
       // 从左侧栏拖入节点或从桌面拖入媒体文件/文件夹
@@ -1983,41 +2364,16 @@
         const files = e.dataTransfer?.files;
         if (files?.length) {
           const paths = [...files].map((f) => window.api.getPath(f)).filter(Boolean);
-          if (!paths.length) return;
-          if (paths.length === 1) {
-            const st = await window.api.wfStatMulti(paths).catch(() => []);
-            if (st?.[0]?.isDirectory) {
-              const node = addNode('io.loadFolder', pt.x - DEFAULT_NODE_W / 2, pt.y - 30);
-              if (node) await assignFolderToNode(node, paths[0]);
-              ensureNodeVisible(node);
-            } else {
-              const node = addNode('io.loadFile', pt.x - DEFAULT_NODE_W / 2, pt.y - 30);
-              if (node) await assignSingleFileToNode(node, paths[0]);
-              ensureNodeVisible(node);
-            }
-          } else {
-            const node = addNode('io.loadBatch', pt.x - DEFAULT_NODE_W / 2, pt.y - 30);
-            if (node) await assignBatchFilesToNode(node, paths, false);
-            ensureNodeVisible(node);
-          }
+          if (paths.length) await pasteFiles(paths, { x: e.clientX, y: e.clientY });
         }
       });
 
       // 小地图点击跳转
       minimapCanvas.addEventListener('mousedown', (e) => {
         e.stopPropagation();
-        if (!graph.nodes.length) return;
+        if (!graph.nodes.length && !(graph.notes?.length)) return;
         userAdjustedView = true;
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        for (const n of graph.nodes) {
-          const el = nodeEls.get(n.id);
-          const nw = el?.offsetWidth || DEFAULT_NODE_W;
-          const nh = el?.offsetHeight || 220;
-          minX = Math.min(minX, n.x);
-          minY = Math.min(minY, n.y);
-          maxX = Math.max(maxX, n.x + nw);
-          maxY = Math.max(maxY, n.y + nh);
-        }
+        let { minX, minY, maxX, maxY } = getGraphBounds();
         const vr = vpEl.getBoundingClientRect();
         const vx0 = -view.panX / view.zoom;
         const vy0 = -view.panY / view.zoom;
@@ -2047,7 +2403,7 @@
     function loadGraph(rawGraph, msg) {
       if (isRunning) return bridge.toast('任务运行中，请先停止', true);
       snapshotUndo();
-      graph = tplMod.normalizeGraphData(rawGraph, reg);
+      graph = normalizeGraphWithNotes(rawGraph);
       selectedNodes.clear();
       selectedEdgeId = null;
       nodeStates.clear();
@@ -2146,11 +2502,20 @@
       });
       bridge.toast('已自动整理画布布局');
     };
+    containerEl.querySelector('#wf-btn-note').onclick = () => {
+      const r = vpEl.getBoundingClientRect();
+      const pt = r.width
+        ? screenToCanvas(r.left + r.width * 0.35, r.top + r.height * 0.28)
+        : { x: 140, y: 120 };
+      const offset = ((graph.notes?.length || 0) % 4) * 28;
+      addNote(pt.x + offset, pt.y + offset);
+      bridge.toast('已添加画布便签，可拖拽标题移动、拖动右下角调整尺寸');
+    };
     containerEl.querySelector('#wf-btn-clear').onclick = () => {
       if (isRunning) return bridge.toast('任务运行中，无法清空', true);
-      if (!graph.nodes.length) return;
+      if (!graph.nodes.length && !(graph.notes?.length)) return;
       snapshotUndo();
-      graph = { version: 1, name: '新建工作流', nodes: [], edges: [] };
+      graph = { version: 1, name: '新建工作流', nodes: [], edges: [], notes: [] };
       selectedNodes.clear();
       selectedEdgeId = null;
       nodeStates.clear();
@@ -2159,7 +2524,8 @@
       persistCurrent();
       renderAll();
     };
-    cacheBtn.onclick = async () => {
+
+    async function clearCacheAction() {
       const res = await window.api.wfClearCache();
       if (!res.ok) return bridge.toast(res.error || '清理失败', true);
       cacheStore.clear();
@@ -2171,7 +2537,73 @@
       renderAll();
       refreshCacheInfo();
       bridge.toast('已清空工作流中间缓存');
+    }
+
+    async function openCacheMenu(clientX, clientY) {
+      closePopups();
+      const info = await window.api.wfCacheInfo().catch(() => null);
+      const menu = document.createElement('div');
+      menu.className = 'wf-ctx-menu';
+      menu.style.left = `${Math.min(clientX, window.innerWidth - 240)}px`;
+      menu.style.top = `${Math.min(clientY, window.innerHeight - 200)}px`;
+
+      const items = [
+        { label: '🗑️ 清空当前缓存', act: clearCacheAction },
+        {
+          label: '📁 设置自定义缓存目录…',
+          act: async () => {
+            if (!window.api?.wfSetCacheDir) {
+              return bridge.toast('当前运行环境暂不支持自定义缓存目录', true);
+            }
+            const dir = await window.api.pickDir();
+            if (!dir) return;
+            const res = await window.api.wfSetCacheDir(dir);
+            if (!res?.ok) return bridge.toast(res?.error || '设置缓存目录失败', true);
+            refreshCacheInfo();
+            bridge.toast(`已将缓存目录设为：${res.dir}`);
+          },
+        },
+        ...(info?.customDir ? [{
+          label: '↩ 恢复默认缓存目录',
+          act: async () => {
+            if (!window.api?.wfSetCacheDir) return;
+            const res = await window.api.wfSetCacheDir('');
+            if (!res?.ok) return bridge.toast(res?.error || '恢复默认目录失败', true);
+            refreshCacheInfo();
+            bridge.toast('已恢复默认工作流缓存目录');
+          },
+        }] : []),
+        ...(info?.dir ? [{
+          label: '📂 打开缓存目录',
+          act: () => window.api.openFolder(info.dir),
+        }] : []),
+      ];
+
+      for (const it of items) {
+        const btn = document.createElement('button');
+        btn.className = 'wf-ctx-item';
+        btn.textContent = it.label;
+        btn.onclick = () => { closePopups(); it.act(); };
+        menu.appendChild(btn);
+      }
+      document.body.appendChild(menu);
+      ctxMenuEl = menu;
+    }
+
+    cacheBtn.onclick = (e) => {
+      if (e.shiftKey) {
+        const rect = cacheBtn.getBoundingClientRect();
+        openCacheMenu(rect.left, rect.bottom + 6);
+        return;
+      }
+      clearCacheAction();
     };
+    cacheBtn.oncontextmenu = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openCacheMenu(e.clientX, e.clientY);
+    };
+
     runBtn.onclick = () => runWorkflow({ forceRun: false });
     forceBtn.onclick = () => runWorkflow({ forceRun: true });
     stopBtn.onclick = () => activeController?.cancel();
@@ -2208,17 +2640,34 @@
         ));
         if (!items.length) continue;
 
-        const gl = document.createElement('div');
-        gl.className = 'nav-group';
-        gl.textContent = g;
-        navEl.appendChild(gl);
+        const grpColor = reg.GROUP_META[g]?.color || '#8b8bff';
+        const collapsible = !q;
+        const collapsed = collapsible && collapsedPaletteGroups.has(g);
+        const wrap = document.createElement('div');
+        wrap.className = 'nav-group-wrap' + (collapsed ? ' collapsed' : '');
 
+        const gl = document.createElement('button');
+        gl.type = 'button';
+        gl.className = 'nav-group';
+        gl.setAttribute('aria-expanded', String(!collapsed));
+        gl.innerHTML = `<span class="nav-group-dot" style="background:${grpColor}"></span><span class="nav-group-label">${esc(g)}</span><span class="nav-group-count">${items.length}</span>${collapsible ? '<span class="nav-group-chev" aria-hidden="true">▾</span>' : ''}`;
+        if (collapsible) {
+          gl.onclick = () => {
+            if (collapsedPaletteGroups.has(g)) collapsedPaletteGroups.delete(g);
+            else collapsedPaletteGroups.add(g);
+            renderSidebarPalette(navEl, searchQuery);
+          };
+        }
+        wrap.appendChild(gl);
+
+        const listBox = document.createElement('div');
+        listBox.className = 'nav-group-items';
         for (const def of items) {
           const btn = document.createElement('button');
           btn.className = 'nav-item wf-node-tpl';
           btn.draggable = true;
           btn.title = def.desc;
-          btn.innerHTML = `<span class="nav-icon" style="--grp:${reg.GROUP_META[def.group]?.color || '#8b8bff'}">${def.icon}</span><span class="nav-name">${esc(def.name)}</span><span class="nav-add-badge">+ 添加</span>`;
+          btn.innerHTML = `<span class="nav-icon" style="--grp:${grpColor}">${def.icon}</span><span class="nav-name">${esc(def.name)}</span><span class="nav-add-badge">+ 添加</span>`;
           btn.onclick = () => {
             const r = vpEl.getBoundingClientRect();
             const pt = screenToCanvas(r.left + r.width * 0.25, r.top + r.height * 0.14);
@@ -2232,9 +2681,11 @@
             e.dataTransfer.setData('application/x-vgt-node', def.type);
             e.dataTransfer.effectAllowed = 'copy';
           };
-          navEl.appendChild(btn);
+          listBox.appendChild(btn);
           shown++;
         }
+        wrap.appendChild(listBox);
+        navEl.appendChild(wrap);
       }
 
       if (!shown) {
@@ -2245,23 +2696,176 @@
       }
     }
 
-    async function receiveFilesFromSingle(paths) {
-      if (!paths?.length) return;
-      const r = vpEl.getBoundingClientRect();
-      const pt = r.width
-        ? screenToCanvas(r.left + 80, r.top + 80)
-        : { x: 80, y: 120 };
-      const offset = (graph.nodes.length % 5) * 32;
-      if (paths.length === 1) {
-        const n = addNode('io.loadFile', pt.x + offset, pt.y + offset);
-        if (n) await assignSingleFileToNode(n, paths[0]);
-        ensureNodeVisible(n);
-      } else {
-        const n = addNode('io.loadBatch', pt.x + offset, pt.y + offset);
-        if (n) await assignBatchFilesToNode(n, paths, false);
-        ensureNodeVisible(n);
+    async function pasteFiles(paths, clientPos = null) {
+      const cleanPaths = (Array.isArray(paths) ? paths : []).filter(Boolean);
+      if (!cleanPaths.length) return null;
+      if (isRunning) {
+        bridge.toast('任务运行中，暂不可添加文件节点', true);
+        return null;
       }
-      bridge.toast(`已将 ${paths.length} 个文件载入画布节点`);
+      const r = vpEl.getBoundingClientRect();
+      let pt;
+      if (clientPos && Number.isFinite(clientPos.x) && Number.isFinite(clientPos.y)) {
+        pt = screenToCanvas(clientPos.x, clientPos.y);
+        pt.x -= DEFAULT_NODE_W / 2;
+        pt.y -= 30;
+      } else {
+        const offset = (graph.nodes.length % 5) * 32;
+        pt = r.width
+          ? screenToCanvas(r.left + 80, r.top + 80)
+          : { x: 80, y: 120 };
+        pt.x += offset;
+        pt.y += offset;
+      }
+
+      let createdNode = null;
+      if (cleanPaths.length === 1) {
+        const st = await window.api.wfStatMulti(cleanPaths).catch(() => []);
+        if (st?.[0]?.isDirectory) {
+          createdNode = addNode('io.loadFolder', pt.x, pt.y);
+          if (createdNode) await assignFolderToNode(createdNode, cleanPaths[0]);
+        } else {
+          createdNode = addNode('io.loadFile', pt.x, pt.y);
+          if (createdNode) await assignSingleFileToNode(createdNode, cleanPaths[0]);
+        }
+      } else {
+        createdNode = addNode('io.loadBatch', pt.x, pt.y);
+        if (createdNode) await assignBatchFilesToNode(createdNode, cleanPaths, false);
+      }
+      if (createdNode) ensureNodeVisible(createdNode);
+      return createdNode;
+    }
+
+    async function pasteFromClipboard(clientPos = null) {
+      if (isRunning) {
+        bridge.toast('任务运行中，暂不可粘贴', true);
+        return null;
+      }
+      if (!window.api?.readClipboardMedia) {
+        bridge.toast('当前环境不支持读取剪贴板媒体', true);
+        return null;
+      }
+      const res = await window.api.readClipboardMedia();
+      if (!res?.ok || !res.paths?.length) {
+        bridge.toast(res?.error || '剪贴板中没有可用的图片或媒体文件', true);
+        return null;
+      }
+      const created = await pasteFiles(res.paths, clientPos);
+      if (created) {
+        bridge.toast(res.source === 'image' ? '已从剪贴板图片创建加载节点' : `已粘贴 ${res.paths.length} 个文件到画布`);
+      }
+      return created;
+    }
+
+    async function receiveFilesFromSingle(paths) {
+      const node = await pasteFiles(paths);
+      if (node) bridge.toast(`已将 ${paths.length} 个文件载入画布节点`);
+      return node;
+    }
+
+    async function importSingleToolRun({ featureId, fieldValues = {}, files = [] } = {}) {
+      if (isRunning) {
+        bridge.toast('工作流正在运行，请先停止后再导入', true);
+        return null;
+      }
+      const nodeType = `feat.${featureId}`;
+      const def = reg.getDef(nodeType);
+      if (!def) {
+        bridge.toast(`未找到对应的工作流节点：${featureId}`, true);
+        return null;
+      }
+
+      const cleanFiles = (Array.isArray(files) ? files : []).filter(Boolean);
+      const baseX = 80;
+      const baseY = graph.nodes.length ? Math.round(getGraphBounds().maxY + 70) : 140;
+
+      const presetParams = { ...def.defaultParams() };
+      if (fieldValues && typeof fieldValues === 'object') {
+        for (const f of def.fields || []) {
+          if (f.key && fieldValues[f.key] !== undefined) {
+            presetParams[f.key] = fieldValues[f.key];
+          }
+        }
+        if (fieldValues.tStart !== undefined) presetParams.tStart = parseFloat(fieldValues.tStart) || 0;
+        if (fieldValues.tEnd !== undefined) presetParams.tEnd = parseFloat(fieldValues.tEnd) || 0;
+        if (fieldValues.crop && typeof fieldValues.crop === 'object') presetParams.crop = { ...fieldValues.crop };
+        if (Array.isArray(fieldValues.segments)) presetParams.segments = fieldValues.segments.map((s) => ({ ...s }));
+      }
+
+      snapshotUndo();
+      const loadType = cleanFiles.length > 1 ? 'io.loadBatch' : 'io.loadFile';
+      const loadDef = reg.getDef(loadType);
+      const loadNode = {
+        id: allocNodeId(),
+        type: loadType,
+        x: baseX,
+        y: baseY,
+        collapsed: false,
+        bypass: false,
+        params: {
+          ...(loadDef ? loadDef.defaultParams() : {}),
+          ...(loadType === 'io.loadBatch'
+            ? { filePaths: cleanFiles.slice() }
+            : { filePath: cleanFiles[0] || '' }),
+        },
+      };
+      const featNode = {
+        id: allocNodeId(),
+        type: nodeType,
+        x: baseX + 390,
+        y: baseY,
+        collapsed: false,
+        bypass: false,
+        params: presetParams,
+      };
+      const saveDef = reg.getDef('io.save');
+      const saveNode = {
+        id: allocNodeId(),
+        type: 'io.save',
+        x: baseX + 780,
+        y: baseY,
+        collapsed: false,
+        bypass: false,
+        params: saveDef ? saveDef.defaultParams() : {},
+      };
+
+      graph.nodes.push(loadNode, featNode, saveNode);
+
+      const primaryInId = def.inputs?.[0]?.id || 'input';
+      const checkIn = reg.canConnect(graph, loadNode.id, 'media', featNode.id, primaryInId);
+      if (checkIn.ok) {
+        graph.edges.push({
+          id: allocEdgeId(),
+          fromNode: loadNode.id,
+          fromPort: 'media',
+          toNode: featNode.id,
+          toPort: primaryInId,
+        });
+      }
+      const primaryOutId = def.outputs?.[0]?.id || 'out';
+      const checkOut = reg.canConnect(graph, featNode.id, primaryOutId, saveNode.id, 'media');
+      if (checkOut.ok) {
+        graph.edges.push({
+          id: allocEdgeId(),
+          fromNode: featNode.id,
+          fromPort: primaryOutId,
+          toNode: saveNode.id,
+          toPort: 'media',
+        });
+      }
+
+      selectedNodes = new Set([loadNode.id, featNode.id, saveNode.id]);
+      selectedEdgeId = null;
+      userAdjustedView = false;
+      persistCurrent();
+      renderAll();
+      fitView();
+      requestAnimationFrame(() => {
+        fitView();
+        renderWires();
+      });
+      bridge.toast(`已将「${def.name}」及参数导入工作流画布`);
+      return { loadNode, featNode, saveNode };
     }
 
     function handleKeyDown(e) {
@@ -2346,7 +2950,7 @@
         const resized = Math.abs(r.width - prevW) > 4 || Math.abs(r.height - prevH) > 4;
         prevW = r.width;
         prevH = r.height;
-        if ((becameVisible || (resized && !userAdjustedView)) && graph.nodes.length) {
+        if ((becameVisible || (resized && !userAdjustedView)) && (graph.nodes.length || graph.notes?.length)) {
           fitView();
           renderWires();
         }
@@ -2358,9 +2962,9 @@
     bindViewportEvents();
     const saved = storageApi.loadCurrent();
     if (saved && Array.isArray(saved.nodes)) {
-      graph = tplMod.normalizeGraphData(saved, reg);
+      graph = normalizeGraphWithNotes(saved);
     } else {
-      graph = tplMod.normalizeGraphData(tplMod.WORKFLOW_TEMPLATES[0].graph, reg);
+      graph = normalizeGraphWithNotes(tplMod.WORKFLOW_TEMPLATES[0].graph);
       persistCurrent();
     }
     renderAll();
@@ -2369,6 +2973,8 @@
     return {
       renderSidebarPalette,
       receiveFilesFromSingle,
+      pasteFiles,
+      importSingleToolRun,
       handleKeyDown,
       onActivated() {
         refreshCacheInfo();

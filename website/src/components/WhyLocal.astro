@@ -1,26 +1,31 @@
 ---
 import { data } from '../lib/site';
+import { iconSvg } from '../lib/icons';
 
 const s = data.stats;
 
 const painPoints = [
   {
-    icon: '💬',
+    icon: 'message',
+    color: '#3dd68c',
     title: '微信 / 公众号限流卡壳',
     desc: '表情包限 1 MB、公众号动图与 Discord 限大小？自动迭代压到指定体积，省去手动反复试错。',
   },
   {
-    icon: '📊',
+    icon: 'files',
+    color: '#60a5fa',
     title: '几百 MB 的 PPT 发不出',
     desc: '不用一页页另存压缩。自动扫描 .docx / .pptx 内嵌图片原位瘦身与 SHA-256 去重，排版纹丝不动。',
   },
   {
-    icon: '🎨',
+    icon: 'palette',
+    color: '#2dd4bf',
     title: '白底 Logo 一键抠图转矢量',
     desc: '吸管取色一键抠透明底、换渐变背景，还能描摹成可无限放大的 SVG 并同步导出 ICO 图标。',
   },
   {
-    icon: '🗂️',
+    icon: 'grid',
+    color: '#8b84ff',
     title: '杂乱素材文件夹批量归整',
     desc: '位图、SVG、视频混在一个目录？文件夹自动递归扫描，按格式分流压缩并自动汇总导出。',
   },
@@ -62,9 +67,11 @@ const rows = [
 
 <section class="section why-section" id="why-local">
   <div class="container">
-    <div class="section-head reveal">
-      <div class="eyebrow">真实场景对比</div>
-      <h2 class="h2">告别上传等待，<span class="grad-text">本机算力一次搞定</span></h2>
+    <div class="section-head-split reveal">
+      <div class="sh-left">
+        <div class="eyebrow">真实场景对比</div>
+        <h2 class="h2">告别上传等待，<span class="grad-text">本机算力一次搞定</span></h2>
+      </div>
       <p class="lead">无论是临时应付公众号发图，还是长期批量整理设计素材与文档，本地桌面工具箱都比网页端和重型软件更顺手。</p>
     </div>
 
@@ -72,7 +79,7 @@ const rows = [
       {painPoints.map((p) => (
         <article class="card pain-card reveal">
           <div class="pain-head">
-            <span class="pain-ico" aria-hidden="true">{p.icon}</span>
+            <span class="pain-ico" style={`--ic:${p.color}`} aria-hidden="true" set:html={iconSvg(p.icon, 17)} />
             <h3>{p.title}</h3>
           </div>
           <p>{p.desc}</p>
@@ -100,9 +107,9 @@ const rows = [
             {rows.map((r) => (
               <tr>
                 <th scope="row" class="cell-dim">{r.dim}</th>
-                <td class="cell-ours"><div class="cell-in"><span class="ok-ico" aria-hidden="true">✓</span><span>{r.ours}</span></div></td>
-                <td class="cell-other"><div class="cell-in"><span class="no-ico" aria-hidden="true">✕</span><span>{r.web}</span></div></td>
-                <td class="cell-other"><div class="cell-in"><span class="mid-ico" aria-hidden="true">•</span><span>{r.heavy}</span></div></td>
+                <td class="cell-ours"><div class="cell-in"><span class="ok-ico" aria-hidden="true" set:html={iconSvg('check', 15)} /><span>{r.ours}</span></div></td>
+                <td class="cell-other"><div class="cell-in"><span class="no-ico" aria-hidden="true" set:html={iconSvg('xCircle', 14)} /><span>{r.web}</span></div></td>
+                <td class="cell-other"><div class="cell-in"><span class="mid-ico" aria-hidden="true"><svg class="ui-ico" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/></svg></span><span>{r.heavy}</span></div></td>
               </tr>
             ))}
           </tbody>
@@ -133,8 +140,12 @@ const rows = [
   .pain-head { display: flex; align-items: center; gap: 10px; }
   .pain-ico {
     width: 36px; height: 36px; border-radius: 10px;
-    display: grid; place-items: center; font-size: 18px; flex-shrink: 0;
-    background: rgba(255, 255, 255, .05); border: 1px solid var(--border-2);
+    display: grid; place-items: center; flex-shrink: 0;
+    color: var(--ic, var(--accent-hi));
+    background: rgba(255, 255, 255, .045);
+    background: linear-gradient(180deg, color-mix(in srgb, var(--ic, #8b84ff) 15%, transparent), color-mix(in srgb, var(--ic, #8b84ff) 5%, transparent));
+    border: 1px solid color-mix(in srgb, var(--ic, #8b84ff) 28%, rgba(255, 255, 255, .08));
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .08);
   }
   .pain-card h3 { font-size: 15.5px; font-weight: 650; line-height: 1.35; }
   .pain-card p { font-size: 13.5px; color: var(--text-2); line-height: 1.6; }
@@ -192,7 +203,7 @@ const rows = [
   .cell-other { color: var(--text-2); }
   .cell-ours, .cell-other { line-height: 1.55; }
   .cell-in { display: flex; align-items: flex-start; gap: 7px; }
-  .ok-ico, .no-ico, .mid-ico { flex-shrink: 0; width: 15px; font-weight: 700; text-align: center; }
+  .ok-ico, .no-ico, .mid-ico { flex-shrink: 0; width: 16px; display: inline-flex; align-items: center; justify-content: center; margin-top: 3px; }
   .ok-ico { color: var(--success); }
   .no-ico { color: #f47067; opacity: .85; }
   .mid-ico { color: var(--text-3); }

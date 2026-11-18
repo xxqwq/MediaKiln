@@ -313,5 +313,53 @@ window.VGT.IMAGE_FEATURES = [
       };
     },
   },
+  {
+    id: 'imageCanvas', group: '图片', icon: '🛍️', name: '电商主图 / 标准画布', desc: '一键套用淘宝/小红书/头像标准尺寸画布，支持留白、满铺裁切或背景虚化填充',
+    accept: imgExts(),
+    fields: [
+      { key: 'preset', label: '画布尺寸', type: 'select', def: '800x800',
+        options: [
+          ['800x800', '800×800（电商白底主图，推荐）'],
+          ['1000x1000', '1000×1000（高清方图）'],
+          ['1080x1440', '1080×1440（小红书 3:4 竖图）'],
+          ['1200x1600', '1200×1600（高清 3:4 海报）'],
+          ['1080x1080', '1080×1080（Ins/海报方图）'],
+          ['512x512', '512×512（头像/图标）'],
+          ['custom', '自定义宽高…'],
+        ] },
+      { key: 'customW', label: '自定义宽度 (px)', type: 'number', def: '1080', min: 64, max: 4096, step: 2,
+        showIf: (v) => v.preset === 'custom' },
+      { key: 'customH', label: '自定义高度 (px)', type: 'number', def: '1080', min: 64, max: 4096, step: 2,
+        showIf: (v) => v.preset === 'custom' },
+      { key: 'fit', label: '构图适配方式', type: 'chips', def: 'contain',
+        options: [
+          ['contain', '完整居中留白（推荐）'],
+          ['cover', '居中铺满裁切'],
+          ['blur', '同图模糊延伸填充'],
+        ] },
+      { key: 'marginPct', label: '四周留白安全边距', type: 'chips', def: '5',
+        options: [['0', '0%（贴边）'], ['5', '5%（微留白）'], ['10', '10%（电商留白）'], ['15', '15%（宽留白）']],
+        showIf: (v) => v.fit !== 'cover' },
+      { key: 'format', label: '输出格式', type: 'chips', def: 'jpg',
+        options: [['jpg', 'JPG（电商通用）'], ['png', 'PNG（可透明底）'], ['webp', 'WebP（高清轻量）']] },
+      { key: 'bgMode', label: '背景颜色', type: 'chips', def: 'white',
+        options: [['white', '纯白底'], ['black', '纯黑底'], ['transparent', '透明（PNG/WebP）'], ['custom', '自定义…']],
+        showIf: (v) => v.fit === 'contain' },
+      { key: 'bgCustom', label: '自定义背景色', type: 'color', def: '#ffffff',
+        showIf: (v) => v.fit === 'contain' && v.bgMode === 'custom' },
+    ],
+    collect(v, ctx) {
+      return {
+        input: ctx.file.path,
+        preset: v.preset || '800x800',
+        customW: v.customW,
+        customH: v.customH,
+        fit: v.fit || 'contain',
+        marginPct: v.marginPct ?? '5',
+        format: v.format || 'jpg',
+        bgColor: resolveBgColor(v, '#ffffff'),
+      };
+    },
+  },
 ];
 })();

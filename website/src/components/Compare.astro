@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { data, url, hasAsset, readPublicJson, fmtBytes } from '../lib/site';
+import { iconSvg } from '../lib/icons';
 
 interface Item { id: string; title: string; before: string; after: string; beforeBytes?: number; afterBytes?: number; feature?: string; note?: string }
 
@@ -82,7 +83,7 @@ const pct = (a?: number, b?: number) => (a && b ? Math.round((1 - b / a) * 100) 
               {deferred && <div class="cmp-loading" aria-hidden="true"><span>素材加载中…</span></div>}
               <span class="cmp-label l">处理前 · {extLabel(it.before)}</span>
               <span class="cmp-label r">处理后 · {extLabel(it.after)}</span>
-              <div class="cmp-handle" aria-hidden="true"><span>⟷</span></div>
+              <div class="cmp-handle" aria-hidden="true"><span set:html={iconSvg('arrowsLR', 18)} /></div>
               <input class="cmp-range" type="range" min="0" max="100" value="50" aria-label={`${it.title} 对比滑块`} />
             </div>
 
@@ -92,7 +93,7 @@ const pct = (a?: number, b?: number) => (a && b ? Math.round((1 - b / a) * 100) 
                 <button type="button" class="cmp-ctl-btn" data-pos="50">50 : 50</button>
                 <button type="button" class="cmp-ctl-btn" data-pos="100">只看成品</button>
               </div>
-              <button type="button" class="cmp-ctl-btn cmp-zoom-btn" aria-pressed="false" data-zoom-toggle>🔍 2× 细节放大</button>
+              <button type="button" class="cmp-ctl-btn cmp-zoom-btn" aria-pressed="false" data-zoom-toggle><Fragment set:html={iconSvg('zoomIn', 13)} /><span>2× 细节放大</span></button>
             </div>
 
             <div class="cmp-meta">
@@ -196,6 +197,7 @@ const pct = (a?: number, b?: number) => (a && b ? Math.round((1 - b / a) * 100) 
   }
   .cmp-presets { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .cmp-ctl-btn {
+    display: inline-flex; align-items: center; gap: 5px;
     height: 30px; padding: 0 12px; border-radius: 999px;
     font-size: 12.5px; color: var(--text-2);
     background: rgba(255, 255, 255, .04); border: 1px solid var(--border-2);

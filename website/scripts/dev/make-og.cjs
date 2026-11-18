@@ -15,7 +15,7 @@ app.setPath('userData', path.join(os.tmpdir(), 'vgt-make-og'));
 
 const html = `<!doctype html><html><head><meta charset="utf-8"><style>
   *{margin:0;padding:0;box-sizing:border-box}
-  body{width:1200px;height:630px;overflow:hidden;background:#0b0c10;color:#ececef;
+  body{width:1200px;height:630px;overflow:hidden;background:#090a0e;color:#ececef;
     font-family:"Segoe UI Variable Display","Segoe UI","Microsoft YaHei UI","Microsoft YaHei",sans-serif;position:relative}
   .glow{position:absolute;width:900px;height:600px;left:-200px;top:-300px;border-radius:50%;
     background:radial-gradient(closest-side,rgba(124,116,255,.55),transparent);filter:blur(40px)}

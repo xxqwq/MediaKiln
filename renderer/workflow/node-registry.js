@@ -12,13 +12,14 @@
   const IMG_EXTS = ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'avif'];
   const RASTER_OUT_EXTS = ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'avif', 'ico'];
   const SVG_EXTS = ['svg'];
-  const AUDIO_EXTS = ['mp3', 'm4a', 'wav', 'flac', 'aac', 'ogg'];
+  const AUDIO_EXTS = ['mp3', 'm4a', 'wav', 'flac', 'aac', 'ogg', 'opus'];
   const SUB_EXTS = ['srt', 'ass', 'ssa', 'vtt'];
-  const DOC_EXTS = ['docx', 'pptx', 'md', 'markdown'];
+  const HTML_EXTS = ['html', 'htm'];
+  const DOC_EXTS = ['docx', 'pptx', 'md', 'markdown', ...HTML_EXTS];
   const OOXML_EXTS = ['docx', 'pptx'];
   const PDF_EXTS = ['pdf'];
   const ALL_SUPPORTED_EXTS = Array.from(new Set([
-    ...VIDEO_EXTS, 'gif', ...RASTER_OUT_EXTS, ...SVG_EXTS, ...AUDIO_EXTS, ...SUB_EXTS, ...DOC_EXTS, ...PDF_EXTS,
+    ...VIDEO_EXTS, 'gif', 'apng', ...RASTER_OUT_EXTS, ...SVG_EXTS, ...AUDIO_EXTS, ...SUB_EXTS, ...DOC_EXTS, ...PDF_EXTS,
   ]));
 
   const PORT_TYPES = {
@@ -30,8 +31,8 @@
     subtitle: { id: 'subtitle', label: '字幕',     color: '#a78bfa', exts: SUB_EXTS },
     doc:      { id: 'doc',      label: '文档',     color: '#60a5fa', exts: DOC_EXTS },
     pdf:      { id: 'pdf',      label: 'PDF',      color: '#f87171', exts: PDF_EXTS },
-    anim:     { id: 'anim',     label: '视频/GIF', color: '#e879f9', exts: [...VIDEO_EXTS, 'gif'] },
-    visual:   { id: 'visual',   label: '视觉媒体', color: '#38bdf8', exts: [...VIDEO_EXTS, 'gif', ...IMG_EXTS] },
+    anim:     { id: 'anim',     label: '视频/动图', color: '#e879f9', exts: [...VIDEO_EXTS, 'gif', 'apng'] },
+    visual:   { id: 'visual',   label: '视觉媒体', color: '#38bdf8', exts: [...VIDEO_EXTS, 'gif', 'apng', ...IMG_EXTS] },
     any:      { id: 'any',      label: '任意媒体', color: '#94a3b8', exts: ['*'] },
   };
 
@@ -72,8 +73,8 @@
     if (norm.every((e) => DOC_EXTS.includes(e))) return 'doc';
     if (norm.every((e) => RASTER_OUT_EXTS.includes(e))) return 'image';
     if (norm.every((e) => VIDEO_EXTS.includes(e))) return 'video';
-    if (norm.every((e) => VIDEO_EXTS.includes(e) || e === 'gif')) return 'anim';
-    if (norm.every((e) => VIDEO_EXTS.includes(e) || e === 'gif' || RASTER_OUT_EXTS.includes(e))) return 'visual';
+    if (norm.every((e) => VIDEO_EXTS.includes(e) || e === 'gif' || e === 'apng')) return 'anim';
+    if (norm.every((e) => VIDEO_EXTS.includes(e) || e === 'gif' || e === 'apng' || RASTER_OUT_EXTS.includes(e))) return 'visual';
     return 'any';
   }
 
@@ -146,6 +147,15 @@
         multiConnect: false,
         required: false,
       });
+    } else if (id === 'videoCover') {
+      inputs.push({
+        id: 'coverImage',
+        label: '封面图(可选)',
+        typeId: 'image',
+        accept: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'avif'],
+        multiConnect: false,
+        required: false,
+      });
     } else if (id === 'docRepackImages') {
       inputs.push({
         id: 'replaceSource',
@@ -179,6 +189,8 @@
       case 'gifText':
       case 'chromaGif':
         return { exts: ['gif'], isList: false };
+      case 'animSprite':
+        return { exts: ['apng', 'gif', 'png'], isList: false };
       case 'gifToVideo':
         return { exts: ['mp4', 'webm'], isList: false };
       case 'toWebp':
@@ -203,6 +215,8 @@
         return { exts: ['png', 'jpg', 'webp'], isList: false };
       case 'imageFrame':
         return { exts: ['png', 'webp', 'jpg'], isList: false };
+      case 'imageCanvas':
+        return { exts: ['jpg', 'png', 'webp'], isList: false };
       case 'svgToRaster':
         return { exts: ['png', 'webp', 'jpg', 'ico', 'avif', 'bmp'], isList: false };
       case 'svgOptimize':
@@ -215,10 +229,17 @@
         return { exts: ['docx', 'pptx'], isList: false };
       case 'mdOrganizeImages':
         return { exts: ['md', 'markdown'], isList: false };
+      case 'docToPdf':
       case 'imagesToPdf':
+      case 'pdfMerge':
+      case 'pdfSplit':
         return { exts: ['pdf'], isList: false };
+      case 'pdfToImages':
+        return { exts: ['png', 'jpg', 'webp'], isList: true };
       case 'docExtractImages':
         return { exts: [...IMG_EXTS, 'gif', 'svg', ...VIDEO_EXTS, ...AUDIO_EXTS], isList: true };
+      case 'removeSilence':
+        return { exts: [...VIDEO_EXTS, ...AUDIO_EXTS], isList: false };
       case 'trimVideo':
       case 'multiCut':
       case 'mergeVideos':
@@ -232,6 +253,8 @@
       case 'pipSplit':
       case 'addMusic':
         return { exts: ['mp4'], isList: false };
+      case 'videoCover':
+        return { exts: ['mp4', 'm4v'], isList: false };
       case 'videoCrop':
       case 'videoBlur':
       case 'aspectPad':
@@ -246,7 +269,11 @@
       case 'changeSpeed':
         return { exts: [...VIDEO_EXTS, 'gif'], isList: false };
       case 'extractAudio':
-        return { exts: ['mp3', 'm4a', 'wav'], isList: false };
+      case 'audioConvert':
+      case 'audioMerge':
+        return { exts: ['mp3', 'm4a', 'wav', 'flac', 'ogg', 'opus'], isList: false };
+      case 'audioTrim':
+        return { exts: AUDIO_EXTS, isList: false };
       case 'snapshot':
         return { exts: ['png', 'jpg'], isList: false };
       case 'contactSheet':
@@ -286,6 +313,7 @@
         svg: SVG_EXTS,
         audio: AUDIO_EXTS,
         doc: DOC_EXTS,
+        pdf: PDF_EXTS,
       };
       const exts = filterMap[p.filterKind || 'all'] || ['*'];
       return { exts, typeId: inferPortTypeId(exts), isList: true };
@@ -293,12 +321,13 @@
     if (node.type === 'io.loadFolder') {
       const filterMap = {
         all: ALL_SUPPORTED_EXTS,
-        videoAnim: [...VIDEO_EXTS, 'gif'],
+        videoAnim: [...VIDEO_EXTS, 'gif', 'apng'],
         image: RASTER_OUT_EXTS,
         gif: ['gif'],
         svg: SVG_EXTS,
         audio: AUDIO_EXTS,
         doc: DOC_EXTS,
+        pdf: PDF_EXTS,
       };
       const exts = filterMap[p.filterKind || 'all'] || ALL_SUPPORTED_EXTS;
       return { exts, typeId: inferPortTypeId(exts), isList: true };
@@ -310,15 +339,16 @@
       if (mode === 'rasterOnly') exts = IMG_EXTS;
       else if (mode === 'svgOnly') exts = SVG_EXTS;
       else if (mode === 'videoOnly') exts = VIDEO_EXTS;
+      else if (mode === 'pdfOnly') exts = PDF_EXTS;
       return { exts, typeId: inferPortTypeId(exts), isList: !isSingle };
     }
     if (node.type === 'io.routeType') {
       const gifToImg = p.gifBucket === 'images';
       const imgExts = gifToImg ? [...RASTER_OUT_EXTS, 'gif'] : RASTER_OUT_EXTS;
-      const animExts = gifToImg ? VIDEO_EXTS : [...VIDEO_EXTS, 'gif'];
+      const animExts = gifToImg ? [...VIDEO_EXTS, 'apng'] : [...VIDEO_EXTS, 'gif', 'apng'];
       if (portId === 'images') return { exts: imgExts, typeId: 'image', isList: true };
       if (portId === 'svgs') return { exts: SVG_EXTS, typeId: 'svg', isList: true };
-      if (portId === 'anims') return { exts: animExts, typeId: gifToImg ? 'video' : 'anim', isList: true };
+      if (portId === 'anims') return { exts: animExts, typeId: 'anim', isList: true };
       if (portId === 'others') return { exts: [...AUDIO_EXTS, ...SUB_EXTS, ...DOC_EXTS, ...PDF_EXTS], typeId: 'any', isList: true };
       return null;
     }
@@ -359,6 +389,14 @@
       case 'gifText':
       case 'chromaGif':
         return { exts: ['gif'], typeId: 'gif', isList: upstreamIsList };
+      case 'animSprite': {
+        const mode = p.mode || 'toApng';
+        if (mode === 'toApng') return { exts: ['apng'], typeId: 'anim', isList: upstreamIsList };
+        if (mode === 'apngToGif') return { exts: ['gif'], typeId: 'gif', isList: upstreamIsList };
+        if (mode === 'toSprite') return { exts: ['png'], typeId: 'image', isList: upstreamIsList };
+        const outFmt = p.outFormat === 'apng' ? 'apng' : 'gif';
+        return { exts: [outFmt], typeId: outFmt === 'apng' ? 'anim' : 'gif', isList: upstreamIsList };
+      }
       case 'gifToVideo': {
         const fmt = p.format === 'webm' ? 'webm' : 'mp4';
         return { exts: [fmt], typeId: 'video', isList: upstreamIsList };
@@ -401,6 +439,10 @@
         const fmt = p.format || 'png';
         return { exts: [fmt], typeId: 'image', isList: upstreamIsList };
       }
+      case 'imageCanvas': {
+        const fmt = p.format || 'jpg';
+        return { exts: [fmt], typeId: 'image', isList: upstreamIsList };
+      }
       case 'svgToRaster': {
         const fmt = p.format || 'png';
         return { exts: [fmt], typeId: 'image', isList: upstreamIsList };
@@ -415,12 +457,23 @@
         return passthroughFromUpstream(OOXML_EXTS);
       case 'mdOrganizeImages':
         return passthroughFromUpstream(['md', 'markdown']);
+      case 'docToPdf':
+        return { exts: ['pdf'], typeId: 'pdf', isList: upstreamIsList };
       case 'imagesToPdf':
+      case 'pdfMerge':
         return { exts: ['pdf'], typeId: 'pdf', isList: false };
+      case 'pdfToImages': {
+        const fmt = p.format || 'png';
+        return { exts: [fmt], typeId: 'image', isList: (p.mode || 'pages') === 'pages' ? true : upstreamIsList };
+      }
+      case 'pdfSplit':
+        return { exts: ['pdf'], typeId: 'pdf', isList: p.mode === 'burst' ? true : upstreamIsList };
       case 'docExtractImages': {
         const exts = p.includeSvg === 'no' ? [...IMG_EXTS, 'gif'] : [...IMG_EXTS, 'gif', 'svg'];
         return { exts, typeId: inferPortTypeId(exts), isList: true };
       }
+      case 'removeSilence':
+        return passthroughFromUpstream([...VIDEO_EXTS, ...AUDIO_EXTS]);
       case 'trimVideo':
       case 'multiCut':
       case 'videoText':
@@ -433,6 +486,8 @@
       case 'pipSplit':
       case 'addMusic':
         return { exts: ['mp4'], typeId: 'video', isList: upstreamIsList };
+      case 'videoCover':
+        return passthroughFromUpstream(['mp4', 'm4v']);
       case 'subtitleTool':
         if (p.mode === 'extract') return { exts: ['srt'], typeId: 'subtitle', isList: upstreamIsList };
         return passthroughFromUpstream(VIDEO_EXTS);
@@ -449,9 +504,16 @@
       case 'reverse':
       case 'changeSpeed':
         return passthroughFromUpstream([...VIDEO_EXTS, 'gif']);
-      case 'extractAudio': {
+      case 'extractAudio':
+      case 'audioConvert': {
         const fmt = p.format || 'mp3';
         return { exts: [fmt], typeId: 'audio', isList: upstreamIsList };
+      }
+      case 'audioTrim':
+        return passthroughFromUpstream(AUDIO_EXTS);
+      case 'audioMerge': {
+        const fmt = p.format || 'mp3';
+        return { exts: [fmt], typeId: 'audio', isList: false };
       }
       case 'snapshot': {
         if ((p.mode || 'single') === 'single') {
@@ -499,6 +561,24 @@
     if (feature.id === 'videoText' && !defaults.text) defaults.text = '精彩片段标题';
     if (feature.id === 'watermark' && !defaults.text) defaults.text = 'Watermark';
     if (feature.id === 'colorStab') defaults.contrast = '1.1';
+    if (feature.id === 'convertVideo' && !defaults.vcodec) defaults.vcodec = 'h264';
+    if (feature.id === 'compressTarget' && !defaults.vcodec) defaults.vcodec = 'h264';
+    if (feature.id === 'removeSilence') {
+      if (defaults.threshold === undefined) defaults.threshold = '-35';
+      if (defaults.minSilence === undefined) defaults.minSilence = '0.4';
+      if (defaults.padding === undefined) defaults.padding = '0.12';
+    }
+    if (feature.id === 'pdfToImages') {
+      if (defaults.mode === undefined) defaults.mode = 'pages';
+      if (defaults.format === undefined) defaults.format = 'png';
+      if (defaults.dpiScale === undefined) defaults.dpiScale = '2';
+      if (defaults.pageRange === undefined) defaults.pageRange = '';
+    }
+    if (feature.id === 'pdfSplit') {
+      if (defaults.mode === undefined) defaults.mode = 'extract';
+      if (defaults.pageRange === undefined) defaults.pageRange = '1';
+      if (defaults.everyN === undefined) defaults.everyN = '1';
+    }
     return defaults;
   }
 
@@ -527,6 +607,25 @@
       } else {
         fields.push({ ...f });
       }
+    }
+    if (feature.id === 'convertVideo' && !fields.some((f) => f.key === 'vcodec')) {
+      fields.push({
+        key: 'vcodec',
+        label: '视频编码',
+        type: 'chips',
+        def: 'h264',
+        options: [['h264', 'H.264'], ['hevc', 'HEVC'], ['av1', 'AV1']],
+        showIf: (v) => v.mode !== 'copy',
+      });
+    }
+    if (feature.id === 'compressTarget' && !fields.some((f) => f.key === 'vcodec')) {
+      fields.push({
+        key: 'vcodec',
+        label: '视频编码',
+        type: 'chips',
+        def: 'h264',
+        options: [['h264', 'H.264'], ['hevc', 'HEVC']],
+      });
     }
     return fields;
   }
@@ -569,6 +668,7 @@
             ['svg', '仅 SVG'],
             ['audio', '仅音频'],
             ['doc', '仅文档'],
+            ['pdf', 'PDF 文档'],
           ],
         },
         { key: 'filePaths', type: 'wfBatchPicker', label: '文件列表' },
@@ -609,6 +709,7 @@
             ['svg', '仅 SVG'],
             ['audio', '仅音频'],
             ['doc', '仅文档'],
+            ['pdf', 'PDF 文档'],
           ],
         },
       ],
@@ -636,6 +737,7 @@
             ['rasterOnly', '仅保留位图列表'],
             ['svgOnly', '仅保留 SVG 列表'],
             ['videoOnly', '仅保留视频列表'],
+            ['pdfOnly', '仅 PDF 文档'],
           ],
         },
         {
@@ -662,7 +764,7 @@
       outputs: [
         { id: 'images', label: '位图图片', typeId: 'image', exts: RASTER_OUT_EXTS, isList: true },
         { id: 'svgs', label: 'SVG 矢量', typeId: 'svg', exts: SVG_EXTS, isList: true },
-        { id: 'anims', label: '视频 / GIF', typeId: 'anim', exts: [...VIDEO_EXTS, 'gif'], isList: true },
+        { id: 'anims', label: '视频 / 动图', typeId: 'anim', exts: [...VIDEO_EXTS, 'gif', 'apng'], isList: true },
         { id: 'others', label: '音频 / 文档等', typeId: 'any', exts: [...AUDIO_EXTS, ...SUB_EXTS, ...DOC_EXTS, ...PDF_EXTS], isList: true },
       ],
       fields: [
@@ -748,8 +850,8 @@
       name: '前后对比',
       desc: '接入处理前后两个视觉节点，支持体积对比与一键启动卷帘/并排放大对比弹窗',
       inputs: [
-        { id: 'before', label: '处理前', typeId: 'visual', accept: [...VIDEO_EXTS, 'gif', ...RASTER_OUT_EXTS, 'svg'], multiConnect: false, required: true },
-        { id: 'after', label: '处理后', typeId: 'visual', accept: [...VIDEO_EXTS, 'gif', ...RASTER_OUT_EXTS, 'svg'], multiConnect: false, required: true },
+        { id: 'before', label: '处理前', typeId: 'visual', accept: [...VIDEO_EXTS, 'gif', 'apng', ...RASTER_OUT_EXTS, 'svg'], multiConnect: false, required: true },
+        { id: 'after', label: '处理后', typeId: 'visual', accept: [...VIDEO_EXTS, 'gif', 'apng', ...RASTER_OUT_EXTS, 'svg'], multiConnect: false, required: true },
       ],
       outputs: [],
       fields: [],
@@ -823,6 +925,7 @@
 
   function createRegistry(featuresList) {
     const list = Array.isArray(featuresList) ? featuresList : [];
+    const featuresById = new Map(list.map((feature) => [feature.id, feature]));
     const defs = new Map();
     const orderedDefs = [];
 
@@ -1029,6 +1132,7 @@
             format: v.format || 'mp4',
             height: v.height || '0',
             quality: v.quality || 'medium',
+            vcodec: v.vcodec || 'h264',
             totalDuration: dur,
           };
         case 'compressGif': {
@@ -1100,6 +1204,7 @@
           return {
             input: inputPath,
             targetMB: v.targetMB || '5',
+            vcodec: v.vcodec || 'h264',
             width: info.width,
             fps: info.fps,
             hasAudio: info.hasAudio,
@@ -1293,6 +1398,7 @@
             music,
             mode: v.mode || 'replace',
             musicVolume: v.musicVolume || '1',
+            ducking: v.ducking || 'no',
             hasAudio: info.hasAudio,
             totalDuration: dur,
           };
@@ -1306,6 +1412,9 @@
             text: v.text,
             image: wmImg,
             pos: v.pos || 'br',
+            wmColor: v.wmColor,
+            tileAngle: v.tileAngle,
+            tileDensity: v.tileDensity,
             size: v.size || 'medium',
             opacity: v.opacity || '0.7',
             srcW: info.width,
@@ -1570,6 +1679,46 @@
             quality: v.quality || 'high',
             bgColor: v.bgColor || '#ffffff',
           };
+        case 'removeSilence':
+          return {
+            input: inputPath,
+            threshold: v.threshold ?? '-35',
+            minSilence: v.minSilence ?? '0.4',
+            padding: v.padding ?? '0.12',
+            totalDuration: dur,
+          };
+        case 'pdfToImages':
+          return {
+            input: inputPath,
+            mode: v.mode || 'pages',
+            format: v.format || 'png',
+            dpiScale: v.dpiScale ?? '2',
+            pageRange: v.pageRange || '',
+          };
+        case 'pdfMerge':
+          return {
+            files: multiItems.map((m) => m.path),
+          };
+        case 'pdfSplit':
+          return {
+            input: inputPath,
+            mode: v.mode || 'extract',
+            pageRange: v.pageRange ?? '1',
+            everyN: v.everyN ?? '1',
+          };
+        case 'animSprite':
+        case 'audioConvert':
+        case 'audioTrim':
+        case 'audioMerge':
+        case 'imageCanvas':
+        case 'videoCover':
+        case 'docToPdf':
+          return featuresById.get(fid).collect(v, {
+            file: { path: inputPath, info: { ...info, duration: dur } },
+            files: multiItems,
+            times: fid === 'audioTrim' ? readNodeTimes() : undefined,
+            coverImage: fid === 'videoCover' ? secPath('coverImage') : undefined,
+          });
         default:
           throw new Error(`未实现的节点功能：${fid}`);
       }
@@ -1585,6 +1734,7 @@
       AUDIO_EXTS,
       SUB_EXTS,
       DOC_EXTS,
+      PDF_EXTS,
       ALL_SUPPORTED_EXTS,
       extOf,
       hasIntersection,

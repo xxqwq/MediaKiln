@@ -13,12 +13,13 @@ const tplMod = require('../renderer/workflow/templates');
 
 // 严禁写入 C: 盘，测试产物与工作流缓存全部在 F: 盘项目目录内
 const ROOT = path.resolve(__dirname, '..');
-const TMP = path.join(__dirname, 'smoke_wf');
-const CACHE_ROOT = path.join(ROOT, '.workflow_cache');
+const TEST_ROOT = path.join(ROOT, 'scripts', 'smoke_wf');
+fs.mkdirSync(TEST_ROOT, { recursive: true });
+const RUN_ROOT = fs.mkdtempSync(path.join(TEST_ROOT, 'run-'));
+const TMP = path.join(RUN_ROOT, 'media');
+const CACHE_ROOT = path.join(RUN_ROOT, 'cache');
 const OUT_DIR = path.join(TMP, 'exported');
 
-fs.rmSync(TMP, { recursive: true, force: true });
-fs.mkdirSync(TMP, { recursive: true });
 fs.mkdirSync(OUT_DIR, { recursive: true });
 
 // 在 Node 环境中加载 renderer/features/*.js 以收集全部 43 个子功能定义
@@ -195,15 +196,38 @@ async function step(name, fn) {
   const reg = regFactory.createRegistry(features);
   const runtime = createNodeRuntime();
 
-  await step('1. 节点注册表完整性（9 个 I/O + 52 个子功能 = 61 个节点）', () => {
+  await step('1. 节点注册表完整性（9 个 I/O + 63 个子功能 = 72 个节点）', () => {
     const all = reg.getAllDefs();
-    assert.strictEqual(features.length, 52, `FEATURES 应为 52 个，实际 ${features.length}`);
-    assert.strictEqual(all.length, 61, `总节点数应为 61 个，实际 ${all.length}`);
+    assert.strictEqual(features.length, 63);
+    assert.strictEqual(all.length, 72);
+    assert.deepStrictEqual(
+      all.filter((def) => !def.isIo).map((def) => def.type).sort(),
+      features.map((feature) => `feat.${feature.id}`).sort(),
+    );
     for (const def of all) {
       assert(def.type && def.name && def.group, `节点定义字段缺失: ${def.type}`);
       const dp = def.defaultParams();
       assert(dp && typeof dp === 'object', `defaultParams 异常: ${def.type}`);
     }
+  });
+
+  await step('新增工具节点可从画布获取执行参数', () => {
+    const build = (id, params, primary, attached, multi) => {
+      const type = `feat.${id}`;
+      return reg.buildNodeTaskParams({ type, params: { ...reg.getDef(type).defaultParams(), ...params } }, primary, attached, multi);
+    };
+    const audio = { path: 'voice.wav', info: { duration: 5 } };
+    const image = { path: 'image.png', info: { width: 128, height: 72 } };
+    const video = { path: 'clip.mp4', info: { duration: 5, width: 128, height: 72, hasAudio: true } };
+    assert.equal(build('audioConvert', { bitrate: '64k' }, audio).bitrate, '64k');
+    assert.equal(build('audioTrim', { tStart: '1', tEnd: '3' }, audio).duration, 2);
+    assert.deepStrictEqual(build('audioMerge', {}, null, {}, [audio, audio]).files, ['voice.wav', 'voice.wav']);
+    assert.equal(build('animSprite', { mode: 'fromSprite' }, image).srcW, 128);
+    assert.equal(build('imageCanvas', { bgMode: 'black' }, image).bgColor, '#000000');
+    assert.equal(build('videoCover', {}, video, { coverImage: { paths: ['image.png'] } }).coverImage, 'image.png');
+    assert.equal(build('docToPdf', {}, { path: 'readme.md' }).input, 'readme.md');
+    assert.equal(build('addMusic', { ducking: 'yes' }, video, { music: { paths: ['voice.wav'] } }).ducking, 'yes');
+    assert.equal(build('watermark', { pos: 'tiled', tileAngle: '0' }, video).tileAngle, '0');
   });
 
   await step('2. 连线校验（自连/环路/不兼容格式拒绝 & 动态输出推断）', () => {
@@ -495,11 +519,52 @@ async function step(name, fn) {
     assert(res.summary.exportedFiles.some((p) => p.endsWith('.svg')), 'SVG 分支应导出 svg');
   });
 
+  await step('10. PDF 闭环流水线（多图合成→合并→提取拆分→转长图）与 DAG 多分支并行执行', async () => {
+    const pdfFlowDir = path.join(TMP, 'pdf_wf_out');
+    fs.mkdirSync(pdfFlowDir, { recursive: true });
+    const imgP1 = path.join(TMP, 'pdf_p1.png');
+    const imgP2 = path.join(TMP, 'pdf_p2.png');
+    runFfmpegSync(['-f', 'lavfi', '-i', 'color=c=navy:s=400x300:d=0.1', '-frames:v', '1', imgP1]);
+    runFfmpegSync(['-f', 'lavfi', '-i', 'color=c=teal:s=400x300:d=0.1', '-frames:v', '1', imgP2]);
+
+    const flowPdfLoop = tplMod.normalizeGraphData({
+      name: 'PDF闭环与并行分支',
+      nodes: [
+        // 两个独立上游分支应并行构建两份 PDF
+        { id: 'pl1', type: 'io.loadBatch', x: 0, y: 0, params: { filterKind: 'image', filePaths: [bigPng, imgP1] } },
+        { id: 'pl2', type: 'io.loadBatch', x: 0, y: 240, params: { filterKind: 'image', filePaths: [imgP2] } },
+        { id: 'pl3', type: 'feat.imagesToPdf', x: 300, y: 0, params: { pageSize: 'fit', margin: '0', quality: 'medium', bgColor: '#ffffff' } },
+        { id: 'pl4', type: 'feat.imagesToPdf', x: 300, y: 240, params: { pageSize: 'fit', margin: '0', quality: 'medium', bgColor: '#ffffff' } },
+        // 汇聚合并成 3 页 PDF
+        { id: 'pl5', type: 'feat.pdfMerge', x: 600, y: 120, params: {} },
+        // 提取第 1,3 页为 2 页 PDF
+        { id: 'pl6', type: 'feat.pdfSplit', x: 900, y: 120, params: { mode: 'extract', pageRange: '1,3' } },
+        // 转纵向长图
+        { id: 'pl7', type: 'feat.pdfToImages', x: 1200, y: 120, params: { mode: 'longImage', format: 'jpg', dpiScale: '1.5', pageRange: '' } },
+        { id: 'pl8', type: 'io.save', x: 1500, y: 120, params: { outMode: 'custom', customDir: pdfFlowDir, suffix: '_pdflong', exportAsFolder: 'flat', noOverwrite: 'no' } },
+      ],
+      edges: [
+        { id: 'ple1', fromNode: 'pl1', fromPort: 'media', toNode: 'pl3', toPort: 'files' },
+        { id: 'ple2', fromNode: 'pl2', fromPort: 'media', toNode: 'pl4', toPort: 'files' },
+        { id: 'ple3', fromNode: 'pl3', fromPort: 'out', toNode: 'pl5', toPort: 'files' },
+        { id: 'ple4', fromNode: 'pl4', fromPort: 'out', toNode: 'pl5', toPort: 'files' },
+        { id: 'ple5', fromNode: 'pl5', fromPort: 'out', toNode: 'pl6', toPort: 'input' },
+        { id: 'ple6', fromNode: 'pl6', fromPort: 'out', toNode: 'pl7', toPort: 'input' },
+        { id: 'ple7', fromNode: 'pl7', fromPort: 'out', toNode: 'pl8', toPort: 'media' },
+      ],
+    }, reg);
+
+    const { promise } = runner.execute(flowPdfLoop, runtime, { hwAccel: 'cpu' });
+    const res = await promise;
+    assert.strictEqual(res.summary.exportedFiles.length, 1);
+    const longImg = res.summary.exportedFiles[0];
+    assert(fs.existsSync(longImg) && longImg.endsWith('.jpg'), 'PDF 转长图应导出 JPG');
+    const info = await probe(longImg);
+    assert(info.isImage && info.height > info.width, `PDF 2 页纵向长图尺寸异常: ${info.width}x${info.height}`);
+  });
+
   // 清理测试素材与中间缓存
-  fs.rmSync(TMP, { recursive: true, force: true });
-  for (const name of fs.readdirSync(CACHE_ROOT)) {
-    fs.rmSync(path.join(CACHE_ROOT, name), { recursive: true, force: true });
-  }
+  fs.rmSync(RUN_ROOT, { recursive: true, force: true });
 
   console.log(`\n工作流测试汇总：${passed} 通过，${failed} 失败`);
   process.exit(failed ? 1 : 0);

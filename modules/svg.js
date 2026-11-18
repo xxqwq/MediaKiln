@@ -3,18 +3,95 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { Worker } = require('worker_threads');
 const {
   num,
-  normalizeHexColor,
   imageCodecArgs,
-  parseSvgDims,
 } = require('../core/utils');
 const {
   defaultOutput,
   probe,
   runFfmpeg,
   runFfmpegBinary,
+  registerCancelableTask,
+  unregisterTask,
 } = require('../core/runner');
+
+const SVG_WORKER_PATH = path.join(__dirname, '..', 'core', 'svg-worker.js');
+
+function runSvgWorker(taskId, op, payload) {
+  return new Promise((resolve, reject) => {
+    let worker;
+    try {
+      worker = new Worker(SVG_WORKER_PATH, {
+        workerData: { op, payload },
+      });
+    } catch (err) {
+      return reject(Object.assign(err, { __workerSpawnFailed: true }));
+    }
+
+    let settled = false;
+    let cancelled = false;
+
+    const cleanup = () => {
+      unregisterTask(taskId);
+    };
+
+    registerCancelableTask(taskId, () => {
+      cancelled = true;
+      cleanup();
+      worker.terminate().catch(() => {});
+      if (!settled) {
+        settled = true;
+        reject(new Error('任务已取消'));
+      }
+    });
+
+    worker.once('message', (msg) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (msg && msg.ok) {
+        resolve(msg);
+      } else {
+        reject(new Error(msg?.error || 'SVG Worker 处理失败'));
+      }
+    });
+
+    worker.once('error', (err) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(cancelled ? new Error('任务已取消') : err);
+    });
+
+    worker.once('exit', (code) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (cancelled) {
+        reject(new Error('任务已取消'));
+      } else if (code !== 0) {
+        reject(new Error(`SVG Worker 异常退出（退出码 ${code}）`));
+      } else {
+        reject(new Error('SVG Worker 未返回结果'));
+      }
+    });
+  });
+}
+
+async function runSvgOp(taskId, op, payload) {
+  try {
+    return await runSvgWorker(taskId, op, payload);
+  } catch (err) {
+    if (!err?.__workerSpawnFailed) throw err;
+    const fallback = require('../core/svg-worker');
+    if (op === 'renderSvgToPng') return { ok: true, png: fallback.renderSvgToPng(payload) };
+    if (op === 'optimizeSvg') return { ok: true, data: await fallback.optimizeSvgText(payload.svgText, payload) };
+    if (op === 'traceRgbaToSvg') return { ok: true, data: await fallback.traceRgbaToSvg(payload) };
+    throw err;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // 1. SVG → 位图（Resvg 矢量渲染 + FFmpeg 格式编码）
@@ -29,42 +106,24 @@ function svgToRaster(p) {
     output,
     async run(taskId, onProgress) {
       onProgress?.(0.1);
-      const { Resvg } = require('@resvg/resvg-js');
       const svgText = fs.readFileSync(p.input, 'utf8');
       if (!/<svg[\s>]/i.test(svgText)) {
         throw new Error('无效的 SVG 文件（未找到 <svg> 标签）');
       }
 
-      const scaleMode = p.scaleMode || 'scale';
-      let fitTo = { mode: 'original' };
-
-      if (scaleMode === 'scale') {
-        const zoom = Math.max(0.25, Math.min(16, num(p.scale, 2)));
-        fitTo = { mode: 'zoom', value: zoom };
-      } else if (scaleMode === 'width') {
-        const w = Math.max(16, Math.min(8192, Math.round(num(p.width, 1024))));
-        fitTo = { mode: 'width', value: w };
-      } else if (scaleMode === 'maxSide') {
-        const maxSide = Math.max(16, Math.min(8192, Math.round(num(p.maxSide, 1920))));
-        const base = new Resvg(svgText);
-        const bw = base.width || parseSvgDims(svgText).width || 300;
-        const bh = base.height || parseSvgDims(svgText).height || 150;
-        fitTo = { mode: bw >= bh ? 'width' : 'height', value: maxSide };
-      }
-
       const needOpaque = ext === 'jpg' || ext === 'bmp';
-      let bg = p.bgColor || 'transparent';
-      if (needOpaque && bg === 'transparent') bg = 'ffffff';
-
-      const opts = { fitTo };
-      if (bg !== 'transparent') {
-        opts.background = '#' + normalizeHexColor(bg, 'ffffff');
-      }
 
       onProgress?.(0.45);
-      const resvg = new Resvg(svgText, opts);
-      const rendered = resvg.render();
-      const pngBuf = rendered.asPng();
+      const res = await runSvgOp(taskId, 'renderSvgToPng', {
+        svgText,
+        scaleMode: p.scaleMode || 'scale',
+        scale: p.scale,
+        width: p.width,
+        maxSide: p.maxSide,
+        bgColor: p.bgColor || 'transparent',
+        ext,
+      });
+      const pngBuf = Buffer.from(res.png);
 
       if (ext === 'png') {
         fs.writeFileSync(output, pngBuf);
@@ -101,48 +160,12 @@ function svgToRaster(p) {
 // 2. SVG 压缩与优化（SVGO v4）
 // ---------------------------------------------------------------------------
 
-async function optimizeSvgText(svgText, {
-  preset = 'default',
-  floatPrecision = 2,
-  multipass = true,
-  keepViewBox = true,
-  stripDims = false,
-  pretty = false,
-} = {}) {
-  const { optimize } = await import('svgo');
-  const overrides = {};
-  if (keepViewBox) {
-    // SVGO v4 默认保留 viewBox，显式配置防止关闭
-  } else {
-    overrides.removeViewBox = true;
-  }
-  if (preset === 'default') {
-    overrides.cleanupIds = false;
-  }
-
-  const plugins = [
-    {
-      name: 'preset-default',
-      params: { overrides },
-    },
-  ];
-  if (stripDims) plugins.push('removeDimensions');
-
-  const res = optimize(svgText, {
-    multipass: !!multipass,
-    floatPrecision: Math.max(0, Math.min(6, Math.round(num(floatPrecision, 2)))),
-    js2svg: pretty ? { indent: 2, pretty: true } : { pretty: false },
-    plugins,
-  });
-  return res.data;
-}
-
 function svgOptimize(p) {
   const output = p.output || defaultOutput(p.input, 'opt', 'svg');
 
   return {
     output,
-    async run(_taskId, onProgress) {
+    async run(taskId, onProgress) {
       onProgress?.(0.15);
       const raw = fs.readFileSync(p.input, 'utf8');
       if (!/<svg[\s>]/i.test(raw)) {
@@ -156,7 +179,8 @@ function svgOptimize(p) {
         : num(p.floatPrecision, 2);
 
       onProgress?.(0.5);
-      const optimized = await optimizeSvgText(raw, {
+      const res = await runSvgOp(taskId, 'optimizeSvg', {
+        svgText: raw,
         preset,
         floatPrecision: precision,
         multipass: p.multipass !== false && p.multipass !== 'false',
@@ -165,7 +189,7 @@ function svgOptimize(p) {
         pretty,
       });
 
-      fs.writeFileSync(output, optimized, 'utf8');
+      fs.writeFileSync(output, res.data, 'utf8');
       onProgress?.(1);
       return { output };
     },
@@ -209,121 +233,19 @@ function imageToSvg(p) {
       }
 
       onProgress?.(0.45);
-      const data = new Uint8ClampedArray(rgbaBuf.buffer, rgbaBuf.byteOffset, expected);
-      const mode = p.mode || 'poster';
-      const bgMode = p.transparentBg || 'alpha';
-      const customColors = num(p.colors, 0);
+      const res = await runSvgOp(taskId, 'traceRgbaToSvg', {
+        rgbaBuf: Uint8Array.from(rgbaBuf.subarray(0, expected)),
+        width: w,
+        height: h,
+        mode: p.mode || 'poster',
+        transparentBg: p.transparentBg || 'alpha',
+        colors: p.colors,
+        smooth: p.smooth || 'medium',
+        noiseFilter: p.noiseFilter,
+        optimizeSvg: p.optimizeSvg !== false && p.optimizeSvg !== 'false',
+      });
 
-      // 透明度与黑白二值预处理
-      if (mode === 'bw') {
-        const thresh = 148;
-        const keepWhite = bgMode === 'none';
-        for (let i = 0; i < data.length; i += 4) {
-          const a = data[i + 3];
-          if (a < 128) {
-            data[i] = 255; data[i + 1] = 255; data[i + 2] = 255;
-            data[i + 3] = keepWhite ? 255 : 0;
-            continue;
-          }
-          const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-          if (lum >= thresh) {
-            data[i] = 255; data[i + 1] = 255; data[i + 2] = 255;
-            data[i + 3] = keepWhite ? 255 : 0;
-          } else {
-            data[i] = 0; data[i + 1] = 0; data[i + 2] = 0; data[i + 3] = 255;
-          }
-        }
-      } else if (bgMode === 'white') {
-        for (let i = 0; i < data.length; i += 4) {
-          if (data[i] > 238 && data[i + 1] > 238 && data[i + 2] > 238) {
-            data[i + 3] = 0;
-          }
-        }
-      } else if (bgMode === 'none') {
-        for (let i = 0; i < data.length; i += 4) {
-          const a = data[i + 3] / 255;
-          if (a < 1) {
-            data[i] = Math.round(data[i] * a + 255 * (1 - a));
-            data[i + 1] = Math.round(data[i + 1] * a + 255 * (1 - a));
-            data[i + 2] = Math.round(data[i + 2] * a + 255 * (1 - a));
-            data[i + 3] = 255;
-          }
-        }
-      }
-
-      const smoothMap = {
-        low: { ltres: 0.5, qtres: 0.5, blurradius: 0 },
-        medium: { ltres: 1, qtres: 1, blurradius: 0 },
-        high: { ltres: 2.2, qtres: 2.2, blurradius: 2 },
-      };
-      const sm = smoothMap[p.smooth || 'medium'] || smoothMap.medium;
-      const pathomit = Math.max(0, Math.min(100, Math.round(num(p.noiseFilter, 8))));
-
-      const ImageTracer = require('imagetracerjs');
-      let tracerOpts = {
-        viewbox: true,
-        strokewidth: 0,
-        linefilter: false,
-        pathomit,
-        ltres: sm.ltres,
-        qtres: sm.qtres,
-        blurradius: sm.blurradius,
-        blurdelta: 20,
-        roundcoords: 2,
-      };
-
-      if (mode === 'bw') {
-        tracerOpts = {
-          ...tracerOpts,
-          colorsampling: 0,
-          numberofcolors: 2,
-          colorquantcycles: 1,
-          pal: [
-            { r: 0, g: 0, b: 0, a: 255 },
-            { r: 255, g: 255, b: 255, a: bgMode === 'none' ? 255 : 0 },
-          ],
-          linefilter: true,
-        };
-      } else if (mode === 'pixel') {
-        tracerOpts = {
-          ...tracerOpts,
-          numberofcolors: customColors > 0 ? customColors : 16,
-          ltres: 0.01,
-          qtres: 0.01,
-          pathomit: 0,
-          blurradius: 0,
-          roundcoords: 0,
-        };
-      } else {
-        const defaultColors = mode === 'detailed' ? 24 : 8;
-        tracerOpts = {
-          ...tracerOpts,
-          colorsampling: 2,
-          numberofcolors: customColors > 0 ? customColors : defaultColors,
-          colorquantcycles: 3,
-          mincolorratio: 0,
-        };
-      }
-
-      onProgress?.(0.65);
-      let svgStr = ImageTracer.imagedataToSVG({ width: w, height: h, data }, tracerOpts);
-
-      // 补充 width/height 与 viewBox 共存，确保所有桌面看图器与网页都能正确识别原始比例
-      svgStr = svgStr.replace(/<svg\b/, `<svg width="${w}" height="${h}"`);
-
-      if (p.optimizeSvg !== false && p.optimizeSvg !== 'false') {
-        onProgress?.(0.85);
-        svgStr = await optimizeSvgText(svgStr, {
-          preset: 'default',
-          floatPrecision: 2,
-          multipass: true,
-          keepViewBox: true,
-          stripDims: false,
-          pretty: false,
-        });
-      }
-
-      fs.writeFileSync(output, svgStr, 'utf8');
+      fs.writeFileSync(output, res.data, 'utf8');
       onProgress?.(1);
       return { output };
     },

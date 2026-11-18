@@ -25,7 +25,7 @@
       <button class="mode-btn active" data-mode="single" id="mode-btn-single">🛠️ 单工具</button>
       <button class="mode-btn" data-mode="workflow" id="mode-btn-workflow">🕸️ 节点画布</button>
     </div>
-    <input type="search" id="nav-search" class="nav-search" placeholder="搜索功能（gif / 图片 / svg / word / md…）" />
+    <input type="search" id="nav-search" class="nav-search" placeholder="搜索功能（gif / 图片 / pdf / 去静音 / word…）" />
     <nav id="nav"></nav>
     <div class="sidebar-ver-bar" id="sidebar-ver-bar">
       <button type="button" class="ver-pill" id="btn-check-update" title="检查更新 / 热更新设置">
@@ -33,15 +33,21 @@
         <span id="ver-label">v— · 检查更新</span>
       </button>
     </div>
-    <div class="sidebar-foot" id="sidebar-foot">本地 FFmpeg 9.0 · Ctrl+O 选文件 · 空格播放</div>
+    <div class="sidebar-foot" id="sidebar-foot">本地 FFmpeg 9.0 · Ctrl+O 选文件 · Ctrl+V 粘贴 · 空格播放</div>
   </aside>
 
   <main class="main" id="single-main">
     <header class="header">
       <div class="header-top">
-        <div>
-          <h1 id="feature-title">视频转 GIF</h1>
-          <p id="feature-desc" class="muted"></p>
+        <div class="header-title-wrap">
+          <div class="feature-icon-box" id="feature-icon-box" aria-hidden="true"></div>
+          <div>
+            <div class="feature-title-line">
+              <h1 id="feature-title">视频转 GIF</h1>
+              <span class="feature-group-pill" id="feature-group-pill">转换</span>
+            </div>
+            <p id="feature-desc" class="muted"></p>
+          </div>
         </div>
         <div class="global-prefs">
           <label class="pref-item">
@@ -77,6 +83,7 @@
       </div>
       <div class="dz-text">拖入文件到这里，或 <span class="link">点击选择文件</span></div>
       <div id="dz-hint" class="dz-hint muted"></div>
+      <div id="dz-formats" class="dz-formats" aria-hidden="true"></div>
     </section>
 
     <section id="file-card" class="file-card hidden">

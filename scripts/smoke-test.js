@@ -4,16 +4,12 @@ const path = require('path');
 const fs = require('fs');
 const { spawnSync } = require('child_process');
 const { probe, executeTask, FFMPEG } = require('../ffmpeg');
+const { FFPROBE } = require('../core/runner');
+const { PDFDocument } = require('pdf-lib');
 
 const TMP_ROOT = path.join(__dirname, 'smoke');
-if (fs.existsSync(TMP_ROOT)) {
-  try { fs.rmSync(TMP_ROOT, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch {}
-  if (fs.existsSync(TMP_ROOT) && process.platform === 'win32') {
-    spawnSync('cmd', ['/d', '/s', '/c', `rd /s /q "${TMP_ROOT}"`], { stdio: 'ignore' });
-  }
-}
-const TMP = path.join(TMP_ROOT, `run_${Date.now()}`);
-fs.mkdirSync(TMP, { recursive: true });
+fs.mkdirSync(TMP_ROOT, { recursive: true });
+const TMP = fs.mkdtempSync(path.join(TMP_ROOT, 'run-'));
 
 function run(args) {
   const r = spawnSync(FFMPEG, ['-hide_banner', '-y', ...args], { stdio: 'pipe' });
@@ -46,7 +42,7 @@ async function test(name, feature, params, check) {
     }
     const info = isDir ? { width: 0, height: 0, duration: 0, hasAudio: false } : await probe(output);
     const ms = Date.now() - t0;
-    await check?.(info);
+    await check?.(info, output);
     console.log(`  ✅ ${name}  (${ms}ms, ${Math.round(fs.statSync(output).size / 1024)}KB${isDir ? ', 目录' : `, ${info.width}x${info.height}, ${info.duration.toFixed(1)}s, 音轨:${info.hasAudio}`})`);
   } catch (e) {
     failed++;
@@ -1102,6 +1098,194 @@ async function test(name, feature, params, check) {
     if (i.width !== 1280 || i.height !== 720) throw new Error('顶部标题栏尺寸应保持 1280x720');
   });
 
-  console.log(failed ? `\n❌ ${failed} 个用例失败` : '\n🎉 全部通过');
+  // 114. H.265 (HEVC) 视频转换 & 目标大小压缩
+  await test('114a. 格式转换 MP4 (H.265/HEVC)', 'convertVideo', {
+    input: testVideo2, mode: 'reencode', format: 'mp4', vcodec: 'hevc', height: 480, quality: 'medium', totalDuration: 6,
+  }, (i) => {
+    if (i.height !== 480) throw new Error(`HEVC 转换高度应为 480，实际 ${i.height}`);
+  });
+
+  await test('114b. 视频目标大小压缩 MP4 (H.265/HEVC)', 'compressTarget', {
+    input: testVideo2, targetMB: 1.5, vcodec: 'hevc', hasAudio: true, totalDuration: 6,
+  }, () => {
+    const outHevc = path.join(TMP, 'test2_1.5MB.mp4');
+    if (fs.existsSync(outHevc) && fs.statSync(outHevc).size / 1024 / 1024 > 1.7) {
+      throw new Error('HEVC 目标体积压缩超限');
+    }
+  });
+
+  // 115. 自动去静音 / 剪气口 (removeSilence：视频 + 纯音频)
+  const silenceVid = path.join(TMP, 'talk_silence.mp4');
+  // 0~1.5s 发声 + 1.5~3.5s 静音 + 3.5~5.0s 发声（总 5s，剪除约 1.8s 静音后应剩 ~3.2s）
+  run([
+    '-f', 'lavfi', '-i', 'testsrc2=size=320x240:rate=24:duration=5',
+    '-f', 'lavfi', '-i', "aevalsrc='if(between(t,1.5,3.5),0,0.4*sin(2*PI*440*t))':s=44100:d=5",
+    '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', silenceVid,
+  ]);
+  await test('115a. 自动去静音 MP4 (剪除中间 2s 静音)', 'removeSilence', {
+    input: silenceVid, threshold: -35, minSilence: 0.5, padding: 0.08, totalDuration: 5,
+  }, (i) => {
+    if (!i.hasAudio || i.duration >= 4.2 || i.duration < 2.2) {
+      throw new Error(`去静音后视频时长异常: ${i.duration}s`);
+    }
+  });
+
+  const silenceMp3 = path.join(TMP, 'talk_silence.mp3');
+  run(['-i', silenceVid, '-vn', '-c:a', 'libmp3lame', silenceMp3]);
+  await test('115b. 自动去静音 MP3 (纯音频剪气口)', 'removeSilence', {
+    input: silenceMp3, threshold: -35, minSilence: 0.5, padding: 0.08, totalDuration: 5,
+  }, (i) => {
+    if (!i.hasAudio || i.duration >= 4.2 || i.duration < 2.2) {
+      throw new Error(`去静音后音频时长异常: ${i.duration}s`);
+    }
+  });
+
+  // 116~118. PDF 离线全链路（合并 / 拆分提取 / 转图片与长图）
+  const outPdf2 = path.join(TMP, 'second_doc.pdf');
+  await test('116a. 生成第二份测试 PDF', 'imagesToPdf', {
+    files: [img3, img1], output: outPdf2, pageSize: 'fit', margin: 0, quality: 'medium', bgColor: '#ffffff',
+  }, (i) => {
+    if (i.pageCount !== 2) throw new Error(`PDF2 页数应为 2，实际 ${i.pageCount}`);
+  });
+
+  const mergedPdfPath = path.join(TMP, 'combined_5p.pdf');
+  await test('116b. PDF 合并 (3页 + 2页 = 5页)', 'pdfMerge', {
+    files: [outPdf, outPdf2], output: mergedPdfPath,
+  }, (i) => {
+    if (i.docType !== 'pdf' || i.pageCount !== 5) {
+      throw new Error(`合并后 PDF 页数应为 5，实际 ${i.pageCount}`);
+    }
+  });
+
+  const splitExtractPdf = path.join(TMP, 'extracted_3p.pdf');
+  await test('117a. PDF 提取指定页 (1-2, 5 → 3页)', 'pdfSplit', {
+    input: mergedPdfPath, output: splitExtractPdf, mode: 'extract', pageRange: '1-2, 5',
+  }, (i) => {
+    if (i.pageCount !== 3) throw new Error(`提取后 PDF 页数应为 3，实际 ${i.pageCount}`);
+  });
+
+  const burstDir = path.join(TMP, 'pdf_burst_dir');
+  await test('117b. PDF 按每 2 页拆分为多份 (5页 → 3份)', 'pdfSplit', {
+    input: mergedPdfPath, output: burstDir, mode: 'burst', everyN: 2,
+  }, () => {
+    const parts = fs.readdirSync(burstDir).filter((f) => f.endsWith('.pdf'));
+    if (parts.length !== 3) throw new Error(`5 页按每 2 页拆分应生成 3 份，实际 ${parts.length}`);
+  });
+
+  const pdfPagesDir = path.join(TMP, 'pdf_pages_png');
+  await test('118a. PDF 转逐页高清图片 (3页 → 3张 PNG)', 'pdfToImages', {
+    input: splitExtractPdf, output: pdfPagesDir, mode: 'pages', format: 'png', dpiScale: 1.5,
+  }, () => {
+    const imgs = fs.readdirSync(pdfPagesDir).filter((f) => f.endsWith('.png'));
+    if (imgs.length !== 3) throw new Error(`应导出 3 张页面 PNG，实际 ${imgs.length}`);
+  });
+
+  const pdfLongOut = path.join(TMP, 'pdf_long.jpg');
+  await test('118b. PDF 转纵向长图 (第1-2页拼接)', 'pdfToImages', {
+    input: splitExtractPdf, output: pdfLongOut, mode: 'longImage', format: 'jpg', dpiScale: 1.5, gap: 12, pageRange: '1-2',
+  }, (i) => {
+    if (!i.isImage || i.height <= i.width) throw new Error(`PDF 纵向长图尺寸异常: ${i.width}x${i.height}`);
+  });
+
+  const reorderedPdf = path.join(TMP, 'reordered.pdf');
+  await test('119a. PDF 按 2,1 重排', 'pdfSplit', {
+    input: outPdf2, output: reorderedPdf, mode: 'extract', pageRange: '2,1',
+  }, async (info) => {
+    const pageWidths = async (file) => (await PDFDocument.load(fs.readFileSync(file))).getPages().map((page) => page.getWidth());
+    const before = await pageWidths(outPdf2);
+    const after = await pageWidths(reorderedPdf);
+    if (info.pageCount !== 2 || before[0] === before[1] || after[0] !== before[1] || after[1] !== before[0]) {
+      throw new Error('PDF 未按指定顺序重排');
+    }
+  });
+  await test('119b. PDF 删除第 2 页', 'pdfSplit', {
+    input: outPdf2, mode: 'remove', pageRange: '2',
+  }, (info) => { if (info.pageCount !== 1) throw new Error('删页后应剩 1 页'); });
+
+  const requireDuration = (info, seconds) => {
+    if (Math.abs(info.duration - seconds) > 0.2) throw new Error(`预期 ${seconds}s，得到 ${info.duration}s`);
+  };
+  let converted;
+  await test('120. 音频转换 64 kb/s OPUS', 'audioConvert', {
+    input: silenceMp3, format: 'opus', bitrate: '64k', channels: '1',
+  }, (info, output) => {
+    if (!info.hasAudio || info.width) throw new Error('应输出纯音频');
+    requireDuration(info, 5);
+    converted = output;
+  });
+  await test('121. 音频精确截取并淡入淡出', 'audioTrim', {
+    input: converted, start: 0.5, duration: 2, precise: true, fadeIn: 0.25, fadeOut: 0.25,
+  }, (info) => { requireDuration(info, 2); });
+  await test('122. 音频交叉淡入拼接', 'audioMerge', {
+    files: [converted, silenceMp3], mode: 'crossfade', format: 'wav', fadeDur: 1,
+  }, (info) => { requireDuration(info, 9); });
+  await test('123. 配乐随人声自动压低', 'addMusic', {
+    input: silenceVid, music: testMusic, mode: 'mix', ducking: 'yes', hasAudio: true,
+  }, (info, output) => {
+    if (!info.hasAudio) throw new Error('缺少混合音轨');
+    requireDuration(info, 5);
+    const musicLevel = (start) => {
+      const r = spawnSync(FFMPEG, ['-hide_banner', '-ss', start, '-i', output, '-t', '0.5', '-vn',
+        '-af', 'bandpass=f=600:width_type=h:w=25,volumedetect', '-f', 'null', '-'], { encoding: 'utf8' });
+      return Number(r.stderr.match(/mean_volume: (-?[\d.]+) dB/)?.[1]);
+    };
+    if (!(musicLevel('2.6') - musicLevel('0.8') >= 6)) throw new Error('发声期间配乐未降低至少 6 dB');
+  });
+
+  await test('124. 平铺水印保留整个视频', 'watermark', {
+    input: silenceVid, mode: 'text', pos: 'tiled', text: '内部使用 50%', tileAngle: '0', tileDensity: 'dense',
+  }, (info) => { if (!info.hasAudio) throw new Error('缺少原音轨'); requireDuration(info, 5); });
+  await test('125. 电商主图模糊背景', 'imageCanvas', {
+    input: img3, preset: '1080x1440', format: 'png', fit: 'blur', marginPct: 10,
+  }, (info) => { if (info.width !== 1080 || info.height !== 1440) throw new Error('画布尺寸错误'); });
+
+  let apng;
+  await test('126a. GIF 转 APNG', 'animSprite', {
+    input: testGif, mode: 'toApng', width: 128, fps: 10,
+  }, (info, output) => {
+    if (!info.isApng || info.width !== 128) throw new Error('APNG 格式或宽度不正确');
+    apng = output;
+  });
+  await test('126b. APNG 转 GIF', 'animSprite', {
+    input: apng, mode: 'apngToGif', fps: 10,
+  }, (info) => { requireDuration(info, 4); });
+  let sprite;
+  const countFrames = (file) => {
+    const result = spawnSync(FFPROBE, ['-v', 'error', '-select_streams', 'v:0', '-count_frames',
+      '-show_entries', 'stream=nb_read_frames', '-of', 'csv=p=0', file], { encoding: 'utf8' });
+    return Number(result.stdout.trim());
+  };
+  await test('126c. APNG 抽帧为 5×2 雪碧图', 'animSprite', {
+    input: apng, mode: 'toSprite', cols: 5, maxFrames: 9, cellWidth: 64, fps: 10,
+  }, (info, output) => {
+    if (info.width !== 320 || info.height !== 72) throw new Error('雪碧图尺寸不正确');
+    sprite = output;
+  });
+  for (const format of ['gif', 'apng']) {
+    await test(`126d. 雪碧图还原为 9 帧 ${format}`, 'animSprite', {
+      input: sprite, mode: 'fromSprite', cols: 5, rows: 2, frameCount: 9, outFormat: format, fps: 12,
+    }, (info, output) => {
+      if (info.width !== 64 || info.height !== 36 || countFrames(output) !== 9) {
+        throw new Error('合成的动画尺寸或有效帧数不正确');
+      }
+    });
+  }
+
+  for (const source of ['image', 'frame']) {
+    await test(`127. 嵌入 MP4 封面 (${source})`, 'videoCover', {
+      input: silenceVid, source, coverImage: img3, at: 2,
+    }, (info, output) => {
+      requireDuration(info, 5);
+      const result = spawnSync(FFPROBE, ['-v', 'error', '-show_streams', '-of', 'json', output], { encoding: 'utf8' });
+      const streams = JSON.parse(result.stdout).streams;
+      const video = streams.find((stream) => stream.codec_type === 'video' && !stream.disposition.attached_pic);
+      if (!info.hasAudio || Number(video?.nb_frames) !== 120 || !streams.some((stream) => stream.disposition.attached_pic === 1)) {
+        throw new Error('封面未写入或原始视频流被改变');
+      }
+    });
+  }
+
+  if (!failed) fs.rmSync(TMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  console.log(failed ? `\n❌ ${failed} 个用例失败，测试产物：${TMP}` : '\n🎉 全部通过');
   process.exit(failed ? 1 : 0);
 })();

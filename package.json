@@ -1,8 +1,8 @@
 {
   "name": "video-gif-toolbox",
-  "version": "2.1.9",
-  "shellVersion": "2.1.9",
-  "description": "视频 · GIF · 图片 · SVG · 文档工具箱：52 个功能，全部本地离线处理",
+  "version": "2.1.10",
+  "shellVersion": "2.1.10",
+  "description": "视频 · 动图 · 图片 · 音频 · 文档工具箱，提供 63 个本地工具",
   "main": "main.js",
   "author": "user",
   "license": "MIT",
@@ -21,7 +21,9 @@
   "dependencies": {
     "@resvg/resvg-js": "^2.6.2",
     "adm-zip": "^0.6.1",
+    "highlight.js": "^11.12.0",
     "imagetracerjs": "^1.2.6",
+    "pdf-lib": "^1.17.1",
     "svgo": "^4.1.0"
   },
   "devDependencies": {

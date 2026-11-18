@@ -102,7 +102,7 @@ async function fetchLatestRelease() {
       assets: (j.assets || []).map((a) => ({ name: a.name, label: a.label || '', size: a.size, url: a.browser_download_url })),
     };
   } catch (err) {
-    console.warn(`[extract] 获取最新 Release 失败（${err.message}），构建期将使用 v${pkg.version} 确定性下载直链回退`);
+    console.warn(`[extract] 获取最新 Release 失败（${err.message}），构建期将使用 v${pkg.shellVersion || pkg.version} 确定性下载直链回退`);
     return null;
   }
 }
@@ -114,6 +114,7 @@ const data = {
     name: '视频 · GIF 工具箱',
     productName: pkg.build?.productName || '视频GIF工具箱',
     version: pkg.version,
+    shellVersion: pkg.shellVersion || pkg.version,
     description: pkg.description,
     license: pkg.license,
     repo: GITHUB_REPO,

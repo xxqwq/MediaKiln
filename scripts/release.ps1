@@ -19,6 +19,11 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 Push-Location $repoRoot
 
 $tempFiles = @()
+$phase = [System.Diagnostics.Stopwatch]::StartNew()
+function Complete-Phase([string]$Name) {
+  Write-Host ("{0} took {1:N1}s" -f $Name, $phase.Elapsed.TotalSeconds)
+  $phase.Restart()
+}
 try {
   foreach ($cmd in @('git', 'node', 'npm', 'gh')) {
     if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) {
@@ -103,7 +108,7 @@ try {
   Write-Host "Version    : $ver (tag: $tag)"
 
   # 6. Check if release already exists
-  gh release view $tag --repo $repo 2>$null | Out-Null
+  $releaseDraft = gh release view $tag --repo $repo --json isDraft --jq .isDraft 2>$null
   $releaseExists = ($LASTEXITCODE -eq 0)
   if ($releaseExists -and -not $Force) {
     Write-Host "Release $tag already exists on GitHub. Bump version (e.g. npm run release -- -Bump patch) or pass -Force to overwrite."
@@ -112,21 +117,16 @@ try {
 
   if ($DryRun) {
     $distLabel = if ($HotfixOnly) { "build-hotfix (HotfixOnly)" } else { "npm run dist + build-hotfix" }
-    Write-Host "[DryRun] Ready to run: ensure-ffmpeg -> git push -> smoke-test -> $distLabel -> upload $tag to $repo (exists=$releaseExists, force=$Force)"
+    Write-Host "[DryRun] Ready to run: ensure-ffmpeg -> smoke-test -> $distLabel -> git push -> upload $tag to $repo (exists=$releaseExists, force=$Force)"
     exit 0
   }
+  Complete-Phase 'Release preflight'
 
   # 7. Ensure FFmpeg binaries exist (needed for smoke tests and full dist)
   if (-not $HotfixOnly -or -not $SkipTests) {
     node scripts/ensure-ffmpeg.js
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   }
-
-  # 8. Push commits to origin
-  Write-Host "Pushing commits to origin..."
-  git push origin HEAD
-  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-  $headSha = (git rev-parse HEAD).Trim()
 
   # 9. Run smoke tests
   if (-not $SkipTests) {
@@ -139,6 +139,7 @@ try {
       if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     }
   }
+  Complete-Phase 'Build and test prerequisites'
 
   # 10. Build hotfix bundle + optional Windows executables
   Write-Host "Building hotfix bundle..."
@@ -150,6 +151,7 @@ try {
   $hotfixManifestPath = Join-Path $repoRoot "release\hotfix-manifest.json"
   if (-not (Test-Path $hotfixBundlePath)) { throw "Built hotfix bundle not found: $hotfixBundlePath" }
   if (-not (Test-Path $hotfixManifestPath)) { throw "Built hotfix manifest not found: $hotfixManifestPath" }
+  Complete-Phase 'Hotfix bundle'
 
   $portableName = $meta.portable.Replace('${version}', $ver)
   $setupName = $meta.nsis.Replace('${version}', $ver)
@@ -170,12 +172,19 @@ try {
     Copy-Item $portablePath $portableStage -Force
     Copy-Item $setupPath $setupStage -Force
     $tempFiles += $portableStage, $setupStage
+    Complete-Phase 'Windows builds and staging'
   }
 
-  # 12. Create release if needed and upload assets sequentially
+  Write-Host "Pushing commits to origin..."
+  git push origin HEAD
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  $headSha = (git rev-parse HEAD).Trim()
+  Complete-Phase 'Git push'
+
+  # Upload all required assets before publishing a new release
   if (-not $releaseExists) {
-    Write-Host "Creating GitHub Release $tag..."
-    gh release create $tag --repo $repo --target $headSha --title "$tag" --generate-notes
+    Write-Host "Creating draft GitHub Release $tag..."
+    gh release create $tag --repo $repo --target $headSha --title "$tag" --generate-notes --draft
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   } else {
     Write-Host "Release $tag already exists; overwriting assets (-Force)..."
@@ -198,6 +207,23 @@ try {
   Write-Host "Uploading hotfix manifest (hotfix-manifest.json)..."
   gh release upload $tag $hotfixManifestPath --repo $repo --clobber
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  $expected = @($hotfixBundlePath, $hotfixManifestPath)
+  if (-not $HotfixOnly) { $expected += $portableStage, $setupStage }
+  $assetsJson = (gh release view $tag --repo $repo --json assets)
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  $assets = ($assetsJson | ConvertFrom-Json).assets
+  foreach ($filePath in $expected) {
+    $file = Get-Item -LiteralPath $filePath
+    if (-not ($assets | Where-Object { $_.name -ceq $file.Name -and $_.size -eq $file.Length })) {
+      throw "Release asset missing or wrong size: $($file.Name)"
+    }
+  }
+  if (-not $releaseExists -or $releaseDraft -eq 'true') {
+    gh release edit $tag --repo $repo --draft=false
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  }
+  Complete-Phase 'Upload verification and publication'
 
   $releaseUrl = (gh release view $tag --repo $repo --json url --jq .url).Trim()
   Write-Host "Release published successfully: $releaseUrl"

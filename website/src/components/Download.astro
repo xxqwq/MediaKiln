@@ -1,10 +1,11 @@
 ---
 import { app, assetUrl, assetName, assetSize, releasesUrl, repoUrl, dlVersion, fmtBytes, mirrorPrefixes } from '../lib/site';
+import { iconSvg } from '../lib/icons';
 
 const mirrors = [
-  { id: 'official', label: '🌐 GitHub 官方源（默认）', prefix: mirrorPrefixes.official },
-  { id: 'ghproxy', label: '⚡ 国内加速通道 1', prefix: mirrorPrefixes.ghproxy },
-  { id: 'ghfast', label: '⚡ 国内加速通道 2', prefix: mirrorPrefixes.ghfast },
+  { id: 'official', icon: 'globe', label: 'GitHub 官方源（默认）', prefix: mirrorPrefixes.official },
+  { id: 'ghproxy', icon: 'zap', label: '国内加速通道 1', prefix: mirrorPrefixes.ghproxy },
+  { id: 'ghfast', icon: 'zap', label: '国内加速通道 2', prefix: mirrorPrefixes.ghfast },
 ];
 
 const cloneCmd = `git clone https://github.com/${app.repo}.git`;
@@ -32,7 +33,8 @@ const cloneCmd = `git clone https://github.com/${app.repo}.git`;
               aria-pressed={i === 0 ? 'true' : 'false'}
               data-mirror-prefix={m.prefix}
             >
-              {m.label}
+              <Fragment set:html={iconSvg(m.icon, 13)} />
+              <span>{m.label}</span>
             </button>
           ))}
         </div>
@@ -42,14 +44,14 @@ const cloneCmd = `git clone https://github.com/${app.repo}.git`;
       <div class="dl-options">
         <a class="dl-option primary" href={assetUrl('setup')} data-dl="setup" data-raw-url={assetUrl('setup')}>
           <span class="dl-badge">推荐</span>
-          <span class="dl-ico" aria-hidden="true">💿</span>
+          <span class="dl-ico is-primary" aria-hidden="true" set:html={iconSvg('disc', 21)} />
           <span class="dl-title">安装版</span>
           <span class="dl-desc">一键安装，自动创建开始菜单和桌面快捷方式。如果便携版被杀毒软件误报，请使用这个版本。</span>
           <span class="dl-file"><span data-dl-name="setup">{assetName('setup')}</span><span data-dl-size="setup">{assetSize('setup') ? fmtBytes(assetSize('setup')) : ''}</span></span>
           <span class="btn btn-primary">下载安装版</span>
         </a>
         <a class="dl-option" href={assetUrl('portable')} data-dl="portable" data-raw-url={assetUrl('portable')}>
-          <span class="dl-ico" aria-hidden="true">🎒</span>
+          <span class="dl-ico" aria-hidden="true" set:html={iconSvg('backpack', 21)} />
           <span class="dl-title">便携版</span>
           <span class="dl-desc">免安装，下载后双击即可运行，可以放在 U 盘里随身携带。</span>
           <span class="dl-file"><span data-dl-name="portable">{assetName('portable')}</span><span data-dl-size="portable">{assetSize('portable') ? fmtBytes(assetSize('portable')) : ''}</span></span>
@@ -110,6 +112,7 @@ const cloneCmd = `git clone https://github.com/${app.repo}.git`;
     border: 1px solid var(--border-2);
   }
   .dl-mirror-btn {
+    display: inline-flex; align-items: center; gap: 6px;
     height: 32px; padding: 0 14px; border-radius: 999px;
     font-size: 13px; color: var(--text-2);
     transition: all .2s var(--ease);
@@ -136,7 +139,19 @@ const cloneCmd = `git clone https://github.com/${app.repo}.git`;
     position: absolute; top: 20px; right: 20px; font-size: 12px; font-weight: 600;
     padding: 3px 10px; border-radius: 999px; background: var(--accent); color: #fff;
   }
-  .dl-ico { font-size: 28px; }
+  .dl-ico {
+    width: 44px; height: 44px; border-radius: 12px;
+    display: grid; place-items: center; margin-bottom: 4px;
+    color: var(--text-2);
+    background: rgba(255, 255, 255, .045);
+    border: 1px solid var(--border-2);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .10);
+  }
+  .dl-ico.is-primary {
+    color: var(--accent-hi);
+    background: linear-gradient(180deg, rgba(124, 116, 255, .24), rgba(124, 116, 255, .08));
+    border-color: rgba(124, 116, 255, .42);
+  }
   .dl-title { font-size: 20px; font-weight: 700; }
   .dl-desc { color: var(--text-2); font-size: 14.5px; flex: 1; }
   .dl-file {

@@ -2,6 +2,14 @@
 
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
+function toFileUrl(filePath) {
+  if (!filePath) return '';
+  const normalized = String(filePath).replace(/\\/g, '/').replace(/^\/+/, '');
+  const parts = normalized.split('/');
+  const encoded = parts.map((seg, idx) => (idx === 0 && /^[a-zA-Z]:$/.test(seg) ? seg : encodeURIComponent(seg)));
+  return 'file:///' + encoded.join('/');
+}
+
 contextBridge.exposeInMainWorld('api', {
   pickFile: (feature, kind) => ipcRenderer.invoke('pick-file', feature, kind),
   pickDir: () => ipcRenderer.invoke('pick-dir'),
@@ -21,11 +29,15 @@ contextBridge.exposeInMainWorld('api', {
   copyImage: (filePath) => ipcRenderer.invoke('copy-image', filePath),
   pickSingleImage: () => ipcRenderer.invoke('pick-single-image'),
   replaceExtractedImage: (opts) => ipcRenderer.invoke('replace-extracted-image', opts),
+  readClipboardMedia: () => ipcRenderer.invoke('clipboard:read-media'),
   startDrag: (filePath) => ipcRenderer.send('start-drag', filePath),
+  toFileUrl,
   // Electron 32+ 已移除 File.path，用 webUtils 拿拖入文件的磁盘路径
   getPath: (file) => webUtils.getPathForFile(file),
   wfCacheInfo: () => ipcRenderer.invoke('wf:cache-info'),
   wfClearCache: () => ipcRenderer.invoke('wf:clear-cache'),
+  wfSetCacheDir: (dir) => ipcRenderer.invoke('wf:set-cache-dir', dir),
+  wfPruneCache: (opts) => ipcRenderer.invoke('wf:prune-cache', opts),
   wfAllocNodeDir: (opts) => ipcRenderer.invoke('wf:alloc-node-dir', opts),
   wfStatMulti: (filePaths) => ipcRenderer.invoke('wf:stat-multi', filePaths),
   wfScanDir: (opts) => ipcRenderer.invoke('wf:scan-dir', opts),

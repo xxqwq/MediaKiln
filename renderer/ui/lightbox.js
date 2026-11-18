@@ -5,8 +5,12 @@
   const IMG_LIKE = new Set(['png', 'jpg', 'jpeg', 'webp', 'bmp', 'avif', 'gif', 'ico', 'svg']);
 
   function toFileUrl(filePath) {
-    return encodeURI('file:///' + String(filePath || '').replace(/\\/g, '/'));
+    if (window.api?.toFileUrl) return window.api.toFileUrl(filePath);
+    const norm = String(filePath || '').replace(/\\/g, '/');
+    const parts = norm.split('/').map((seg, i) => (i === 0 && /^[a-zA-Z]:$/.test(seg)) ? seg : encodeURIComponent(seg));
+    return 'file:///' + parts.join('/').replace(/^\/+/, '');
   }
+  window.VGT.toFileUrl = toFileUrl;
 
   function esc(s) {
     return String(s ?? '')

@@ -39,7 +39,7 @@ export const release = (appData as {
 }).latestRelease || null;
 
 /** 页面上展示的“可下载版本”：优先使用已发布的 Release，避免显示尚未发布的开发版本号 */
-export const dlVersion = release?.version || app.version;
+export const dlVersion = release?.version || (app as { shellVersion?: string }).shellVersion || app.version;
 
 function findAsset(kind: 'setup' | 'portable') {
   const nameRe = kind === 'setup' ? /(-setup|安装版)\.exe$/i : /(-portable|便携版)\.exe$/i;

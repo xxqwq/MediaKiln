@@ -1,6 +1,7 @@
 'use strict';
 
 const IMG_EXTS = window.VGT.IMG_EXTS;
+const AUDIO_EXTS = window.VGT.AUDIO_EXTS || ['mp3', 'm4a', 'wav', 'flac', 'aac', 'ogg', 'opus'];
 const FEATURES = [
   ...window.VGT.VIDEO_FEATURES,
   ...window.VGT.IMAGE_FEATURES,
@@ -8,6 +9,16 @@ const FEATURES = [
   ...(window.VGT.DOC_FEATURES || []),
 ];
 const GROUP_ORDER = ['转换', 'GIF 编辑', '图片', 'SVG', '文档', '剪辑', '音频', '工具'];
+const GROUP_COLORS = {
+  '转换': '#818cf8',
+  'GIF 编辑': '#f472b6',
+  '图片': '#34d399',
+  'SVG': '#fbbf24',
+  '文档': '#60a5fa',
+  '剪辑': '#a78bfa',
+  '音频': '#2dd4bf',
+  '工具': '#fb923c',
+};
 
 // ---------------------------------------------------------------------------
 // 状态
@@ -22,6 +33,9 @@ let files = null;
 let batchFiles = null;
 let batchRunningIndex = -1;
 let batchAborted = false;
+const batchTaskIndexMap = new Map();
+const pendingBatchIndices = [];
+const activeBatchTaskIds = new Set();
 let running = false;
 let currentTaskId = null;
 
@@ -35,10 +49,19 @@ let prefOutputDir = localStorage.getItem('vgt_out_dir') || '';
 let prefHwAccel = localStorage.getItem('vgt_hw') || 'cpu';
 let prefNoOverwrite = localStorage.getItem('vgt_no_overwrite') !== '0';
 let navSearchQuery = '';
+let collapsedGroups = new Set();
 let favFeatureIds = (() => {
   try { return JSON.parse(localStorage.getItem('vgt_favs') || '[]'); } catch { return []; }
 })();
 if (prefOutputMode === 'custom' && !prefOutputDir) prefOutputMode = 'same';
+
+function toFileUrl(filePath) {
+  if (window.api?.toFileUrl) return window.api.toFileUrl(filePath);
+  const norm = String(filePath || '').replace(/\\/g, '/');
+  const parts = norm.split('/').map((seg, i) => (i === 0 && /^[a-zA-Z]:$/.test(seg)) ? seg : encodeURIComponent(seg));
+  return 'file:///' + parts.join('/').replace(/^\/+/, '');
+}
+window.VGT.toFileUrl = toFileUrl;
 
 function withGlobalPrefs(params, extra = {}) {
   return {
@@ -62,6 +85,7 @@ const paramsCtrl = window.VGT.params.createParamsController({
   getBatchFiles: () => batchFiles,
   toast,
   prefillTimes,
+  onSendFeatureToWorkflow: (feature, fieldValues) => onSendFeatureToWorkflow(feature, fieldValues),
 });
 
 function renderParams() {
@@ -76,14 +100,28 @@ function saveFavs() {
   localStorage.setItem('vgt_favs', JSON.stringify(favFeatureIds));
 }
 
+function renderSvgIcon(rawIcon) {
+  const iconsApi = window.VGT?.icons;
+  if (iconsApi?.emojiToName && iconsApi?.svg) {
+    const clean = String(rawIcon || '').replace(/[\uFE0F\uFE0E]/g, '').trim();
+    const name = iconsApi.emojiToName(clean) || iconsApi.emojiToName(rawIcon);
+    if (name) return iconsApi.svg(name);
+  }
+  return String(rawIcon || '');
+}
+
 function makeNavItem(f) {
   const btn = document.createElement('button');
   btn.className = 'nav-item' + (f === currentFeature ? ' active' : '');
   btn.dataset.id = f.id;
+  btn.style.setProperty('--grp', GROUP_COLORS[f.group] || '#818cf8');
   const isFav = favFeatureIds.includes(f.id);
-  btn.innerHTML = `<span class="nav-icon">${f.icon}</span><span class="nav-name">${f.name}</span><span class="nav-fav${isFav ? ' on' : ''}" title="${isFav ? '取消置顶' : '置顶到常用'}">${isFav ? '★' : '☆'}</span>`;
+  const starIcon = window.VGT?.icons?.svg
+    ? window.VGT.icons.svg(isFav ? 'star' : 'starOutline')
+    : (isFav ? '★' : '☆');
+  btn.innerHTML = `<span class="nav-icon">${f.icon}</span><span class="nav-name">${f.name}</span><span class="nav-fav${isFav ? ' on' : ''}" title="${isFav ? '取消置顶' : '置顶到常用'}">${starIcon}</span>`;
   btn.onclick = (e) => {
-    if (e.target.classList.contains('nav-fav')) {
+    if (e.target.closest('.nav-fav')) {
       e.stopPropagation();
       if (favFeatureIds.includes(f.id)) favFeatureIds = favFeatureIds.filter((id) => id !== f.id);
       else favFeatureIds = [...favFeatureIds, f.id];
@@ -95,6 +133,32 @@ function makeNavItem(f) {
     selectFeature(f);
   };
   return btn;
+}
+
+function createGroupBlock(title, count, color, items, { collapsible = true } = {}) {
+  const wrap = document.createElement('div');
+  const collapsed = collapsible && collapsedGroups.has(title);
+  wrap.className = 'nav-group-wrap' + (collapsed ? ' collapsed' : '');
+
+  const head = document.createElement('button');
+  head.type = 'button';
+  head.className = 'nav-group';
+  head.setAttribute('aria-expanded', String(!collapsed));
+  head.innerHTML = `<span class="nav-group-dot" style="background:${color}"></span><span class="nav-group-label">${title}</span><span class="nav-group-count">${count}</span>${collapsible ? '<span class="nav-group-chev" aria-hidden="true">▾</span>' : ''}`;
+  if (collapsible) {
+    head.onclick = () => {
+      if (collapsedGroups.has(title)) collapsedGroups.delete(title);
+      else collapsedGroups.add(title);
+      renderNav();
+    };
+  }
+  wrap.appendChild(head);
+
+  const list = document.createElement('div');
+  list.className = 'nav-group-items';
+  for (const f of items) list.appendChild(makeNavItem(f));
+  wrap.appendChild(list);
+  return wrap;
 }
 
 function renderNav() {
@@ -116,25 +180,16 @@ function renderNav() {
   if (!q && favFeatureIds.length) {
     const favItems = favFeatureIds.map((id) => FEATURES.find((x) => x.id === id)).filter(Boolean);
     if (favItems.length) {
-      const label = document.createElement('div');
-      label.className = 'nav-group';
-      label.textContent = '⭐ 常用';
-      nav.appendChild(label);
-      favItems.forEach((f) => { nav.appendChild(makeNavItem(f)); totalShown++; });
+      nav.appendChild(createGroupBlock('常用置顶', favItems.length, '#f2b84b', favItems, { collapsible: false }));
+      totalShown += favItems.length;
     }
   }
 
   for (const g of GROUP_ORDER) {
     const items = FEATURES.filter((x) => x.group === g && match(x));
     if (!items.length) continue;
-    const label = document.createElement('div');
-    label.className = 'nav-group';
-    label.textContent = g;
-    nav.appendChild(label);
-    for (const f of items) {
-      nav.appendChild(makeNavItem(f));
-      totalShown++;
-    }
+    nav.appendChild(createGroupBlock(g, items.length, GROUP_COLORS[g] || '#818cf8', items, { collapsible: !q }));
+    totalShown += items.length;
   }
 
   if (!totalShown) {
@@ -154,6 +209,16 @@ function updateFeatureHint(f) {
   } else {
     $('dz-hint').textContent = `支持单文件，也可多选或拖入多个文件批量处理（${extsText}）`;
   }
+
+  const fmtBox = $('dz-formats');
+  if (fmtBox) {
+    const uniq = Array.from(new Set(f.accept.map((e) => (e === 'jpeg' ? 'jpg' : e === 'markdown' ? 'md' : e).toUpperCase())));
+    const shown = uniq.slice(0, 6);
+    const rest = uniq.length - shown.length;
+    fmtBox.innerHTML = shown.map((ext) => `<span class="dz-ext">${ext}</span>`).join('')
+      + (rest > 0 ? `<span class="dz-ext">+${rest}</span>` : '')
+      + '<span class="dz-kbd"><kbd>Ctrl</kbd><kbd>O</kbd> 选择文件</span>';
+  }
 }
 
 function selectFeature(f, { forceClear = false } = {}) {
@@ -162,6 +227,19 @@ function selectFeature(f, { forceClear = false } = {}) {
   document.querySelectorAll('.nav-item').forEach((el) => el.classList.toggle('active', el.dataset.id === f.id));
   $('feature-title').textContent = f.name;
   $('feature-desc').textContent = f.desc;
+
+  const grpColor = GROUP_COLORS[f.group] || '#818cf8';
+  const iconBox = $('feature-icon-box');
+  if (iconBox) {
+    iconBox.style.setProperty('--grp', grpColor);
+    iconBox.innerHTML = renderSvgIcon(f.icon);
+  }
+  const grpPill = $('feature-group-pill');
+  if (grpPill) {
+    grpPill.textContent = f.group;
+    grpPill.style.setProperty('--grp', grpColor);
+  }
+
   updateFeatureHint(f);
 
   if (forceClear || f === prevFeature) {
@@ -394,11 +472,15 @@ function renderFileCard(ext) {
         ? 'Word 文档 (.docx)'
         : (info.docType === 'pptx'
           ? 'PPT 演示文稿 (.pptx)'
-          : (info.docType === 'pdf' ? 'PDF 文档 (.pdf)' : 'Markdown 文档')),
+          : (info.docType === 'pdf'
+            ? 'PDF 文档 (.pdf)'
+            : (info.docType === 'html' ? 'HTML 网页 (.html)' : 'Markdown 文档'))),
     );
     const st = info.docStats || {};
     if (info.docType === 'pdf') {
       parts.push(`共 ${info.pageCount || 0} 页`);
+    } else if (info.docType === 'html') {
+      if (info.title) parts.push(info.title);
     } else if (info.docType === 'md' && info.imageCount > 0) {
       const sub = [];
       if (st.local) sub.push(`本地 ${st.local}`);
@@ -420,10 +502,10 @@ function renderFileCard(ext) {
     if (info.width) parts.push(`分辨率 ${info.width}×${info.height}`);
     if (!isImg && info.duration > 0) parts.push(`时长 ${fmtDur(info.duration)}`);
     if (!isImg && info.fps > 0) parts.push(`${Math.round(info.fps)} fps`);
-    if (ext === 'gif' && info.nbFrames > 0) parts.push(`${info.nbFrames} 帧`);
+    if ((ext === 'gif' || ext === 'apng') && info.nbFrames > 0) parts.push(`${info.nbFrames} 帧`);
   }
   parts.push(`大小 ${fmtSize(info.size)}`);
-  if (!isDoc && !isImg && !['mp3', 'm4a', 'wav', 'flac'].includes(ext)) {
+  if (!isDoc && !isImg && !AUDIO_EXTS.includes(ext)) {
     parts.push(info.hasAudio ? '含音轨' : '无音轨');
   }
   $('file-info').textContent = parts.join(' · ');
@@ -431,18 +513,21 @@ function renderFileCard(ext) {
   const box = $('preview-box');
   box.innerHTML = '';
   box.style.display = '';
-  const url = encodeURI('file:///' + file.path.replace(/\\/g, '/'));
+  const url = toFileUrl(file.path);
   const zoomBtn = $('btn-zoom-preview');
   if (isDoc) {
-    const icon = info.docType === 'docx' ? '📘' : (info.docType === 'pptx' ? '📊' : (info.docType === 'pdf' ? '📄' : '📝'));
+    const icon = info.docType === 'docx' ? '📘' : (info.docType === 'pptx' ? '📊' : (info.docType === 'pdf' ? '📄' : (info.docType === 'html' ? '🌐' : '📝')));
     box.innerHTML = `<div class="no-preview">${icon}</div>`;
     zoomBtn.classList.add('hidden');
-  } else if (ext === 'gif' || ext === 'webp' || ext === 'svg' || IMG_EXTS.includes(ext)) {
+  } else if (ext === 'gif' || ext === 'apng' || ext === 'webp' || ext === 'svg' || IMG_EXTS.includes(ext)) {
     box.innerHTML = `<img${ext === 'svg' ? ' class="is-svg"' : ''} src="${url}" alt="预览" />`;
     zoomBtn.classList.remove('hidden');
   } else if (['mp4', 'webm', 'mkv', 'mov', 'm4v'].includes(ext)) {
     box.innerHTML = `<video src="${url}" controls preload="metadata"></video>`;
     zoomBtn.classList.remove('hidden');
+  } else if (AUDIO_EXTS.includes(ext)) {
+    box.innerHTML = `<audio src="${url}" controls preload="metadata" style="width:100%;max-width:460px"></audio>`;
+    zoomBtn.classList.add('hidden');
   } else {
     box.innerHTML = `<div class="no-preview">🎧</div>`;
     zoomBtn.classList.add('hidden');
@@ -478,6 +563,7 @@ function renderMultiCard() {
     row.appendChild(nameEl);
 
     const metaParts = [];
+    if (item.info?.docType === 'pdf') metaParts.push(`${item.info.pageCount || 0} 页`);
     if (item.info?.width) metaParts.push(`${item.info.width}×${item.info.height}`);
     if (item.info?.duration > 0) metaParts.push(fmtDur(item.info.duration));
     metaParts.push(fmtSize(item.info?.size));
@@ -541,9 +627,57 @@ function renderBatchHeader() {
   $('file-name').title = batchFiles.map((f) => f.path).join('\n');
   const totalSize = batchFiles.reduce((s, f) => s + (f.info?.size || 0), 0);
   const totalDur = batchFiles.reduce((s, f) => s + (f.info?.duration || 0), 0);
-  $('file-info').textContent = `顺序处理 · 总大小 ${fmtSize(totalSize)}`
+  const isParallel = currentFeature.group === '图片' || currentFeature.group === 'SVG';
+  $('file-info').textContent = `${isParallel ? '并发处理' : '顺序处理'} · 总大小 ${fmtSize(totalSize)}`
     + (totalDur > 0 ? ` · 总时长 ${fmtDur(totalDur)}` : '')
     + ` · 输出保存至${outModeText()}`;
+}
+
+const BATCH_SHOW_PCT_IDS = new Set([
+  'compressGif', 'imageConvert', 'imageCompressTarget', 'compressTarget',
+  'svgOptimize', 'imageToSvg', 'docCompressImages', 'docRepackImages', 'docCleanupMedia',
+]);
+
+function applyBatchStatusEl(statusEl, item) {
+  statusEl.className = 'batch-status';
+  if (item.status === 'running') {
+    statusEl.classList.add('run');
+    statusEl.textContent = `处理中 ${Math.round((item.progress || 0) * 100)}%`;
+    statusEl.title = '';
+  } else if (item.status === 'done') {
+    statusEl.classList.add('ok');
+    if (item.outputType === 'dir') {
+      statusEl.textContent = item.extractSummary
+        ? `✅ 提取 ${item.extractSummary.savedCount} 张图`
+        : '✅ 已导出';
+    } else if (BATCH_SHOW_PCT_IDS.has(currentFeature.id) && item.info?.size && item.outSize) {
+      const pct = Math.round((1 - item.outSize / item.info.size) * 100);
+      statusEl.textContent = pct > 0
+        ? `✅ ${fmtSize(item.outSize)} (-${pct}%)`
+        : `✅ ${fmtSize(item.outSize)}`;
+    } else {
+      statusEl.textContent = `✅ ${fmtSize(item.outSize)}`;
+    }
+    statusEl.title = item.output || '';
+  } else if (item.status === 'error') {
+    statusEl.classList.add('err');
+    statusEl.textContent = '❌ 失败';
+    statusEl.title = item.error || '处理失败';
+  } else if (item.status === 'cancelled') {
+    statusEl.classList.add('err');
+    statusEl.textContent = '已取消';
+    statusEl.title = '';
+  } else {
+    statusEl.textContent = '待处理';
+    statusEl.title = '';
+  }
+}
+
+function updateBatchItemStatus(idx) {
+  const item = batchFiles?.[idx];
+  if (!item) return;
+  const statusEl = document.querySelector(`#batch-list .batch-item[data-idx="${idx}"] .batch-status`);
+  if (statusEl) applyBatchStatusEl(statusEl, item);
 }
 
 function renderBatchList() {
@@ -555,8 +689,6 @@ function renderBatchList() {
   }
   listEl.classList.remove('hidden');
   listEl.innerHTML = '';
-
-  const showPctIds = new Set(['compressGif', 'imageConvert', 'imageCompressTarget', 'compressTarget', 'svgOptimize', 'imageToSvg', 'docCompressImages', 'docRepackImages', 'docCleanupMedia']);
 
   batchFiles.forEach((item, idx) => {
     const row = document.createElement('div');
@@ -570,7 +702,9 @@ function renderBatchList() {
     row.appendChild(nameEl);
 
     const metaParts = [];
-    if (item.info?.isDoc) metaParts.push(`${item.info.imageCount || 0} 张图`);
+    if (item.info?.isDoc) {
+      metaParts.push(item.info.docType === 'pdf' ? `${item.info.pageCount || 0} 页` : `${item.info.imageCount || 0} 张图`);
+    }
     if (item.info?.width) metaParts.push(`${item.info.width}×${item.info.height}`);
     if (item.info?.duration > 0) metaParts.push(fmtDur(item.info.duration));
     metaParts.push(fmtSize(item.info?.size));
@@ -580,35 +714,7 @@ function renderBatchList() {
     row.appendChild(metaEl);
 
     const statusEl = document.createElement('div');
-    statusEl.className = 'batch-status';
-    if (item.status === 'running') {
-      statusEl.classList.add('run');
-      statusEl.textContent = `处理中 ${Math.round((item.progress || 0) * 100)}%`;
-    } else if (item.status === 'done') {
-      statusEl.classList.add('ok');
-      if (item.outputType === 'dir') {
-        statusEl.textContent = item.extractSummary
-          ? `✅ 提取 ${item.extractSummary.savedCount} 张图`
-          : '✅ 已导出';
-      } else if (showPctIds.has(currentFeature.id) && item.info?.size && item.outSize) {
-        const pct = Math.round((1 - item.outSize / item.info.size) * 100);
-        statusEl.textContent = pct > 0
-          ? `✅ ${fmtSize(item.outSize)} (-${pct}%)`
-          : `✅ ${fmtSize(item.outSize)}`;
-      } else {
-        statusEl.textContent = `✅ ${fmtSize(item.outSize)}`;
-      }
-      statusEl.title = item.output || '';
-    } else if (item.status === 'error') {
-      statusEl.classList.add('err');
-      statusEl.textContent = '❌ 失败';
-      statusEl.title = item.error || '处理失败';
-    } else if (item.status === 'cancelled') {
-      statusEl.classList.add('err');
-      statusEl.textContent = '已取消';
-    } else {
-      statusEl.textContent = '待处理';
-    }
+    applyBatchStatusEl(statusEl, item);
     row.appendChild(statusEl);
 
     if (item.status === 'done' && item.output) {
@@ -646,6 +752,9 @@ function clearFile() {
   batchFiles = null;
   batchRunningIndex = -1;
   batchAborted = false;
+  batchTaskIndexMap.clear();
+  pendingBatchIndices.length = 0;
+  activeBatchTaskIds.clear();
   window.__crop = null;
   window.__secondFile = null;
   window.__secondInfo = null;
@@ -708,6 +817,21 @@ async function runTask() {
   }
 }
 
+function computeBatchProgress() {
+  if (!batchFiles?.length) return { overall: 0, doneCount: 0 };
+  let sum = 0;
+  let doneCount = 0;
+  for (const b of batchFiles) {
+    if (b.status === 'done' || b.status === 'error' || b.status === 'cancelled') {
+      sum += 1;
+      doneCount++;
+    } else if (b.status === 'running') {
+      sum += Math.max(0, Math.min(1, b.progress || 0));
+    }
+  }
+  return { overall: sum / batchFiles.length, doneCount };
+}
+
 async function runBatchTask() {
   const fieldValues = collectFieldValues();
   try {
@@ -727,42 +851,76 @@ async function runBatchTask() {
 
   batchAborted = false;
   batchRunningIndex = 0;
+  batchTaskIndexMap.clear();
+  pendingBatchIndices.length = 0;
+  activeBatchTaskIds.clear();
   taskStartTime = Date.now();
   setRunning(true);
   $('result-card').classList.add('hidden');
   renderBatchList();
 
-  try {
-    for (let i = 0; i < batchFiles.length; i++) {
-      if (batchAborted) {
-        batchFiles[i].status = 'cancelled';
-        continue;
-      }
+  const isLightweight = currentFeature.group === '图片' || currentFeature.group === 'SVG';
+  const concurrency = isLightweight ? Math.min(3, batchFiles.length) : 1;
+  let nextIdx = 0;
+
+  const updateOverall = (activeName) => {
+    const { overall, doneCount } = computeBatchProgress();
+    const shownIdx = Math.min(batchFiles.length, doneCount + 1);
+    window.api.setProgressBar(overall);
+    setProgress(
+      overall,
+      `批量处理 (${shownIdx}/${batchFiles.length}) ${Math.round(overall * 100)}%`
+        + (activeName ? ` · ${activeName}` : '')
+        + fmtEta(overall),
+    );
+  };
+
+  const runWorker = async () => {
+    while (!batchAborted) {
+      const i = nextIdx++;
+      if (i >= batchFiles.length) break;
+
       batchRunningIndex = i;
       const item = batchFiles[i];
       item.status = 'running';
       item.progress = 0;
-      renderBatchList();
+      updateBatchItemStatus(i);
 
       const name = item.path.split(/[\\/]/).pop();
-      window.api.setProgressBar(i / batchFiles.length);
-      setProgress(i / batchFiles.length, `批量处理 (${i + 1}/${batchFiles.length}) 0% · ${name}${fmtEta(i / batchFiles.length)}`);
+      updateOverall(name);
 
+      const clientTid = `tb_${Date.now()}_${i}_${Math.floor(Math.random() * 1e5)}`;
       let itemParams;
       try {
-        itemParams = withGlobalPrefs(await currentFeature.collect(fieldValues, { file: item }), { __batchItem: true });
+        itemParams = withGlobalPrefs(
+          await currentFeature.collect(fieldValues, { file: item }),
+          { __batchItem: true, __clientTaskId: clientTid },
+        );
       } catch (err) {
         item.status = 'error';
         item.error = err.message;
-        renderBatchList();
+        updateBatchItemStatus(i);
+        updateOverall();
         continue;
       }
 
+      batchTaskIndexMap.set(clientTid, i);
+      activeBatchTaskIds.add(clientTid);
+      pendingBatchIndices.push(i);
       const res = await window.api.startTask(currentFeature.id, itemParams);
+      const pIdx = pendingBatchIndices.indexOf(i);
+      if (pIdx !== -1) pendingBatchIndices.splice(pIdx, 1);
+      batchTaskIndexMap.delete(clientTid);
+      activeBatchTaskIds.delete(clientTid);
+      if (res.taskId) {
+        batchTaskIndexMap.delete(res.taskId);
+        activeBatchTaskIds.delete(res.taskId);
+      }
+
       if (res.cancelled || batchAborted) {
         item.status = 'cancelled';
         batchAborted = true;
-        for (let k = i + 1; k < batchFiles.length; k++) batchFiles[k].status = 'cancelled';
+        updateBatchItemStatus(i);
         break;
       } else if (res.ok) {
         item.status = 'done';
@@ -776,8 +934,25 @@ async function runBatchTask() {
         item.status = 'error';
         item.error = res.error || '处理失败';
       }
+      updateBatchItemStatus(i);
+      updateOverall();
+    }
+  };
+
+  try {
+    await Promise.all(Array.from({ length: concurrency }, () => runWorker()));
+    if (batchAborted) {
+      for (let k = 0; k < batchFiles.length; k++) {
+        if (batchFiles[k].status === 'pending' || batchFiles[k].status === 'running') {
+          batchFiles[k].status = 'cancelled';
+          updateBatchItemStatus(k);
+        }
+      }
     }
   } finally {
+    pendingBatchIndices.length = 0;
+    batchTaskIndexMap.clear();
+    activeBatchTaskIds.clear();
     window.api.setProgressBar(-1);
   }
 
@@ -906,12 +1081,12 @@ function showBatchSummary() {
 }
 
 function renderMediaTag(filePath, ext) {
-  const url = encodeURI('file:///' + filePath.replace(/\\/g, '/'));
-  if (['gif', 'webp', 'ico', 'svg', ...IMG_EXTS].includes(ext)) {
+  const url = toFileUrl(filePath);
+  if (['gif', 'apng', 'webp', 'ico', 'svg', ...IMG_EXTS].includes(ext)) {
     return `<img${ext === 'svg' ? ' class="is-svg"' : ''} src="${url}" alt="预览" />`;
   }
   if (['mp4', 'webm', 'mkv', 'mov', 'm4v'].includes(ext)) return `<video src="${url}" controls preload="metadata"></video>`;
-  if (['mp3', 'm4a', 'wav', 'flac', 'aac', 'ogg'].includes(ext)) return `<audio src="${url}" controls preload="metadata"></audio>`;
+  if (AUDIO_EXTS.includes(ext)) return `<audio src="${url}" controls preload="metadata"></audio>`;
   return '';
 }
 
@@ -929,7 +1104,9 @@ async function showSuccess(res) {
 
   if (res.outputType === 'dir') {
     const count = await window.api.countDir(res.output);
-    const unitLabel = currentFeature.id === 'splitVideo' ? '个片段' : (currentFeature.id === 'imageSplit' ? '张切图' : '张图片');
+    const unitLabel = currentFeature.id === 'splitVideo'
+      ? '个片段'
+      : (currentFeature.id === 'pdfSplit' ? '份 PDF' : (currentFeature.id === 'imageSplit' ? '张切图' : '张图片'));
     line = `✅ 已导出 ${count} ${unitLabel}到文件夹`;
     if (res.extractSummary) {
       const es = res.extractSummary;
@@ -951,11 +1128,33 @@ async function showSuccess(res) {
       if (es.failedRemote) notes.push(`下载失败 ${es.failedRemote} 张`);
       if (es.pptAvSkipped) notes.push(`未提取 PPT 音视频 ${es.pptAvSkipped} 个`);
       if (notes.length) line += `<br /><span class="muted" style="font-size:12px">ℹ️ ${notes.join(' · ')}</span>`;
+    } else if (res.pdfToImagesSummary) {
+      const ps = res.pdfToImagesSummary;
+      line = `✅ PDF 转图片完成：共导出 ${ps.exportedCount} / ${ps.totalPages} 页高清 ${String(ps.format || 'png').toUpperCase()} 图片`;
+    } else if (res.pdfSummary?.action === 'burst') {
+      const ps = res.pdfSummary;
+      line = `✅ PDF 拆分完成：共拆分为 ${ps.fileCount} 份独立 PDF 文件`;
     }
   } else {
     outSize = await window.api.statFile(res.output);
     line = `✅ 完成：${escHtml(name)}（${fmtSize(outSize)}）`;
-    if (res.docCompressSummary) {
+    if (res.silenceSummary) {
+      const ss = res.silenceSummary;
+      line = `✅ 去静音完成：共剪除 ${ss.removedCount} 处停顿，时长 ${fmtDur(ss.origDuration)} → ${fmtDur(ss.newDuration)}（缩短 ${Number(ss.savedSec || 0).toFixed(1)}s）`;
+    } else if (res.docToPdfSummary) {
+      const ds = res.docToPdfSummary;
+      line = `✅ 排版转 PDF 完成：${escHtml(ds.title || name)}（${fmtSize(outSize)}）`;
+    } else if (res.animSpriteSummary) {
+      const as = res.animSpriteSummary;
+      line = as.mode === 'toSprite'
+        ? `✅ 雪碧图生成完成：${as.cols}×${as.rows} 网格共 ${as.frames} 帧（${fmtSize(outSize)}）`
+        : `✅ 雪碧图合成动图完成：${as.frames} 帧 ${String(as.outFormat || outExt).toUpperCase()}（${fmtSize(outSize)}）`;
+    } else if (res.pdfToImagesSummary) {
+      const ps = res.pdfToImagesSummary;
+      line = ps.mode === 'longImage'
+        ? `✅ PDF 长图拼接完成：共合并 ${ps.exportedCount} 页（${fmtSize(outSize)}）`
+        : `✅ PDF 转图片完成：共导出 ${ps.exportedCount} / ${ps.totalPages} 页高清 ${String(ps.format || 'png').toUpperCase()} 图片`;
+    } else if (res.docCompressSummary) {
       const ds = res.docCompressSummary;
       const docLbl = ds.docType === 'pptx' ? 'PPT' : 'Word';
       const vNote = ds.videoCompressedCount ? `，含视频 ${ds.videoCompressedCount} 个` : '';
@@ -1026,8 +1225,16 @@ async function showSuccess(res) {
       }
     } else if (res.pdfSummary) {
       const ps = res.pdfSummary;
-      const modeName = ps.pageSize === 'a4l' ? 'A4 横向' : (ps.pageSize === 'fit' ? '按原图尺寸自适应' : 'A4 竖向');
-      line = `✅ PDF 合成完成：共 ${ps.pageCount} 页（${modeName}，${fmtSize(outSize)}）`;
+      if (ps.action === 'merge') {
+        line = `✅ PDF 合并完成：${ps.fileCount} 份文档共合并为 ${ps.pageCount} 页（${fmtSize(outSize)}）`;
+      } else if (ps.action === 'extract' || ps.action === 'remove') {
+        line = `✅ PDF 页面处理完成：共输出 ${ps.pageCount} / ${ps.totalPages} 页（${fmtSize(outSize)}）`;
+      } else if (ps.action === 'burst') {
+        line = `✅ PDF 拆分完成：共拆分为 ${ps.fileCount} 份独立 PDF 文件`;
+      } else {
+        const modeName = ps.pageSize === 'a4l' ? 'A4 横向' : (ps.pageSize === 'fit' ? '按原图尺寸自适应' : 'A4 竖向');
+        line = `✅ PDF 合成完成：共 ${ps.pageCount} 页（${modeName}，${fmtSize(outSize)}）`;
+      }
     } else if ((currentFeature.id === 'compressGif' || currentFeature.id === 'imageConvert' || currentFeature.id === 'svgOptimize') && file?.info.size) {
       if (outSize < file.info.size) {
         const pct = Math.round((1 - outSize / file.info.size) * 100);
@@ -1062,7 +1269,9 @@ async function showSuccess(res) {
       const previewExts = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'avif', 'svg']);
       const rawList = res.extractSummary?.files?.length
         ? res.extractSummary.files
-        : await window.api.listDir(res.output, 200);
+        : (res.pdfToImagesSummary?.files?.length
+          ? res.pdfToImagesSummary.files
+          : await window.api.listDir(res.output, 200));
       thumbPaths = rawList.filter((p) => previewExts.has(p.split('.').pop().toLowerCase()));
       if (thumbPaths.length) {
         const shownThumbs = thumbPaths.slice(0, 300);
@@ -1084,7 +1293,7 @@ async function showSuccess(res) {
             </div>
             <div class="result-thumb-grid">
               ${shownThumbs.map((p, idx) => {
-                const u = encodeURI('file:///' + p.replace(/\\/g, '/'));
+                const u = toFileUrl(p);
                 const fn = escHtml(p.split(/[\\/]/).pop());
                 const isSvg = p.toLowerCase().endsWith('.svg');
                 const replaceOpsHtml = canRepackDir
@@ -1115,11 +1324,11 @@ async function showSuccess(res) {
   } else {
     const outTag = renderMediaTag(res.output, outExt);
     if (outTag) {
-      hasVisualOut = ['gif', 'webp', 'ico', 'svg', ...IMG_EXTS, 'mp4', 'webm', 'mkv', 'mov', 'm4v'].includes(outExt);
+      hasVisualOut = ['gif', 'apng', 'webp', 'ico', 'svg', ...IMG_EXTS, 'mp4', 'webm', 'mkv', 'mov', 'm4v'].includes(outExt);
       previewHtml = `<div class="result-preview-wrap" id="result-preview-wrap"><div class="result-media-card">${outTag}</div></div>`;
       if (file?.path) {
         srcExt = file.path.split('.').pop().toLowerCase();
-        const isSrcVisual = ['gif', 'webp', 'svg', ...IMG_EXTS, 'mp4', 'webm', 'mkv', 'mov', 'm4v'].includes(srcExt);
+        const isSrcVisual = ['gif', 'apng', 'webp', 'svg', ...IMG_EXTS, 'mp4', 'webm', 'mkv', 'mov', 'm4v'].includes(srcExt);
         canCompare = hasVisualOut && isSrcVisual;
       }
     }
@@ -1367,7 +1576,7 @@ async function showSuccess(res) {
           const imgEl = card.querySelector('.result-thumb-img-wrap img');
           if (imgEl) {
             imgEl.classList.toggle('is-svg', r.newPath.toLowerCase().endsWith('.svg'));
-            imgEl.src = `${encodeURI('file:///' + r.newPath.replace(/\\/g, '/'))}?t=${Date.now()}`;
+            imgEl.src = `${toFileUrl(r.newPath)}?t=${Date.now()}`;
             imgEl.alt = r.replacedName;
           }
           const nameEl = card.querySelector('.result-thumb-name');
@@ -1552,10 +1761,10 @@ function switchAppMode(nextMode) {
   $('workflow-main').classList.toggle('hidden', appMode !== 'workflow');
   $('nav-search').placeholder = appMode === 'workflow'
     ? '搜索节点（点击或拖入画布）'
-    : '搜索功能（gif / 图片 / svg / word / md…）';
+    : '搜索功能（gif / 图片 / pdf / 去静音 / word…）';
   $('sidebar-foot').textContent = appMode === 'workflow'
     ? '滚轮缩放 · 拖线松手建节点 · Ctrl+Enter 运行'
-    : '本地 FFmpeg 9.0 · Ctrl+O 选文件 · 空格播放';
+    : '本地 FFmpeg 9.0 · Ctrl+O 选文件 · Ctrl+V 粘贴 · 空格播放';
   renderNav();
   if (appMode === 'workflow') {
     wfController?.onActivated?.();
@@ -1566,6 +1775,27 @@ async function sendFilesToWorkflow(paths) {
   if (!paths?.length) return;
   switchAppMode('workflow');
   await wfController?.receiveFilesFromSingle?.(paths);
+}
+
+async function onSendFeatureToWorkflow(feature, fieldValues) {
+  if (running || wfController?.isRunning?.()) {
+    return toast('当前有任务正在运行中，请先等待完成或停止', true);
+  }
+  const currentPaths = file
+    ? [file.path]
+    : (batchFiles?.length ? batchFiles.map((b) => b.path) : (files?.length ? files.map((f) => f.path) : []));
+  switchAppMode('workflow');
+  if (wfController?.importSingleToolRun) {
+    await wfController.importSingleToolRun({
+      featureId: feature.id,
+      fieldValues,
+      files: currentPaths,
+    });
+  } else if (currentPaths.length) {
+    await wfController?.receiveFilesFromSingle?.(currentPaths);
+  } else {
+    toast(`已切换到节点画布（${feature.name}）`);
+  }
 }
 
 function initWorkflowBridge() {
@@ -1624,6 +1854,73 @@ function initWorkflowBridge() {
 // 事件绑定与启动
 // ---------------------------------------------------------------------------
 
+function isEditableFocused() {
+  const ae = document.activeElement;
+  if (!ae) return false;
+  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(ae.tagName)) return true;
+  if (ae.isContentEditable) return true;
+  return false;
+}
+
+let lastPasteHandledAt = 0;
+
+async function handleGlobalPaste(initialPaths = []) {
+  lastPasteHandledAt = Date.now();
+  let paths = (initialPaths || []).filter(Boolean);
+  let clipSource = '';
+  if (!paths.length && window.api.readClipboardMedia) {
+    try {
+      const clip = await window.api.readClipboardMedia();
+      if (Array.isArray(clip)) paths = clip.filter(Boolean);
+      else if (clip?.paths?.length) {
+        paths = clip.paths.filter(Boolean);
+        clipSource = clip.source || '';
+      } else if (clip?.path) paths = [clip.path];
+      else if (clip?.ok === false && clip?.error) {
+        toast(clip.error, true);
+        return;
+      }
+    } catch {}
+  }
+  if (!paths.length) return;
+
+  if (appMode === 'workflow') {
+    if (wfController?.pasteFiles) {
+      const created = await wfController.pasteFiles(paths);
+      if (created) {
+        toast(clipSource === 'image' ? '已从剪贴板图片创建加载节点' : `已粘贴 ${paths.length} 个文件到画布`);
+      }
+    } else {
+      await wfController?.receiveFilesFromSingle?.(paths);
+    }
+    return;
+  }
+
+  if (running) return toast('有任务正在进行中', true);
+
+  const exts = paths.map((p) => p.split('.').pop().toLowerCase());
+  const accepted = exts.some((ext) => currentFeature.accept.includes(ext));
+  if (accepted) {
+    await useFiles(paths, Boolean(file || batchFiles?.length || files?.length));
+    return;
+  }
+
+  const hasImage = exts.some((ext) => ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'avif'].includes(ext));
+  if (hasImage) {
+    const imgFeat = FEATURES.find((f) => f.id === 'imageConvert');
+    if (imgFeat && currentFeature.id === 'videoToGif' && !file && !batchFiles?.length && !files?.length) {
+      selectFeature(imgFeat, { forceClear: true });
+      await useFiles(paths);
+      toast('已自动切换至「格式转换与压缩」并载入粘贴的图片');
+    } else {
+      toast('剪贴板截图已识别，请切换到图片/文档功能后粘贴，或直接切换到图片转换', true);
+    }
+    return;
+  }
+
+  toast(`当前功能不支持 .${exts[0]} 文件`, true);
+}
+
 function bindEvents() {
   $('nav-search').oninput = (e) => {
     navSearchQuery = e.target.value;
@@ -1674,17 +1971,36 @@ function bindEvents() {
 
   $('btn-run').onclick = runTask;
   $('btn-cancel').onclick = () => {
-    if (batchFiles?.length && running) batchAborted = true;
+    if (batchFiles?.length && running) {
+      batchAborted = true;
+      for (const tid of activeBatchTaskIds) window.api.cancelTask(tid);
+    }
     if (currentTaskId) window.api.cancelTask(currentTaskId);
   };
 
+  document.addEventListener('paste', (e) => {
+    if (isEditableFocused()) return;
+    const rawFiles = e.clipboardData?.files;
+    const paths = rawFiles?.length ? [...rawFiles].map((f) => window.api.getPath(f)).filter(Boolean) : [];
+    e.preventDefault();
+    handleGlobalPaste(paths);
+  });
+
   document.addEventListener('keydown', (e) => {
+    if (e.isComposing) return;
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && e.key.toLowerCase() === 'v' && !isEditableFocused()) {
+      const triggeredAt = Date.now();
+      setTimeout(() => {
+        if (Date.now() - lastPasteHandledAt > 80 && triggeredAt - lastPasteHandledAt > 80) {
+          handleGlobalPaste([]);
+        }
+      }, 40);
+    }
     if (appMode === 'workflow') {
       wfController?.handleKeyDown?.(e);
       return;
     }
-    if (e.isComposing) return;
-    const mod = e.ctrlKey || e.metaKey;
     if (mod && e.key.toLowerCase() === 'o') {
       e.preventDefault();
       if (running) return toast('有任务正在进行中', true);
@@ -1817,18 +2133,33 @@ window.addEventListener('DOMContentLoaded', () => {
       return;
     }
     if (!running) return;
-    if (batchFiles?.length && batchRunningIndex >= 0 && batchRunningIndex < batchFiles.length) {
-      const item = batchFiles[batchRunningIndex];
-      item.progress = ratio;
-      const overall = (batchRunningIndex + ratio) / batchFiles.length;
-      const name = item.path.split(/[\\/]/).pop();
-      setProgress(
-        overall,
-        `批量处理 (${batchRunningIndex + 1}/${batchFiles.length}) ${Math.round(ratio * 100)}% · ${name}${fmtEta(overall)}`,
-      );
-      window.api.setProgressBar(overall);
-      const statusEl = document.querySelector(`#batch-list .batch-item[data-idx="${batchRunningIndex}"] .batch-status`);
-      if (statusEl) statusEl.textContent = `处理中 ${Math.round(ratio * 100)}%`;
+    if (batchFiles?.length) {
+      activeBatchTaskIds.add(taskId);
+      let idx = batchTaskIndexMap.get(taskId);
+      if (idx === undefined) {
+        if (pendingBatchIndices.length > 0) {
+          idx = pendingBatchIndices.shift();
+          batchTaskIndexMap.set(taskId, idx);
+        } else if (batchRunningIndex >= 0 && batchRunningIndex < batchFiles.length) {
+          idx = batchRunningIndex;
+          batchTaskIndexMap.set(taskId, idx);
+        }
+      }
+      if (idx !== undefined && idx >= 0 && idx < batchFiles.length) {
+        const item = batchFiles[idx];
+        if (item.status === 'running') {
+          item.progress = ratio;
+          updateBatchItemStatus(idx);
+        }
+        const { overall, doneCount } = computeBatchProgress();
+        const shownIdx = Math.min(batchFiles.length, doneCount + 1);
+        const name = item.path.split(/[\\/]/).pop();
+        setProgress(
+          overall,
+          `批量处理 (${shownIdx}/${batchFiles.length}) ${Math.round(overall * 100)}% · ${name}${fmtEta(overall)}`,
+        );
+        window.api.setProgressBar(overall);
+      }
     } else {
       setProgress(ratio, `处理中 ${Math.round(ratio * 100)}%${fmtEta(ratio)}`);
     }

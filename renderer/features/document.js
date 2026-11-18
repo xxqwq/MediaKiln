@@ -266,6 +266,46 @@ window.VGT.DOC_FEATURES = [
     },
   },
   {
+    id: 'docToPdf', group: '文档', icon: '🖨️', name: 'MD / HTML 排版转 PDF',
+    desc: '离线导出 Markdown 或本地 HTML，支持标题目录、代码高亮、表格与页码',
+    accept: ['md', 'markdown', 'html', 'htm'],
+    fields: [
+      { key: 'theme', label: '排版主题（MD 生效）', type: 'chips', def: 'clean',
+        options: [
+          ['clean', '✨ 现代简洁（推荐）'],
+          ['github', '📘 GitHub 文档'],
+          ['warm', '📖 暖纸阅读'],
+          ['dark', '🌙 深色极客'],
+        ] },
+      { key: 'pageSize', label: '纸张尺寸', type: 'chips', def: 'a4p',
+        options: [
+          ['a4p', 'A4 竖向（推荐）'],
+          ['a4l', 'A4 横向'],
+          ['letter', 'Letter 美式'],
+        ] },
+      { key: 'margin', label: '页边距', type: 'chips', def: 'normal',
+        options: [
+          ['narrow', '窄边距'],
+          ['normal', '标准（推荐）'],
+          ['wide', '宽边距'],
+        ] },
+      { key: 'pageNumbers', label: '页脚页码', type: 'chips', def: 'yes',
+        options: [
+          ['yes', '显示页码'],
+          ['no', '隐藏页码'],
+        ] },
+    ],
+    collect(v, ctx) {
+      return {
+        input: ctx.file.path,
+        theme: v.theme || 'clean',
+        pageSize: v.pageSize || 'a4p',
+        margin: v.margin || 'normal',
+        pageNumbers: v.pageNumbers || 'yes',
+      };
+    },
+  },
+  {
     id: 'imagesToPdf', group: '文档', icon: '📄', name: '多图合并为 PDF',
     desc: '将多张扫描件/截图/照片离线高清合成为单份 PDF 文档，支持 A4 竖向、A4 横向及按图片原始尺寸自适应页面，支持上下调整页面顺序',
     accept: ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'avif'], multi: true,
@@ -298,6 +338,85 @@ window.VGT.DOC_FEATURES = [
         margin: v.margin ?? '20',
         quality: v.quality || 'high',
         bgColor: v.bgColor || '#ffffff',
+      };
+    },
+  },
+  {
+    id: 'pdfToImages', group: '文档', icon: '🖼️', name: 'PDF 转图片 / 长图',
+    desc: '将 PDF 文档离线高清渲染为逐页独立图片或一键拼接为纵向阅读长图，支持自定义页码范围',
+    accept: ['pdf'],
+    fields: [
+      { key: 'mode', label: '导出方式', type: 'chips', def: 'pages',
+        options: [
+          ['pages', '📂 逐页导出图片文件夹（推荐）'],
+          ['longImage', '📜 拼接为单张纵向长图'],
+        ] },
+      { key: 'format', label: '图片格式', type: 'chips', def: 'png',
+        options: [
+          ['png', 'PNG（文字最锐利，推荐）'],
+          ['jpg', 'JPG（体积小）'],
+          ['webp', 'WebP（高清轻量）'],
+        ] },
+      { key: 'dpiScale', label: '渲染清晰度', type: 'chips', def: '2',
+        options: [
+          ['1.5', '1.5× 标准 (150 DPI)'],
+          ['2', '2× 高清 (200 DPI，推荐)'],
+          ['3', '3× 超清印刷 (300 DPI)'],
+        ] },
+      { key: 'pageRange', label: '页码范围（留空导出全部页）', type: 'text', def: '',
+        placeholder: '例如：1-3, 5, 8-10（留空为全部页面）' },
+    ],
+    collect(v, ctx) {
+      return {
+        input: ctx.file.path,
+        mode: v.mode || 'pages',
+        format: v.format || 'png',
+        dpiScale: v.dpiScale || '2',
+        pageRange: String(v.pageRange || '').trim(),
+      };
+    },
+  },
+  {
+    id: 'pdfMerge', group: '文档', icon: '📚', name: 'PDF 合并',
+    desc: '将多份 PDF 文档按顺序无损合并为单份 PDF，支持上下调整文件合并顺序',
+    accept: ['pdf'], multi: true,
+    fields: [],
+    collect(_v, ctx) {
+      if (!ctx.files || ctx.files.length < 2) {
+        throw new Error('请至少选择 2 份 PDF 文件进行合并');
+      }
+      return { files: ctx.files.map((f) => f.path) };
+    },
+  },
+  {
+    id: 'pdfSplit', group: '文档', icon: '✂️', name: 'PDF 拆分 / 重排',
+    desc: '按输入顺序提取或重排页面、删除指定页，或按固定页数拆分为多份 PDF',
+    accept: ['pdf'],
+    fields: [
+      { key: 'mode', label: '拆分模式', type: 'chips', def: 'extract', fullWidth: true,
+        options: [
+          ['extract', '提取 / 重排页面'],
+          ['remove', '🗑️ 删除指定页并保留其余页'],
+          ['burst', '📂 按固定页数拆分为多个 PDF'],
+        ] },
+      { key: 'pageRange', label: '页码范围', type: 'text', def: '1',
+        placeholder: '例如 3, 1-2，按 3 → 1 → 2 输出',
+        showIf: (v) => v.mode !== 'burst' },
+      { key: 'everyN', label: '每几页拆成一份 PDF', type: 'number', def: '1', min: 1, max: 500, step: 1,
+        presets: [['1', '每 1 页一份'], ['2', '每 2 页一份'], ['5', '每 5 页一份'], ['10', '每 10 页一份']],
+        showIf: (v) => v.mode === 'burst' },
+    ],
+    collect(v, ctx) {
+      const mode = v.mode || 'extract';
+      const pageRange = String(v.pageRange || '').trim();
+      if (mode !== 'burst' && !pageRange) {
+        throw new Error('请输入要处理的页码范围（例如：1-3, 5）');
+      }
+      return {
+        input: ctx.file.path,
+        mode,
+        pageRange,
+        everyN: v.everyN || '1',
       };
     },
   },

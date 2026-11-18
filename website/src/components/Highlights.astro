@@ -1,5 +1,6 @@
 ---
 import { data, url, hasAsset } from '../lib/site';
+import { iconSvg } from '../lib/icons';
 const s = data.stats;
 const batchShot = hasAsset('screenshots/batch-queue.webp') ? 'screenshots/batch-queue.webp' : null;
 const cutoutShot = hasAsset('screenshots/image-cutout.webp') ? 'screenshots/image-cutout.webp' : null;
@@ -17,22 +18,22 @@ const docShot = ['screenshots/doc-extract.webp', 'screenshots/doc-extract-images
     <div class="bento">
       <!-- 隐私 -->
       <article class="card tile t-privacy reveal">
-        <div class="tile-icon">🔒</div>
+        <div class="tile-icon" style="--ic:#3dd68c" set:html={iconSvg('lock', 19)} />
         <h3>文件永远不离开你的电脑</h3>
         <p>所有处理都由本机 FFmpeg、Resvg、SVGO 完成，没有服务器，没有账号，断网也能用。合同截图、内部 PPT、私人视频都可以放心处理。</p>
         <div class="privacy-flow" aria-hidden="true">
-          <span class="pf-node">📁 你的文件</span>
+          <span class="pf-node"><Fragment set:html={iconSvg('folder', 13)} /><span>你的文件</span></span>
           <span class="pf-line"><i></i></span>
-          <span class="pf-node pf-core">💻 本机处理</span>
+          <span class="pf-node pf-core"><Fragment set:html={iconSvg('monitor', 13)} /><span>本机处理</span></span>
           <span class="pf-line"><i></i></span>
-          <span class="pf-node">✅ 成品</span>
-          <span class="pf-cloud">☁️ <s>上传</s></span>
+          <span class="pf-node"><Fragment set:html={iconSvg('checkCircle', 13)} /><span>成品</span></span>
+          <span class="pf-cloud"><Fragment set:html={iconSvg('cloudOff', 12)} /><span><s>上传</s></span></span>
         </div>
       </article>
 
       <!-- 批量 -->
       <article class="card tile t-batch reveal">
-        <div class="tile-icon">📦</div>
+        <div class="tile-icon" style="--ic:#8b84ff" set:html={iconSvg('package', 19)} />
         <h3>拖进一堆文件，批量处理</h3>
         <p>{s.batchFeatures} 个功能支持多文件队列：可以随时添加、移除、中途取消，单个文件失败不会影响其他文件。</p>
         {batchShot && (
@@ -47,14 +48,14 @@ const docShot = ['screenshots/doc-extract.webp', 'screenshots/doc-extract-images
               width="1440"
               height="900"
             />
-            <span class="shot-zoom-badge" aria-hidden="true">🔍 放大</span>
+            <span class="shot-zoom-badge" aria-hidden="true"><Fragment set:html={iconSvg('zoomIn', 12)} /><span>放大</span></span>
           </div>
         )}
       </article>
 
       <!-- 目标大小 -->
       <article class="card tile t-target reveal">
-        <div class="tile-icon">🎯</div>
+        <div class="tile-icon" style="--ic:#f472b6" set:html={iconSvg('target', 19)} />
         <h3>压到指定大小，一次到位</h3>
         <p>视频按码率反推，GIF 最多迭代 7 轮，图片用二分搜索画质，直接满足平台上传限制。</p>
         <div class="size-chips" aria-label="常用目标大小预设">
@@ -64,7 +65,7 @@ const docShot = ['screenshots/doc-extract.webp', 'screenshots/doc-extract-images
 
       <!-- 文档 -->
       <article class="card tile t-doc reveal">
-        <div class="tile-icon">📑</div>
+        <div class="tile-icon" style="--ic:#60a5fa" set:html={iconSvg('files', 19)} />
         <h3>Word / PPT 图片：提取、压缩、放回原位</h3>
         <p>自动识别 .docx / .pptx 里的所有图片，可以只处理指定章节或页面，原位压缩、打码、美化后再写回文档，文字和排版完全不变。</p>
         {docShot ? (
@@ -79,22 +80,22 @@ const docShot = ['screenshots/doc-extract.webp', 'screenshots/doc-extract-images
               width="1440"
               height="900"
             />
-            <span class="shot-zoom-badge" aria-hidden="true">🔍 放大</span>
+            <span class="shot-zoom-badge" aria-hidden="true"><Fragment set:html={iconSvg('zoomIn', 12)} /><span>放大</span></span>
           </div>
         ) : (
           <div class="doc-flow" aria-hidden="true">
-            <span class="df-file">📄 方案.pptx<em>含大量原图</em></span>
+            <span class="df-file"><strong><Fragment set:html={iconSvg('file', 13)} />方案.pptx</strong><em>含大量原图</em></span>
             <span class="df-arrow">→</span>
             <span class="df-imgs"><i></i><i></i><i></i><i></i></span>
             <span class="df-arrow">→</span>
-            <span class="df-file ok">📄 方案_已压缩.pptx<em>排版不变 · 体积更小</em></span>
+            <span class="df-file ok"><strong><Fragment set:html={iconSvg('file', 13)} />方案_已压缩.pptx</strong><em>排版不变 · 体积更小</em></span>
           </div>
         )}
       </article>
 
       <!-- 抠图 -->
       <article class="card tile t-cutout reveal">
-        <div class="tile-icon">🪄</div>
+        <div class="tile-icon" style="--ic:#2dd4bf" set:html={iconSvg('wand', 19)} />
         <h3>抠图、换背景、转矢量</h3>
         <p>纯色或绿幕一键抠成透明底，换纯色、渐变或图片背景；还能把 Logo 描摹成可以无限放大的 SVG。</p>
         {cutoutShot && (
@@ -109,29 +110,29 @@ const docShot = ['screenshots/doc-extract.webp', 'screenshots/doc-extract-images
               width="1440"
               height="900"
             />
-            <span class="shot-zoom-badge" aria-hidden="true">🔍 放大</span>
+            <span class="shot-zoom-badge" aria-hidden="true"><Fragment set:html={iconSvg('zoomIn', 12)} /><span>放大</span></span>
           </div>
         )}
       </article>
 
       <!-- 小卡片 -->
       <article class="card tile mini reveal">
-        <div class="tile-icon">⚡</div>
+        <div class="tile-icon" style="--ic:#f59e0b" set:html={iconSvg('zap', 18)} />
         <h3>GPU 硬件加速</h3>
         <p>自动检测 NVIDIA NVENC、Intel QSV、AMD AMF，视频编码提速数倍。</p>
       </article>
       <article class="card tile mini reveal">
-        <div class="tile-icon">🔍</div>
+        <div class="tile-icon" style="--ic:#67c7e6" set:html={iconSvg('search', 18)} />
         <h3>放大对比</h3>
         <p>并排同步缩放平移，或者拖动卷帘对比。视频、GIF、位图和 SVG 都支持。</p>
       </article>
       <article class="card tile mini reveal">
-        <div class="tile-icon">🧠</div>
+        <div class="tile-icon" style="--ic:#a78bfa" set:html={iconSvg('cpu', 18)} />
         <h3>增量智能缓存</h3>
         <p>只改了下游参数？上游已经算过的节点直接命中缓存，秒出结果。</p>
       </article>
       <article class="card tile mini reveal">
-        <div class="tile-icon">🛡️</div>
+        <div class="tile-icon" style="--ic:#3dd68c" set:html={iconSvg('shield', 18)} />
         <h3>防覆盖与隐私清理</h3>
         <p>输出自动编号不覆盖原文件；一键去掉照片和视频里的 GPS、设备型号等元数据。</p>
       </article>
@@ -150,10 +151,13 @@ const docShot = ['screenshots/doc-extract.webp', 'screenshots/doc-extract-images
   .tile h3 { font-size: 19px; line-height: 1.4; margin: 14px 0 8px; font-weight: 650; }
   .tile p { color: var(--text-2); font-size: 15px; }
   .tile-icon {
-    width: 42px; height: 42px; border-radius: 12px;
-    display: grid; place-items: center; font-size: 20px;
-    background: rgba(255, 255, 255, .055);
-    border: 1px solid var(--border-2);
+    width: 42px; height: 42px; border-radius: 11px;
+    display: grid; place-items: center;
+    color: var(--ic, var(--accent-hi));
+    background: rgba(255, 255, 255, .045);
+    background: linear-gradient(180deg, color-mix(in srgb, var(--ic, #8b84ff) 16%, transparent), color-mix(in srgb, var(--ic, #8b84ff) 5%, transparent));
+    border: 1px solid color-mix(in srgb, var(--ic, #8b84ff) 28%, rgba(255, 255, 255, .08));
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .10);
   }
 
   .shot-frame {
@@ -183,11 +187,14 @@ const docShot = ['screenshots/doc-extract.webp', 'screenshots/doc-extract-images
     position: absolute;
     right: 10px;
     bottom: 10px;
-    padding: 3px 9px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
     border-radius: 999px;
     font-size: 11.5px;
     color: #fff;
-    background: rgba(11, 12, 16, .76);
+    background: rgba(9, 10, 14, .82);
     border: 1px solid rgba(255, 255, 255, .16);
     backdrop-filter: blur(8px);
     opacity: 0;
@@ -228,14 +235,15 @@ const docShot = ['screenshots/doc-extract.webp', 'screenshots/doc-extract-images
     position: relative; padding-top: 26px;
   }
   .pf-node {
+    display: inline-flex; align-items: center; gap: 6px;
     font-size: 13px; padding: 7px 12px; border-radius: 9px;
     background: rgba(255, 255, 255, .05); border: 1px solid var(--border-2);
-    white-space: nowrap;
+    white-space: nowrap; color: var(--text-2);
   }
   .pf-core { border-color: rgba(61, 214, 140, .45); background: rgba(61, 214, 140, .08); color: #b9f5d6; }
   .pf-line { flex: 1; min-width: 24px; height: 2px; background: rgba(255, 255, 255, .08); position: relative; overflow: hidden; border-radius: 2px; }
   .pf-line i { position: absolute; inset: 0; width: 40%; background: linear-gradient(90deg, transparent, var(--success), transparent); animation: flow 2.2s linear infinite; }
-  .pf-cloud { position: absolute; top: 0; right: 0; font-size: 12px; color: var(--text-3); }
+  .pf-cloud { position: absolute; top: 0; right: 0; display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-3); }
   .pf-cloud s { text-decoration-color: #f47067; text-decoration-thickness: 2px; }
   @keyframes flow { from { transform: translateX(-100%); } to { transform: translateX(260%); } }
 
@@ -248,9 +256,10 @@ const docShot = ['screenshots/doc-extract.webp', 'screenshots/doc-extract-images
 
   .doc-flow { margin-top: 24px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
   .df-file {
-    display: flex; flex-direction: column; font-size: 13px; padding: 10px 14px; border-radius: 10px;
+    display: flex; flex-direction: column; gap: 2px; font-size: 13px; padding: 10px 14px; border-radius: 10px;
     background: rgba(96, 165, 250, .08); border: 1px solid rgba(96, 165, 250, .3);
   }
+  .df-file strong { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
   .df-file em { font-style: normal; font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; }
   .df-file.ok { background: rgba(61, 214, 140, .08); border-color: rgba(61, 214, 140, .35); }
   .df-file.ok em { color: var(--success); }

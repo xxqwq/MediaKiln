@@ -4,7 +4,11 @@ const { spawn } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const { isImagePath, isSvgPath, isDocPath, parseSvgDims } = require('./utils');
+let AsyncLocalStorageCls = null;
+try {
+  ({ AsyncLocalStorage: AsyncLocalStorageCls } = require('async_hooks'));
+} catch {}
+const { isImagePath, isSvgPath, isDocPath, isHtmlPath, parseSvgDims, mapConcurrent } = require('./utils');
 const { inspectDocument } = require('./doc-parser');
 const { resolveBinDir, ensureBinaries: ensureFfmpegBinaries } = require('./ffmpeg-bin');
 
@@ -88,14 +92,121 @@ function probeSvg(filePath) {
   };
 }
 
-function probePdf(filePath) {
-  const size = fs.statSync(filePath).size;
-  const buf = fs.readFileSync(filePath);
-  if (buf.subarray(0, 5).toString('ascii') !== '%PDF-') {
-    throw new Error('无效的 PDF 文件（缺少 %PDF- 文件头）');
+function extractPdfPagesCount(text) {
+  let maxCount = 0;
+  let m;
+  const re1 = /\/Type\s*\/Pages\b(?:(?!endobj)[\s\S]){0,4096}?\/Count\s+(\d+)/g;
+  while ((m = re1.exec(text)) !== null) {
+    const n = parseInt(m[1], 10);
+    if (n > maxCount) maxCount = n;
   }
-  const text = buf.toString('latin1');
-  const pageMatches = text.match(/\/Type\s*\/Page\b(?!s)/g);
+  const re2 = /\/Count\s+(\d+)(?:(?!endobj)[\s\S]){0,1024}?\/Type\s*\/Pages\b/g;
+  while ((m = re2.exec(text)) !== null) {
+    const n = parseInt(m[1], 10);
+    if (n > maxCount) maxCount = n;
+  }
+  return maxCount;
+}
+
+async function probePdf(filePath) {
+  const PDF_SMALL_LIMIT = 16 * 1024 * 1024;
+  const fh = await fs.promises.open(filePath, 'r');
+  try {
+    const stat = await fh.stat();
+    const size = stat.size;
+
+    const headProbe = Buffer.allocUnsafe(Math.min(1024, size));
+    let headRead = 0;
+    if (headProbe.length > 0) {
+      const r = await fh.read(headProbe, 0, headProbe.length, 0);
+      headRead = r.bytesRead;
+    }
+    if (headRead < 5 || headProbe.subarray(0, 5).toString('ascii') !== '%PDF-') {
+      throw new Error('无效的 PDF 文件（缺少 %PDF- 文件头）');
+    }
+
+    let pageCount = 0;
+    if (size <= PDF_SMALL_LIMIT) {
+      const buf = await fs.promises.readFile(filePath);
+      const text = buf.toString('latin1');
+      const pageMatches = text.match(/\/Type\s*\/Page\b(?!s)/g);
+      pageCount = pageMatches ? pageMatches.length : 0;
+      if (!pageCount) {
+        pageCount = extractPdfPagesCount(text);
+      }
+    } else {
+      // 大文件：先检查首尾 512KB 中的 /Type /Pages ... /Count N，避免整文件读入内存
+      const edgeSize = Math.min(512 * 1024, size);
+      const edgeBuf = Buffer.allocUnsafe(edgeSize);
+      const hRes = await fh.read(edgeBuf, 0, edgeSize, 0);
+      pageCount = extractPdfPagesCount(edgeBuf.subarray(0, hRes.bytesRead).toString('latin1'));
+
+      if (!pageCount && size > edgeSize) {
+        const tailPos = Math.max(0, size - edgeSize);
+        const tRes = await fh.read(edgeBuf, 0, edgeSize, tailPos);
+        pageCount = extractPdfPagesCount(edgeBuf.subarray(0, tRes.bytesRead).toString('latin1'));
+      }
+
+      // 回退到固定块流式扫描，内存恒定 ~1MB
+      if (!pageCount) {
+        const CHUNK_SIZE = 1024 * 1024;
+        const OVERLAP = 64;
+        const chunkBuf = Buffer.allocUnsafe(CHUNK_SIZE + OVERLAP);
+        let pos = 0;
+        let carryLen = 0;
+        let countedPages = 0;
+        let maxPages = 0;
+        while (pos < size) {
+          const toRead = Math.min(CHUNK_SIZE, size - pos);
+          const { bytesRead } = await fh.read(chunkBuf, carryLen, toRead, pos);
+          if (bytesRead <= 0) break;
+          const totalLen = carryLen + bytesRead;
+          const hasMore = pos + bytesRead < size;
+          const scanEnd = hasMore ? totalLen - OVERLAP : totalLen;
+          const text = chunkBuf.subarray(0, totalLen).toString('latin1');
+          const re = /\/Type\s*\/Page\b(?!s)/g;
+          let m;
+          while ((m = re.exec(text)) !== null) {
+            if (m.index < scanEnd) countedPages++;
+          }
+          const c = extractPdfPagesCount(text);
+          if (c > maxPages) maxPages = c;
+          if (hasMore && totalLen >= OVERLAP) {
+            chunkBuf.copy(chunkBuf, 0, totalLen - OVERLAP, totalLen);
+            carryLen = OVERLAP;
+          } else {
+            carryLen = 0;
+          }
+          pos += bytesRead;
+        }
+        pageCount = countedPages || maxPages;
+      }
+    }
+
+    return {
+      duration: 0,
+      size,
+      width: 0,
+      height: 0,
+      fps: 0,
+      isImage: false,
+      isSvg: false,
+      isDoc: true,
+      docType: 'pdf',
+      pageCount,
+      imageCount: 0,
+      videoCount: 0,
+      hasAudio: false,
+      hasSubtitles: false,
+      subCount: 0,
+    };
+  } finally {
+    await fh.close().catch(() => {});
+  }
+}
+
+function probeHtml(filePath) {
+  const size = fs.statSync(filePath).size;
   return {
     duration: 0,
     size,
@@ -105,8 +216,7 @@ function probePdf(filePath) {
     isImage: false,
     isSvg: false,
     isDoc: true,
-    docType: 'pdf',
-    pageCount: pageMatches ? pageMatches.length : 0,
+    docType: 'html',
     imageCount: 0,
     videoCount: 0,
     hasAudio: false,
@@ -118,7 +228,10 @@ function probePdf(filePath) {
 function probe(filePath) {
   const ext = path.extname(String(filePath || '')).slice(1).toLowerCase();
   if (ext === 'pdf') {
-    return Promise.resolve().then(() => probePdf(filePath));
+    return probePdf(filePath);
+  }
+  if (isHtmlPath(filePath)) {
+    return Promise.resolve().then(() => probeHtml(filePath));
   }
   if (isDocPath(filePath) || ext === 'doc' || ext === 'ppt') {
     return Promise.resolve().then(() => probeDoc(filePath));
@@ -140,10 +253,12 @@ function probe(filePath) {
     child.on('close', () => {
       try {
         const info = JSON.parse(out);
-        const video = (info.streams || []).find((s) => s.codec_type === 'video');
-        const duration = parseFloat(info.format?.duration) || parseFloat(video?.duration) || 0;
+        const video = (info.streams || []).find((s) => s.codec_type === 'video' && !s.disposition?.attached_pic)
+          || (info.streams || []).find((s) => s.codec_type === 'video');
+        let duration = parseFloat(info.format?.duration) || parseFloat(video?.duration) || 0;
         const fmtName = String(info.format?.format_name || '');
-        const isImg = isImagePath(filePath) || (duration === 0 && /_pipe$|image2|webp|bmp|png|jpeg/.test(fmtName));
+        const isApng = ext === 'apng' || /\bapng\b/.test(fmtName);
+        const isImg = !isApng && (isImagePath(filePath) || (duration === 0 && /_pipe$|image2|webp|bmp|png|jpeg/.test(fmtName)));
 
         let fps = 0;
         if (!isImg) {
@@ -155,6 +270,9 @@ function probe(filePath) {
         }
         const subCount = (info.streams || []).filter((s) => s.codec_type === 'subtitle').length;
         const nbFrames = parseInt(video?.nb_frames, 10) || 0;
+        if (duration === 0 && isApng && fps > 0 && nbFrames > 0) {
+          duration = nbFrames / fps;
+        }
         resolve({
           duration,
           size: parseInt(info.format?.size, 10) || 0,
@@ -163,6 +281,7 @@ function probe(filePath) {
           fps: isImg ? 0 : Math.round(fps * 100) / 100,
           nbFrames: isImg ? 0 : nbFrames,
           isImage: isImg,
+          ...(isApng ? { isApng: true } : {}),
           isSvg: false,
           pixFmt: video?.pix_fmt || '',
           hasAudio: !isImg && (info.streams || []).some((s) => s.codec_type === 'audio'),
@@ -266,14 +385,31 @@ function runFfmpegBinary(taskId, argsList) {
   });
 }
 
+function registerCancelableTask(taskId, cancelFn) {
+  if (!taskId || typeof cancelFn !== 'function') return;
+  runningTasks.set(taskId, { isCustom: true, cancel: cancelFn });
+}
+
+function unregisterTask(taskId) {
+  const entry = runningTasks.get(taskId);
+  if (entry && entry.isCustom) {
+    runningTasks.delete(taskId);
+  }
+}
+
 function cancelTask(taskId) {
-  const child = runningTasks.get(taskId);
-  if (child) {
-    child.__cancel?.();
-    spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
+  const entry = runningTasks.get(taskId);
+  if (!entry) return false;
+  if (entry.isCustom) {
+    runningTasks.delete(taskId);
+    try {
+      entry.cancel?.();
+    } catch {}
     return true;
   }
-  return false;
+  entry.__cancel?.();
+  spawn('taskkill', ['/pid', String(entry.pid), '/T', '/F'], { windowsHide: true });
+  return true;
 }
 
 function hasRunningTasks() {
@@ -287,19 +423,26 @@ function cancelAllTasks() {
 }
 
 // ---------------------------------------------------------------------------
-// 输出路径上下文与防覆盖
+// 输出路径上下文与防覆盖（AsyncLocalStorage 并发安全）
 // ---------------------------------------------------------------------------
 
-let _outCtx = null;
+const outCtxStorage = AsyncLocalStorageCls ? new AsyncLocalStorageCls() : null;
+let _fallbackOutCtx = null;
 
-function resolveOutDir(inputPath) {
+function getCurrentOutCtx(explicitCtx) {
+  if (explicitCtx !== undefined) return explicitCtx;
+  return outCtxStorage ? (outCtxStorage.getStore() || null) : _fallbackOutCtx;
+}
+
+function resolveOutDir(inputPath, explicitCtx) {
+  const ctx = getCurrentOutCtx(explicitCtx);
   const baseDir = path.dirname(inputPath);
-  if (!_outCtx) return baseDir;
-  if (_outCtx.mode === 'custom' && _outCtx.dir) {
-    fs.mkdirSync(_outCtx.dir, { recursive: true });
-    return _outCtx.dir;
+  if (!ctx) return baseDir;
+  if (ctx.mode === 'custom' && ctx.dir) {
+    fs.mkdirSync(ctx.dir, { recursive: true });
+    return ctx.dir;
   }
-  if (_outCtx.mode === 'subdir') {
+  if (ctx.mode === 'subdir') {
     const sub = path.join(baseDir, 'output');
     fs.mkdirSync(sub, { recursive: true });
     return sub;
@@ -307,8 +450,9 @@ function resolveOutDir(inputPath) {
   return baseDir;
 }
 
-function uniquePath(targetPath) {
-  if (!_outCtx?.noOverwrite || !fs.existsSync(targetPath)) return targetPath;
+function uniquePath(targetPath, explicitCtx) {
+  const ctx = getCurrentOutCtx(explicitCtx);
+  if (!ctx?.noOverwrite || !fs.existsSync(targetPath)) return targetPath;
   const ext = path.extname(targetPath);
   const stem = targetPath.slice(0, targetPath.length - ext.length);
   let i = 1;
@@ -355,17 +499,73 @@ function testHwEncoder(enc) {
 async function detectHwEncoders() {
   if (_hwCache) return _hwCache;
   assertBinaries();
-  const candidates = ['h264_nvenc', 'h264_qsv', 'h264_amf'];
-  const available = [];
-  for (const enc of candidates) {
-    if (await testHwEncoder(enc)) available.push(enc);
-  }
-  _hwCache = { available, primary: available[0] || null };
+  const candidates = [
+    'h264_nvenc', 'h264_qsv', 'h264_amf',
+    'hevc_nvenc', 'hevc_qsv', 'hevc_amf',
+    'av1_nvenc', 'av1_qsv', 'av1_amf',
+  ];
+  const flags = await mapConcurrent(candidates, 3, (enc) => testHwEncoder(enc));
+  const available = candidates.filter((_, idx) => flags[idx]);
+  _hwCache = {
+    available,
+    primary: available.find((e) => e.startsWith('h264_')) || null,
+    primaryHevc: available.find((e) => e.startsWith('hevc_')) || null,
+    primaryAv1: available.find((e) => e.startsWith('av1_')) || null,
+  };
   return _hwCache;
 }
 
-function videoCodecArgs(p, { crf = 20, preset = 'medium' } = {}) {
-  let hw = p?.__hwAccel || 'cpu';
+function resolveHwVendor(hw) {
+  if (!hw || hw === 'cpu') return null;
+  if (hw === 'auto') return 'auto';
+  if (hw === 'nvenc' || hw.endsWith('_nvenc')) return 'nvenc';
+  if (hw === 'qsv' || hw.endsWith('_qsv')) return 'qsv';
+  if (hw === 'amf' || hw.endsWith('_amf')) return 'amf';
+  return null;
+}
+
+function videoCodecArgs(p, { crf = 20, preset = 'medium', codec } = {}) {
+  const vcodec = codec || p?.vcodec || 'h264';
+  const rawHw = p?.__hwAccel || 'cpu';
+  const vendor = resolveHwVendor(rawHw);
+
+  const pickVendorEncoder = (prefix, primaryKey) => {
+    if (!vendor) return null;
+    if (vendor === 'auto') return _hwCache?.[primaryKey] || null;
+    const cand = `${prefix}_${vendor}`;
+    if (_hwCache && !_hwCache.available.includes(cand)) return null;
+    return cand;
+  };
+
+  if (vcodec === 'hevc') {
+    const enc = pickVendorEncoder('hevc', 'primaryHevc');
+    if (enc === 'hevc_nvenc') {
+      return ['-c:v', 'hevc_nvenc', '-preset', 'p4', '-cq', String(crf + 2), '-pix_fmt', 'yuv420p', '-tag:v', 'hvc1'];
+    }
+    if (enc === 'hevc_qsv') {
+      return ['-c:v', 'hevc_qsv', '-preset', preset === 'fast' ? 'veryfast' : 'medium', '-global_quality', String(crf + 2), '-pix_fmt', 'yuv420p', '-tag:v', 'hvc1'];
+    }
+    if (enc === 'hevc_amf') {
+      return ['-c:v', 'hevc_amf', '-quality', preset === 'fast' ? 'speed' : 'balanced', '-rc', 'cqp', '-qp_i', String(crf + 2), '-qp_p', String(crf + 2), '-pix_fmt', 'yuv420p', '-tag:v', 'hvc1'];
+    }
+    return ['-c:v', 'libx265', '-crf', String(crf + 4), '-preset', preset, '-pix_fmt', 'yuv420p', '-tag:v', 'hvc1'];
+  }
+
+  if (vcodec === 'av1') {
+    const enc = pickVendorEncoder('av1', 'primaryAv1');
+    if (enc === 'av1_nvenc') {
+      return ['-c:v', 'av1_nvenc', '-preset', 'p4', '-cq', String(crf + 4), '-pix_fmt', 'yuv420p'];
+    }
+    if (enc === 'av1_qsv') {
+      return ['-c:v', 'av1_qsv', '-preset', preset === 'fast' ? 'veryfast' : 'medium', '-global_quality', String(crf + 4), '-pix_fmt', 'yuv420p'];
+    }
+    if (enc === 'av1_amf') {
+      return ['-c:v', 'av1_amf', '-quality', preset === 'fast' ? 'speed' : 'balanced', '-rc', 'cqp', '-qp_i', String(crf + 4), '-qp_p', String(crf + 4), '-pix_fmt', 'yuv420p'];
+    }
+    return ['-c:v', 'libaom-av1', '-crf', String(crf + 10), '-b:v', '0', '-cpu-used', '6', '-row-mt', '1', '-pix_fmt', 'yuv420p'];
+  }
+
+  let hw = rawHw;
   if (hw === 'auto') hw = _hwCache?.primary || 'cpu';
   if (hw === 'h264_nvenc') {
     return ['-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', String(crf), '-pix_fmt', 'yuv420p'];
@@ -410,42 +610,47 @@ function createExecutor(builders) {
     const builder = builders[feature];
     if (!builder) throw new Error(`未知功能：${feature}`);
 
-    if (params?.__hwAccel === 'auto' && !_hwCache) {
+    if (params?.__hwAccel && params.__hwAccel !== 'cpu' && !_hwCache) {
       await detectHwEncoders().catch(() => {});
     }
 
-    _outCtx = (params?.__outputMode || params?.__noOverwrite)
+    const outCtx = (params?.__outputMode || params?.__noOverwrite)
       ? { mode: params.__outputMode || 'same', dir: params.__outputDir || '', noOverwrite: !!params.__noOverwrite }
       : null;
-    let plan;
-    try {
-      plan = builder(params);
-    } finally {
-      _outCtx = null;
-    }
 
-    if (plan.run) {
-      const result = await plan.run(taskId, onProgress);
-      return result || { output: plan.output };
-    }
+    const runWithOutCtx = (fn) => {
+      if (outCtxStorage) return outCtxStorage.run(outCtx, fn);
+      const prev = _fallbackOutCtx;
+      _fallbackOutCtx = outCtx;
+      return Promise.resolve().then(fn).finally(() => { _fallbackOutCtx = prev; });
+    };
 
-    const tmpOut = swapOutputToTemp(plan);
-    try {
-      for (const step of plan.steps) {
-        await runFfmpeg(taskId, step.args, { ...step, onProgress });
+    return runWithOutCtx(async () => {
+      const plan = builder(params);
+
+      if (plan.run) {
+        const result = await plan.run(taskId, onProgress);
+        return result || { output: plan.output };
       }
-      if (tmpOut) fs.renameSync(tmpOut, plan.output);
-    } finally {
-      // 失败/取消时删除临时文件；taskkill 后句柄可能稍晚释放，重试几次且不抛错
-      if (tmpOut) await fs.promises.rm(tmpOut, { force: true, maxRetries: 5, retryDelay: 200 }).catch(() => {});
-      for (const f of plan.cleanup || []) {
-        fs.unlink(f, () => {});
+
+      const tmpOut = swapOutputToTemp(plan);
+      try {
+        for (const step of plan.steps) {
+          await runFfmpeg(taskId, step.args, { ...step, onProgress });
+        }
+        if (tmpOut) fs.renameSync(tmpOut, plan.output);
+      } finally {
+        // 失败/取消时删除临时文件；taskkill 后句柄可能稍晚释放，重试几次且不抛错
+        if (tmpOut) await fs.promises.rm(tmpOut, { force: true, maxRetries: 5, retryDelay: 200 }).catch(() => {});
+        for (const f of plan.cleanup || []) {
+          fs.unlink(f, () => {});
+        }
+        for (const d of plan.cleanupDirs || []) {
+          fs.rmSync(d, { recursive: true, force: true });
+        }
       }
-      for (const d of plan.cleanupDirs || []) {
-        fs.rmSync(d, { recursive: true, force: true });
-      }
-    }
-    return { output: plan.output, outputType: plan.outputType };
+      return { output: plan.output, outputType: plan.outputType };
+    });
   };
 }
 
@@ -457,6 +662,8 @@ module.exports = {
   runFfmpeg,
   runFfmpegCapture,
   runFfmpegBinary,
+  registerCancelableTask,
+  unregisterTask,
   cancelTask,
   hasRunningTasks,
   cancelAllTasks,

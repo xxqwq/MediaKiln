@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const AdmZip = require('adm-zip');
+const hotfix = require('../core/hotfix');
 
 const ROOT = path.resolve(__dirname, '..');
 
@@ -13,12 +14,14 @@ function parseArgs(argv) {
     outDir: path.join(ROOT, 'release'),
     notes: '',
     repo: 'xxqwq/usefulTools',
+    privateKey: '',
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--out-dir' && argv[i + 1]) opts.outDir = path.resolve(argv[++i]);
     else if (a === '--notes' && argv[i + 1]) opts.notes = argv[++i];
     else if (a === '--repo' && argv[i + 1]) opts.repo = argv[++i];
+    else if (a === '--private-key' && argv[i + 1]) opts.privateKey = argv[++i];
   }
   return opts;
 }
@@ -118,6 +121,15 @@ function buildHotfix(opts = {}) {
     portableAssetUrl: `https://github.com/${repo}/releases/download/${tag}/video-gif-toolbox-${version}-portable.exe`,
     setupAssetUrl: `https://github.com/${repo}/releases/download/${tag}/video-gif-toolbox-${version}-setup.exe`,
   };
+
+  const rawPriv = opts.privateKeyPem || opts.privateKey || process.env.VGT_HOTFIX_PRIVATE_KEY || '';
+  if (rawPriv) {
+    const privStr = String(rawPriv).trim();
+    const privPem = privStr.includes('-----BEGIN')
+      ? privStr
+      : fs.readFileSync(path.resolve(privStr), 'utf8');
+    manifest.signature = hotfix.signManifest(manifest, privPem);
+  }
 
   const manifestPath = path.join(outDir, 'hotfix-manifest.json');
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');

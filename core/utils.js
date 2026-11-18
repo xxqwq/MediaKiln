@@ -3,14 +3,44 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { randomUUID } = require('crypto');
 
-// Windows 中文字体（微软雅黑），drawtext 用
-const FONT = 'C\\:/Windows/Fonts/msyh.ttc';
+function writeBufferAtomically(outputPath, buffer) {
+  const dir = path.dirname(outputPath);
+  fs.mkdirSync(dir, { recursive: true });
+  const staged = path.join(dir, `.vgt-${randomUUID()}.tmp`);
+  try {
+    fs.writeFileSync(staged, buffer, { flag: 'wx' });
+    fs.renameSync(staged, outputPath);
+  } finally {
+    fs.rmSync(staged, { force: true });
+  }
+}
+
+// Windows 中文字体（drawtext 用），动态探测系统 Fonts 目录
+function resolveSystemFont() {
+  const winDir = process.env.WINDIR || process.env.SystemRoot || 'C:\\Windows';
+  const fontsDir = path.join(winDir, 'Fonts');
+  const candidates = ['msyh.ttc', 'msyh.ttf', 'msyhbd.ttc', 'simhei.ttf', 'simsun.ttc', 'arial.ttf'];
+  for (const name of candidates) {
+    const fullPath = path.join(fontsDir, name);
+    try {
+      if (fs.existsSync(fullPath)) {
+        return fullPath.replace(/\\/g, '/').replace(/:/g, '\\:');
+      }
+    } catch {}
+  }
+  return 'C\\:/Windows/Fonts/msyh.ttc';
+}
+
+const FONT = resolveSystemFont();
 
 const IMG_EXTS = ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'avif'];
 const SVG_EXTS = ['svg'];
 const DOC_EXTS = ['docx', 'pptx', 'md', 'markdown'];
+const HTML_EXTS = ['html', 'htm'];
 const VIDEO_EXTS = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'ts', 'm4v'];
+const AUDIO_EXTS = ['mp3', 'm4a', 'wav', 'flac', 'aac', 'ogg', 'opus'];
 
 function isImagePath(filePath) {
   const ext = path.extname(String(filePath || '')).slice(1).toLowerCase();
@@ -25,6 +55,11 @@ function isSvgPath(filePath) {
 function isDocPath(filePath) {
   const ext = path.extname(String(filePath || '')).slice(1).toLowerCase();
   return DOC_EXTS.includes(ext);
+}
+
+function isHtmlPath(filePath) {
+  const ext = path.extname(String(filePath || '')).slice(1).toLowerCase();
+  return HTML_EXTS.includes(ext);
 }
 
 function parseSvgDims(svgText) {
@@ -221,15 +256,41 @@ function writeGradientPpm(filePath, w, h, startHex, endHex, dir = 'tlbr') {
   fs.writeFileSync(filePath, Buffer.concat([header, data]));
 }
 
+// 受控并发池：按输入顺序返回结果
+async function mapConcurrent(items, concurrency, mapper) {
+  const list = Array.from(items || []);
+  if (!list.length) return [];
+  const limit = Math.max(1, Math.min(list.length, Math.floor(Number(concurrency)) || 1));
+  const results = new Array(list.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (true) {
+      const idx = nextIndex++;
+      if (idx >= list.length) break;
+      results[idx] = await mapper(list[idx], idx);
+    }
+  }
+
+  await Promise.all(Array.from({ length: limit }, () => worker()));
+  return results;
+}
+
 module.exports = {
+  writeBufferAtomically,
   FONT,
+  resolveSystemFont,
+  mapConcurrent,
   IMG_EXTS,
   SVG_EXTS,
   DOC_EXTS,
+  HTML_EXTS,
   VIDEO_EXTS,
+  AUDIO_EXTS,
   isImagePath,
   isSvgPath,
   isDocPath,
+  isHtmlPath,
   parseSvgDims,
   num,
   even,

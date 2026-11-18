@@ -1,5 +1,6 @@
 ---
 import { app, data, repoUrl, releasesUrl } from '../lib/site';
+import { iconSvg } from '../lib/icons';
 import Logo from './Logo.astro';
 const year = new Date().getFullYear();
 ---
@@ -9,7 +10,7 @@ const year = new Date().getFullYear();
     <div class="foot-brand">
       <div class="fb-row"><Logo size={28} /><strong>{app.name}</strong></div>
       <p>Windows 本地离线多媒体与文档处理工具箱。<br />{data.stats.features} 个功能 · {data.stats.nodes} 个工作流节点 · 文件永不上传。</p>
-      <div class="foot-pledge">🔒 零遥测 · 零上传 · 零广告</div>
+      <div class="foot-pledge"><Fragment set:html={iconSvg('lock', 12)} /><span>零遥测 · 零上传 · 零广告</span></div>
     </div>
     <div class="foot-cols">
       <div>

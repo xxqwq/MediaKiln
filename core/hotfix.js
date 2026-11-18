@@ -8,6 +8,12 @@ const path = require('path');
 const GITHUB_REPO = 'xxqwq/usefulTools';
 const DEFAULT_MANIFEST_URL = `https://github.com/${GITHUB_REPO}/releases/latest/download/hotfix-manifest.json`;
 
+const DEFAULT_PUBLIC_KEY_PEM = [
+  '-----BEGIN PUBLIC KEY-----',
+  'MCowBQYDK2VwAyEAcEZAh2kij15RicPfWuDb3SCEzlAmMCDA0thllib4wzA=',
+  '-----END PUBLIC KEY-----',
+].join('\n');
+
 const MIRROR_PREFIXES = {
   official: '',
   ghproxy: 'https://gh-proxy.com/',
@@ -361,10 +367,42 @@ function normalizeManifest(raw) {
     bundleUrl,
     bundleSize: Number(raw.bundleSize) || 0,
     bundleSha256,
+    signature: String(raw.signature || '').trim(),
     fullReleaseUrl: String(raw.fullReleaseUrl || `https://github.com/${GITHUB_REPO}/releases/tag/v${version}`),
     portableAssetUrl: String(raw.portableAssetUrl || ''),
     setupAssetUrl: String(raw.setupAssetUrl || ''),
   };
+}
+
+function buildManifestSignPayload(manifest) {
+  const m = manifest || {};
+  const ver = String(m.version || '').trim().replace(/^v/i, '');
+  const minShell = String(m.minShellVersion || '0.0.0').trim().replace(/^v/i, '');
+  const sha = String(m.bundleSha256 || '').trim().toLowerCase();
+  const size = Number(m.bundleSize) || 0;
+  return `vgt-hotfix-v1\n${ver}\n${minShell}\n${sha}\n${size}`;
+}
+
+function signManifest(manifest, privateKeyPem) {
+  if (!privateKeyPem) throw new Error('缺少 Ed25519 私钥');
+  const payload = Buffer.from(buildManifestSignPayload(manifest), 'utf8');
+  const keyObj = crypto.createPrivateKey(privateKeyPem);
+  return crypto.sign(null, payload, keyObj).toString('base64');
+}
+
+function verifyManifestSignature(manifest, publicKeyPem) {
+  try {
+    const sigB64 = String(manifest?.signature || '').trim();
+    if (!sigB64) return false;
+    const pub = publicKeyPem || process.env.VGT_HOTFIX_PUBLIC_KEY || DEFAULT_PUBLIC_KEY_PEM;
+    if (!pub) return false;
+    const payload = Buffer.from(buildManifestSignPayload(manifest), 'utf8');
+    const sigBuf = Buffer.from(sigB64, 'base64');
+    const keyObj = crypto.createPublicKey(pub);
+    return crypto.verify(null, payload, keyObj, sigBuf);
+  } catch {
+    return false;
+  }
 }
 
 async function fetchManifestFrom(candidate, { timeoutMs = 7000, fetchImpl } = {}) {
@@ -399,6 +437,14 @@ async function checkForUpdates(opts = {}) {
 
   const status = getStatus();
   const { manifest, mirror } = hit;
+
+  const requireSig = Boolean(opts.requireSignature || process.env.VGT_HOTFIX_REQUIRE_SIG === '1');
+  if (manifest.signature || requireSig) {
+    const pubKey = opts.publicKeyPem || process.env.VGT_HOTFIX_PUBLIC_KEY || DEFAULT_PUBLIC_KEY_PEM;
+    if (!verifyManifestSignature(manifest, pubKey)) {
+      throw new Error('热更新清单 Ed25519 签名校验失败');
+    }
+  }
 
   if (compareSemver(manifest.version, status.effectiveVersion) <= 0) {
     return {
@@ -541,6 +587,13 @@ function extractBundleZip(zipPath, stagingDir) {
 async function downloadAndInstall(manifestInput, opts = {}) {
   if (!_ctx) throw new Error('hotfix 未初始化');
   const manifest = normalizeManifest(manifestInput);
+  const requireSig = Boolean(opts.requireSignature || process.env.VGT_HOTFIX_REQUIRE_SIG === '1');
+  if (manifest.signature || requireSig) {
+    const pubKey = opts.publicKeyPem || process.env.VGT_HOTFIX_PUBLIC_KEY || DEFAULT_PUBLIC_KEY_PEM;
+    if (!verifyManifestSignature(manifest, pubKey)) {
+      throw new Error('热更新清单 Ed25519 签名校验失败');
+    }
+  }
   if (compareSemver(manifest.minShellVersion, _ctx.shellVersion) > 0) {
     throw new Error(`当前壳版本 ${_ctx.shellVersion} 过旧，需先安装主程序 >= ${manifest.minShellVersion}`);
   }
@@ -697,11 +750,15 @@ function clearRequireCacheUnderRoot(rootDir) {
 module.exports = {
   GITHUB_REPO,
   DEFAULT_MANIFEST_URL,
+  DEFAULT_PUBLIC_KEY_PEM,
   MIRROR_PREFIXES,
   parseSemver,
   compareSemver,
   sha256Buffer,
   sha256File,
+  buildManifestSignPayload,
+  signManifest,
+  verifyManifestSignature,
   ensureShellNodeModulesHook,
   initHotfix,
   confirmBoot,

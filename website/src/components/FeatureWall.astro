@@ -1,5 +1,6 @@
 ---
 import { data } from '../lib/site';
+import { iconSvg } from '../lib/icons';
 
 const groups = data.groupOrder.filter((g) => data.features.some((f) => f.group === g));
 const groupMeta = data.groupMeta as Record<string, { color: string; icon: string }>;
@@ -24,14 +25,16 @@ const fmtAccept = (acc: string[]) => {
   return uniq.length > 6 ? `${uniq.slice(0, 6).join(' · ')} 等 ${uniq.length} 种` : uniq.join(' · ');
 };
 
-const hotWords = ['GIF', '压缩', 'PPT', '抠图', 'SVG', '水印', '字幕', '微信'];
+const hotWords = ['GIF', 'APNG', 'PDF', '音频', 'PPT', '抠图', 'SVG', '水印'];
 ---
 
 <section class="section" id="all-features">
   <div class="container">
-    <div class="section-head reveal">
-      <div class="eyebrow">完整功能清单</div>
-      <h2 class="h2">{data.stats.features} 个功能，<span class="grad-text">{groups.length} 大分类</span></h2>
+    <div class="section-head-split reveal">
+      <div class="sh-left">
+        <div class="eyebrow">完整功能清单</div>
+        <h2 class="h2">{data.stats.features} 个功能，<span class="grad-text">{groups.length} 大分类</span></h2>
+      </div>
       <p class="lead">清单直接取自软件的功能注册表，软件更新后这里也会自动同步。</p>
     </div>
 
@@ -49,7 +52,9 @@ const hotWords = ['GIF', '压缩', 'PPT', '抠图', 'SVG', '水印', '字幕', '
         <button type="button" class="chip" aria-pressed="true" data-group="">全部 <span class="count">{orderedFeatures.length}</span></button>
         {groups.map((g) => (
           <button type="button" class="chip" aria-pressed="false" data-group={g}>
-            {groupMeta[g]?.icon} {g} <span class="count">{countOf(g)}</span>
+            <span class="chip-ico" style={`color:${groupMeta[g]?.color || '#94a3b8'}`} set:html={iconSvg(groupMeta[g]?.icon || '', 14)} />
+            <span>{g}</span>
+            <span class="count">{countOf(g)}</span>
           </button>
         ))}
       </div>
@@ -66,7 +71,7 @@ const hotWords = ['GIF', '压缩', 'PPT', '抠图', 'SVG', '水印', '字幕', '
           style={`--gc: ${groupMeta[f.group]?.color || '#94a3b8'}`}
         >
           <div class="fw-head">
-            <span class="fw-icon">{f.icon}</span>
+            <span class="fw-icon" set:html={iconSvg(f.icon, 17)} />
             <h3 class="fw-name">{f.name}</h3>
           </div>
           <p class="fw-desc">{f.desc}</p>
@@ -128,6 +133,7 @@ const hotWords = ['GIF', '压缩', 'PPT', '抠图', 'SVG', '水印', '字幕', '
   }
   .fw-hot-btn::before { content: "#"; opacity: .5; margin-right: 2px; }
   .fw-groups { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+  .chip-ico { display: inline-flex; align-items: center; }
   .fw-status { font-size: 13px; color: var(--text-3); min-height: 20px; }
 
   .fw-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 14px; }
@@ -144,7 +150,13 @@ const hotWords = ['GIF', '压缩', 'PPT', '抠图', 'SVG', '水印', '字幕', '
   .fw-card:hover { border-color: var(--border-3); transform: translateY(-2px); background: var(--surface-2); }
   .fw-card[hidden] { display: none; }
   .fw-head { display: flex; align-items: center; gap: 10px; }
-  .fw-icon { font-size: 20px; width: 34px; height: 34px; display: grid; place-items: center; border-radius: 10px; background: rgba(255, 255, 255, .04); flex-shrink: 0; }
+  .fw-icon {
+    width: 34px; height: 34px; display: grid; place-items: center; border-radius: 10px; flex-shrink: 0;
+    color: var(--gc);
+    background: rgba(255, 255, 255, .04);
+    background: color-mix(in srgb, var(--gc) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--gc) 25%, rgba(255, 255, 255, .08));
+  }
   .fw-name { font-size: 15.5px; font-weight: 650; line-height: 1.35; }
   .fw-desc { margin-top: 10px; font-size: 13.5px; color: var(--text-2); line-height: 1.6; flex: 1; }
   .fw-foot { margin-top: 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }

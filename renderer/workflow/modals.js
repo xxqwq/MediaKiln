@@ -16,7 +16,10 @@
   }
 
   function toFileUrl(p) {
-    return encodeURI('file:///' + String(p || '').replace(/\\/g, '/'));
+    if (typeof window !== 'undefined' && window.api?.toFileUrl) return window.api.toFileUrl(p);
+    const norm = String(p || '').replace(/\\/g, '/');
+    const parts = norm.split('/').map((seg, i) => (i === 0 && /^[a-zA-Z]:$/.test(seg)) ? seg : encodeURIComponent(seg));
+    return 'file:///' + parts.join('/').replace(/^\/+/, '');
   }
 
   // ---------------------------------------------------------------------------

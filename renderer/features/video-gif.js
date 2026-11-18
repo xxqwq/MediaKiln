@@ -5,9 +5,11 @@ window.VGT = window.VGT || {};
 
 const VIDEO_EXTS = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'ts', 'm4v'];
 const IMG_EXTS = ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'avif'];
+const AUDIO_EXTS = ['mp3', 'm4a', 'wav', 'flac', 'aac', 'ogg', 'opus'];
 
 window.VGT.VIDEO_EXTS = VIDEO_EXTS;
 window.VGT.IMG_EXTS = IMG_EXTS;
+window.VGT.AUDIO_EXTS = AUDIO_EXTS;
 
 const rt = (f) => window.VGT.params.readTimes(f);
 
@@ -73,6 +75,9 @@ window.VGT.VIDEO_FEATURES = [
         options: [['encode', '重编码（可调画质/分辨率）'], ['copy', '无损换容器（秒级零损失）']] },
       { key: 'format', label: '目标格式', type: 'chips', def: 'mp4',
         options: [['mp4', 'MP4'], ['mkv', 'MKV'], ['mov', 'MOV'], ['webm', 'WebM（仅重编码）']] },
+      { key: 'vcodec', label: '视频编码', type: 'chips', def: 'h264',
+        options: [['h264', 'H.264（兼容性最佳，默认）'], ['hevc', 'H.265 / HEVC（体积省 40%）'], ['av1', 'AV1（新一代高压缩）']],
+        showIf: (v) => v.mode !== 'copy' },
       { key: 'height', label: '分辨率', type: 'select', def: '0',
         options: [['0', '保持原始'], ['1080', '1080p'], ['720', '720p'], ['480', '480p']],
         showIf: (v) => v.mode !== 'copy' },
@@ -81,7 +86,11 @@ window.VGT.VIDEO_FEATURES = [
         showIf: (v) => v.mode !== 'copy' },
     ],
     collect(v, ctx) {
-      return { input: ctx.file.path, mode: v.mode, format: v.format, height: v.height, quality: v.quality, totalDuration: ctx.file.info.duration };
+      const vcodec = v.vcodec || 'h264';
+      if (v.mode !== 'copy' && v.format === 'mov' && vcodec === 'av1') {
+        throw new Error('MOV 容器不支持 AV1 编码，请选 MP4 / MKV / WebM 或切换 H.265');
+      }
+      return { input: ctx.file.path, mode: v.mode, format: v.format, vcodec, height: v.height, quality: v.quality, totalDuration: ctx.file.info.duration };
     },
   },
 
@@ -269,10 +278,14 @@ window.VGT.VIDEO_FEATURES = [
     fields: [
       { key: 'targetMB', label: '目标大小 (MB)', type: 'number', def: '5', min: 0.2, max: 500, step: 0.1,
         presets: [['1', '1 MB'], ['2', '2 MB'], ['5', '5 MB'], ['10', '10 MB（Discord）'], ['25', '25 MB（微信）'], ['50', '50 MB']] },
+      { key: 'vcodec', label: '视频编码（GIF 自动忽略）', type: 'chips', def: 'h264',
+        options: [['h264', 'H.264（默认兼容）'], ['hevc', 'H.265 / HEVC（小体积更清晰）']],
+        showIf: (_v, ctx) => !ctx?.isImage && !ctx?.isGif },
     ],
     collect(v, ctx) {
       return {
         input: ctx.file.path, targetMB: v.targetMB,
+        vcodec: v.vcodec || 'h264',
         width: ctx.file.info.width, fps: ctx.file.info.fps,
         hasAudio: ctx.file.info.hasAudio, totalDuration: ctx.file.info.duration,
       };
@@ -324,6 +337,66 @@ window.VGT.VIDEO_FEATURES = [
         progressBar: v.progressBar, barColor: v.barColor, barHeight: v.barHeight,
         rounded: v.rounded, bgColor: v.bgColor,
         srcW: ctx.file.info.width, srcH: ctx.file.info.height,
+        totalDuration: ctx.file.info.duration,
+      };
+    },
+  },
+  {
+    id: 'animSprite', group: 'GIF 编辑', icon: '🧩', name: 'APNG / 雪碧图互转', desc: '视频/GIF 转全彩半透明 APNG，APNG 转 GIF，或导出/还原游戏开发雪碧图 (Sprite Sheet)',
+    accept: [...VIDEO_EXTS, 'gif', 'apng', ...IMG_EXTS],
+    fields: [
+      { key: 'mode', label: '转换方向', type: 'chips', def: 'toApng', fullWidth: true,
+        options: [
+          ['toApng', '🎬 视频/GIF → APNG 动图'],
+          ['apngToGif', '🖼️ APNG → GIF 动图'],
+          ['toSprite', '🧩 动图/视频 → 雪碧图 PNG'],
+          ['fromSprite', '🔁 雪碧图 PNG → GIF / APNG'],
+        ] },
+      { key: 'fps', label: '帧率 (FPS)', type: 'select', def: '12',
+        options: [['8', '8 fps'], ['10', '10 fps'], ['12', '12 fps（推荐）'], ['15', '15 fps'], ['20', '20 fps'], ['24', '24 fps']] },
+      { key: 'width', label: '输出宽度', type: 'select', def: '480',
+        options: [['0', '保持原宽'], ['320', '320 px'], ['480', '480 px（推荐）'], ['640', '640 px'], ['800', '800 px']],
+        showIf: (v) => v.mode === 'toApng' || v.mode === 'apngToGif' },
+      { key: 'colors', label: 'GIF 调色板颜色数', type: 'chips', def: '256',
+        options: [['64', '64 色'], ['128', '128 色'], ['256', '256 色（推荐）']],
+        showIf: (v) => v.mode === 'apngToGif' },
+      { key: 'layout', label: '雪碧图排列', type: 'chips', def: 'grid',
+        options: [['grid', '多行网格（推荐）'], ['row', '单行水平排列']],
+        showIf: (v) => v.mode === 'toSprite' },
+      { key: 'cols', label: '每行列数', type: 'number', def: '5', min: 1, max: 120, step: 1,
+        presets: [['4', '4 列'], ['5', '5 列'], ['6', '6 列'], ['8', '8 列']],
+        showIf: (v) => (v.mode === 'toSprite' && v.layout !== 'row') || v.mode === 'fromSprite' },
+      { key: 'rows', label: '雪碧图行数', type: 'number', def: '4', min: 1, max: 20, step: 1,
+        presets: [['2', '2 行'], ['3', '3 行'], ['4', '4 行'], ['5', '5 行']],
+        showIf: (v) => v.mode === 'fromSprite' },
+      { key: 'cellWidth', label: '单格宽度 (px)', type: 'select', def: '160',
+        options: [['120', '120 px'], ['160', '160 px（推荐）'], ['240', '240 px'], ['320', '320 px'], ['0', '保持原宽']],
+        showIf: (v) => v.mode === 'toSprite' },
+      { key: 'maxFrames', label: '最多抽取帧数', type: 'number', def: '36', min: 2, max: 120, step: 1,
+        presets: [['16', '16 帧'], ['25', '25 帧'], ['36', '36 帧'], ['60', '60 帧']],
+        showIf: (v) => v.mode === 'toSprite' },
+      { key: 'frameCount', label: '有效总帧数（0 = 按行列全满）', type: 'number', def: '0', min: 0, max: 400, step: 1,
+        showIf: (v) => v.mode === 'fromSprite' },
+      { key: 'outFormat', label: '合成目标格式', type: 'chips', def: 'gif',
+        options: [['gif', 'GIF 动图'], ['apng', 'APNG 无损透明动图']],
+        showIf: (v) => v.mode === 'fromSprite' },
+    ],
+    collect(v, ctx) {
+      return {
+        input: ctx.file.path,
+        mode: v.mode || 'toApng',
+        fps: v.fps || '12',
+        width: v.width ?? '480',
+        colors: v.colors || '256',
+        layout: v.layout || 'grid',
+        cols: v.cols || '5',
+        rows: v.rows || '4',
+        cellWidth: v.cellWidth ?? '160',
+        maxFrames: v.maxFrames || '36',
+        frameCount: v.frameCount || '0',
+        outFormat: v.outFormat || 'gif',
+        srcW: ctx.file.info.width,
+        srcH: ctx.file.info.height,
         totalDuration: ctx.file.info.duration,
       };
     },
@@ -653,14 +726,88 @@ window.VGT.VIDEO_FEATURES = [
 
   // ================= 音频 =================
   {
-    id: 'extractAudio', group: '音频', icon: '🎵', name: '提取音频', desc: '把视频里的声音存成 MP3 / M4A / WAV',
-    accept: [...VIDEO_EXTS, 'mp3', 'm4a', 'wav', 'flac'],
+    id: 'extractAudio', group: '音频', icon: '🎵', name: '提取音频', desc: '把视频或音频里的声音存成 MP3 / M4A / WAV / FLAC / OGG / OPUS',
+    accept: [...VIDEO_EXTS, ...AUDIO_EXTS],
     fields: [
       { key: 'format', label: '音频格式', type: 'chips', def: 'mp3',
-        options: [['mp3', 'MP3（通用）'], ['m4a', 'M4A（音质好）'], ['wav', 'WAV（无损）']] },
+        options: [['mp3', 'MP3（通用）'], ['m4a', 'M4A（音质好）'], ['wav', 'WAV（无损）'], ['flac', 'FLAC（无损压缩）'], ['ogg', 'OGG'], ['opus', 'OPUS（极小）']] },
     ],
     collect(v, ctx) {
       return { input: ctx.file.path, format: v.format, totalDuration: ctx.file.info.duration };
+    },
+  },
+  {
+    id: 'audioConvert', group: '音频', icon: '🎚️', name: '音频格式转换', desc: 'MP3 / M4A / WAV / FLAC / OGG / OPUS 互转，支持码率、采样率与声道调节',
+    accept: AUDIO_EXTS,
+    fields: [
+      { key: 'format', label: '目标格式', type: 'chips', def: 'mp3',
+        options: [['mp3', 'MP3'], ['m4a', 'M4A'], ['wav', 'WAV（无损）'], ['flac', 'FLAC（无损）'], ['ogg', 'OGG'], ['opus', 'OPUS（超省体积）']] },
+      { key: 'bitrate', label: '音频码率', type: 'chips', def: '192k',
+        options: [['64k', '64 kb/s'], ['96k', '96 kb/s'], ['128k', '128 kb/s'], ['192k', '192 kb/s'], ['256k', '256 kb/s'], ['320k', '320 kb/s']],
+        showIf: (v) => !['wav', 'flac'].includes(v.format) },
+      { key: 'sampleRate', label: '采样率', type: 'select', def: '0',
+        options: [['0', '保持原始（推荐）'], ['48000', '48000 Hz（视频/播客标准）'], ['44100', '44100 Hz（CD 标准）'], ['24000', '24000 Hz（语音）'], ['16000', '16000 Hz（轻量识别）']] },
+      { key: 'channels', label: '声道数', type: 'chips', def: '0',
+        options: [['0', '保持原始'], ['2', '双声道立体声'], ['1', '单声道（语音体积减半）']] },
+    ],
+    collect(v, ctx) {
+      return {
+        input: ctx.file.path,
+        format: v.format || 'mp3',
+        bitrate: v.bitrate || '192k',
+        sampleRate: v.sampleRate || '0',
+        channels: v.channels || '0',
+        totalDuration: ctx.file.info.duration,
+      };
+    },
+  },
+  {
+    id: 'audioTrim', group: '音频', icon: '✂️', name: '音频截取', desc: '裁剪音频片段：支持无损秒剪或开启淡入淡出、音量调节',
+    accept: AUDIO_EXTS,
+    fields: [
+      { type: 'times' },
+      { key: 'precise', label: '截取模式', type: 'chips', def: 'fast',
+        options: [['fast', '无损极速（推荐）'], ['precise', '重编码精确截取']] },
+      { key: 'fadeIn', label: '开头淡入（秒）', type: 'chips', def: '0',
+        options: [['0', '无'], ['0.5', '0.5 秒'], ['1', '1 秒'], ['2', '2 秒'], ['3', '3 秒']] },
+      { key: 'fadeOut', label: '结尾淡出（秒）', type: 'chips', def: '0',
+        options: [['0', '无'], ['0.5', '0.5 秒'], ['1', '1 秒'], ['2', '2 秒'], ['3', '3 秒']] },
+      { key: 'volume', label: '音量调节', type: 'chips', def: '1',
+        options: [['0.5', '0.5x'], ['1', '原音量'], ['1.5', '1.5x'], ['2', '2x']] },
+    ],
+    collect(v, ctx) {
+      const t = ctx.times || rt(ctx.file);
+      return {
+        input: ctx.file.path,
+        start: t.start,
+        duration: t.duration,
+        precise: v.precise === 'precise',
+        fadeIn: v.fadeIn || '0',
+        fadeOut: v.fadeOut || '0',
+        volume: v.volume || '1',
+      };
+    },
+  },
+  {
+    id: 'audioMerge', group: '音频', icon: '🔗', name: '音频合并拼接', desc: '多段音频无缝顺序串联，或开启交叉淡入淡出平滑衔接（支持调整顺序）',
+    accept: AUDIO_EXTS, multi: true,
+    fields: [
+      { key: 'mode', label: '拼接方式', type: 'chips', def: 'concat',
+        options: [['concat', '直接顺序拼接（推荐）'], ['crossfade', '交叉淡入柔和过渡']] },
+      { key: 'fadeDur', label: '过渡淡入时长（秒）', type: 'chips', def: '1',
+        options: [['0.5', '0.5 秒'], ['1', '1 秒（推荐）'], ['2', '2 秒'], ['3', '3 秒']],
+        showIf: (v) => v.mode === 'crossfade' },
+      { key: 'format', label: '输出格式', type: 'chips', def: 'mp3',
+        options: [['mp3', 'MP3'], ['m4a', 'M4A'], ['wav', 'WAV（无损）'], ['flac', 'FLAC（无损）'], ['ogg', 'OGG'], ['opus', 'OPUS']] },
+    ],
+    collect(v, ctx) {
+      return {
+        files: ctx.files.map((f) => f.path),
+        infos: ctx.files.map((f) => f.info),
+        mode: v.mode || 'concat',
+        fadeDur: v.fadeDur || '1',
+        format: v.format || 'mp3',
+      };
     },
   },
   {
@@ -695,14 +842,38 @@ window.VGT.VIDEO_FEATURES = [
     },
   },
   {
-    id: 'addMusic', group: '音频', icon: '🎼', name: '添加背景音乐', desc: '替换原声或混合，音乐自动循环',
+    id: 'removeSilence', group: '音频', icon: '🎧', name: '自动去静音 / 剪气口', desc: '智能识别口播视频或录音中的静音停顿与气口并自动剪除拼接，声画精准同步',
+    accept: [...VIDEO_EXTS, ...AUDIO_EXTS],
+    fields: [
+      { key: 'threshold', label: '静音判定阈值', type: 'chips', def: '-35',
+        options: [['-30', '-30 dB（环境较吵）'], ['-35', '-35 dB（日常口播，推荐）'], ['-40', '-40 dB（安静录音）'], ['-45', '-45 dB（仅切极静段）']] },
+      { key: 'minSilence', label: '最短静音时长', type: 'chips', def: '0.4',
+        options: [['0.25', '0.25 秒（紧凑快节奏）'], ['0.4', '0.4 秒（自然口播，推荐）'], ['0.6', '0.6 秒（保留短停顿）'], ['1.0', '1.0 秒（仅删长空白）']] },
+      { key: 'padding', label: '气口缓冲留白', type: 'chips', def: '0.12',
+        options: [['0.05', '0.05 秒（干脆）'], ['0.12', '0.12 秒（自然不吞字，推荐）'], ['0.25', '0.25 秒（舒缓）']] },
+    ],
+    collect(v, ctx) {
+      return {
+        input: ctx.file.path,
+        threshold: v.threshold || '-35',
+        minSilence: v.minSilence || '0.4',
+        padding: v.padding || '0.12',
+        totalDuration: ctx.file.info.duration,
+      };
+    },
+  },
+  {
+    id: 'addMusic', group: '音频', icon: '🎼', name: '添加背景音乐', desc: '替换原声或混合，支持人声自动闪避（压低伴奏），音乐自动循环',
     accept: VIDEO_EXTS,
     fields: [
-      { type: 'secondFile', key: 'music', kind: 'audioFile', label: '音乐文件', placeholder: '选择 MP3 / WAV / M4A…' },
+      { type: 'secondFile', key: 'music', kind: 'audioFile', label: '音乐文件', placeholder: '选择 MP3 / WAV / M4A / FLAC / OPUS…' },
       { key: 'mode', label: '混音方式', type: 'chips', def: 'replace',
         options: [['replace', '替换原声'], ['mix', '与原声混合']] },
       { key: 'musicVolume', label: '音乐音量', type: 'select', def: '1',
         options: [['0.3', '0.3x（轻音乐）'], ['0.5', '0.5x'], ['1', '1x（原音量）'], ['1.5', '1.5x']],
+        showIf: (v) => v.mode === 'mix' },
+      { key: 'ducking', label: '人声智能闪避（广播级混音）', type: 'chips', def: 'no',
+        options: [['no', '普通等比例混合'], ['yes', '说话时自动压低背景音（推荐口播）']],
         showIf: (v) => v.mode === 'mix' },
     ],
     collect(v, ctx) {
@@ -710,6 +881,7 @@ window.VGT.VIDEO_FEATURES = [
       if (!music) throw new Error('请先选择背景音乐文件');
       return {
         input: ctx.file.path, music, mode: v.mode, musicVolume: v.musicVolume,
+        ducking: v.ducking || 'no',
         hasAudio: ctx.file.info.hasAudio, totalDuration: ctx.file.info.duration,
       };
     },
@@ -717,13 +889,22 @@ window.VGT.VIDEO_FEATURES = [
 
   // ================= 工具 =================
   {
-    id: 'watermark', group: '工具', icon: '🏷️', name: '添加水印', desc: '加文字或图片 Logo 水印（视频 / GIF / 图片通用）',
+    id: 'watermark', group: '工具', icon: '🏷️', name: '添加水印', desc: '加文字或图片 Logo 水印，支持四角、居中或全屏倾斜防盗平铺（视频 / GIF / 图片通用）',
     accept: [...VIDEO_EXTS, 'gif', ...IMG_EXTS],
     fields: [
       { key: 'mode', label: '水印类型', type: 'chips', def: 'text', options: [['text', '文字水印'], ['image', '图片 Logo']] },
       { key: 'text', label: '水印文字', type: 'text', def: '', placeholder: '输入水印文字…', showIf: (v) => v.mode === 'text' },
       { type: 'secondFile', key: 'image', kind: 'imageFile', label: '水印图片', placeholder: '选择 PNG / JPG 透明图标…', showIf: (v) => v.mode === 'image' },
-      { key: 'pos', label: '位置', type: 'chips', def: 'br', options: [['br', '右下角'], ['bl', '左下角'], ['tr', '右上角'], ['tl', '左上角'], ['center', '居中']] },
+      { key: 'pos', label: '位置', type: 'chips', def: 'br', options: [['br', '右下角'], ['bl', '左下角'], ['tr', '右上角'], ['tl', '左上角'], ['center', '居中'], ['tiled', '全屏平铺']] },
+      { key: 'wmColor', label: '文字颜色', type: 'chips', def: 'white',
+        options: [['white', '经典白'], ['yellow', '醒目黄'], ['black', '深黑'], ['gray', '半灰']],
+        showIf: (v) => v.mode === 'text' },
+      { key: 'tileAngle', label: '平铺倾斜角', type: 'chips', def: '-30',
+        options: [['-30', '-30°（推荐）'], ['-45', '-45°'], ['0', '0° 水平'], ['30', '30°']],
+        showIf: (v) => v.pos === 'tiled' },
+      { key: 'tileDensity', label: '平铺密度', type: 'chips', def: 'normal',
+        options: [['sparse', '稀疏'], ['normal', '适中（推荐）'], ['dense', '密集防盗']],
+        showIf: (v) => v.pos === 'tiled' },
       { key: 'size', label: '大小', type: 'chips', def: 'medium', options: [['small', '小'], ['medium', '中'], ['large', '大']] },
       { key: 'opacity', label: '透明度', type: 'chips', def: '0.7', options: [['0.4', '浅 (40%)'], ['0.7', '适中 (70%)'], ['1', '不透明']] },
     ],
@@ -731,7 +912,9 @@ window.VGT.VIDEO_FEATURES = [
       if (v.mode === 'image' && !window.__secondFile) throw new Error('请先选择水印图片');
       return {
         input: ctx.file.path, mode: v.mode, text: v.text, image: window.__secondFile,
-        pos: v.pos, size: v.size, opacity: v.opacity,
+        pos: v.pos, wmColor: v.wmColor || 'white',
+        tileAngle: v.tileAngle || '-30', tileDensity: v.tileDensity || 'normal',
+        size: v.size, opacity: v.opacity,
         srcW: ctx.file.info.width, srcH: ctx.file.info.height,
         totalDuration: ctx.file.info.duration,
       };
@@ -759,6 +942,29 @@ window.VGT.VIDEO_FEATURES = [
         input: ctx.file.path, mode: v.mode, subtitle: window.__secondFile,
         fontSize: v.fontSize, marginV: v.marginV, subIndex: v.subIndex,
         hasSubtitles: ctx.file.info.hasSubtitles, totalDuration: ctx.file.info.duration,
+      };
+    },
+  },
+  {
+    id: 'videoCover', group: '工具', icon: '📷', name: '设置视频封面', desc: '为 MP4 / M4V 写入指定画面或图片作为封面，保留原音视频流',
+    accept: ['mp4', 'm4v'],
+    fields: [
+      { key: 'source', label: '封面来源', type: 'chips', def: 'image',
+        options: [['image', '🖼️ 使用自定义图片'], ['frame', '🎞️ 提取视频某一帧']] },
+      { type: 'secondFile', key: 'coverImage', kind: 'imageFile', label: '封面图片', placeholder: '选择 JPG / PNG / WebP 封面图…',
+        showIf: (v) => v.source !== 'frame' },
+      { key: 'at', label: '封面画面时间点（秒）', type: 'number', def: '0', min: 0, step: 0.1, withVideoTime: true,
+        showIf: (v) => v.source === 'frame' },
+    ],
+    collect(v, ctx) {
+      const coverImage = v.source === 'frame' ? '' : (ctx.coverImage ?? window.__secondFile);
+      if (v.source !== 'frame' && !coverImage) throw new Error('请选择或连接封面图片');
+      return {
+        input: ctx.file.path,
+        source: v.source || 'image',
+        coverImage,
+        at: v.at || '0',
+        totalDuration: ctx.file.info.duration,
       };
     },
   },
@@ -816,7 +1022,7 @@ window.VGT.VIDEO_FEATURES = [
   },
   {
     id: 'stripMeta', group: '工具', icon: '🛡️', name: '清除隐私元数据', desc: '无损剥离视频/音频/图片中的设备型号、GPS定位等隐私信息',
-    accept: [...VIDEO_EXTS, 'gif', 'mp3', 'm4a', 'wav', 'flac', ...IMG_EXTS],
+    accept: [...VIDEO_EXTS, 'gif', ...AUDIO_EXTS, ...IMG_EXTS],
     fields: [],
     collect(v, ctx) {
       return { input: ctx.file.path, totalDuration: ctx.file.info.duration };

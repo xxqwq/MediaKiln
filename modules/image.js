@@ -728,6 +728,71 @@ function imageReplaceBg(p) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// 8. 标准尺寸画布 / 电商主图 & 社媒头像框
+// ---------------------------------------------------------------------------
+function imageCanvas(p) {
+  const presetMap = {
+    '800x800': [800, 800],
+    '1000x1000': [1000, 1000],
+    '1080x1440': [1080, 1440],
+    '1200x1600': [1200, 1600],
+    '1080x1080': [1080, 1080],
+    '512x512': [512, 512],
+  };
+  let W;
+  let H;
+  if (p.preset && presetMap[p.preset]) {
+    [W, H] = presetMap[p.preset];
+  } else {
+    W = Math.min(Math.max(Math.round(num(p.customW, 1080)), 64), 4096);
+    H = Math.min(Math.max(Math.round(num(p.customH, 1080)), 64), 4096);
+  }
+
+  const fit = ['contain', 'cover', 'blur'].includes(p.fit) ? p.fit : 'contain';
+  const fmt = ['jpg', 'png', 'webp'].includes(p.format) ? p.format : 'jpg';
+  const marginPct = fit === 'cover' ? 0 : Math.min(Math.max(num(p.marginPct, 0), 0), 30);
+  const innerW = Math.max(16, Math.round(W * (1 - (2 * marginPct) / 100)));
+  const innerH = Math.max(16, Math.round(H * (1 - (2 * marginPct) / 100)));
+
+  const rawBg = p.bgColor || '#ffffff';
+  const transparent = fit === 'contain' && rawBg === 'transparent' && !needsOpaqueBg(fmt);
+  const solidHex = normalizeHexColor(rawBg === 'transparent' ? 'ffffff' : rawBg, 'ffffff');
+  const output = defaultOutput(p.input, `${W}x${H}`, fmt);
+
+  let fc;
+  if (fit === 'cover') {
+    fc = `[0:v]format=rgba,scale=${W}:${H}:force_original_aspect_ratio=increase:flags=lanczos,crop=${W}:${H},setsar=1[fg];`;
+    if (rawBg === 'transparent' && !needsOpaqueBg(fmt)) {
+      fc += '[fg]format=rgba[vout]';
+    } else {
+      fc += buildFlattenChain('fg', 'vout', solidHex);
+    }
+  } else if (fit === 'blur') {
+    const outFmt = needsOpaqueBg(fmt) ? 'format=rgb24' : 'format=rgba';
+    fc = `[0:v]format=rgba,split[bsrc][fsrc];`
+      + `[bsrc]scale=${W}:${H}:force_original_aspect_ratio=increase:flags=lanczos,crop=${W}:${H},boxblur=25:3,setsar=1[bg];`
+      + `[fsrc]scale=${innerW}:${innerH}:force_original_aspect_ratio=decrease:flags=lanczos,setsar=1[fg];`
+      + `[bg][fg]overlay=(W-w)/2:(H-h)/2:shortest=1,${outFmt}[vout]`;
+  } else if (transparent) {
+    fc = `[0:v]format=rgba,scale=${innerW}:${innerH}:force_original_aspect_ratio=decrease:flags=lanczos,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=0x00000000,setsar=1,format=rgba[vout]`;
+  } else {
+    const outFmt = needsOpaqueBg(fmt) ? 'format=rgb24' : 'format=rgba';
+    fc = `[0:v]format=rgba,scale=${innerW}:${innerH}:force_original_aspect_ratio=decrease:flags=lanczos,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=0x00000000,setsar=1[fg];`
+      + `[fg]split[fg1][bgsrc];`
+      + `[bgsrc]drawbox=x=0:y=0:w=iw:h=ih:color=0x${solidHex}@1:t=fill[bg];`
+      + `[bg][fg1]overlay=0:0:shortest=1,${outFmt}[vout]`;
+  }
+
+  return {
+    output,
+    steps: [{
+      args: ['-i', p.input, '-filter_complex', fc, '-map', '[vout]', '-map_metadata', '-1', ...imageCodecArgs(fmt, { quality: 'high' }), output],
+      totalDuration: 0,
+    }],
+  };
+}
+
 module.exports = {
   imageConvert,
   imageCompressTarget,
@@ -736,4 +801,5 @@ module.exports = {
   imageCutout,
   imageReplaceBg,
   imageFrame,
+  imageCanvas,
 };

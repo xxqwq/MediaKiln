@@ -4,10 +4,12 @@ const VIDEO_EXT = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'ts', 'm4v'];
 
 const ALL_MEDIA_EXT = [...VIDEO_EXT, 'gif'];
 const ALL_VISUAL_EXT = [...ALL_MEDIA_EXT, 'jpg', 'jpeg', 'png', 'webp', 'bmp', 'avif'];
-const AUDIO_EXT = ['mp3', 'm4a', 'wav', 'flac'];
+const AUDIO_EXT = ['mp3', 'm4a', 'wav', 'flac', 'aac', 'ogg', 'opus'];
 const IMG_EXT = ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'avif'];
 const SVG_EXT = ['svg'];
 const DOC_EXT = ['docx', 'pptx', 'md', 'markdown'];
+const HTML_EXT = ['html', 'htm'];
+const PDF_EXT = ['pdf'];
 
 // 各功能对应的文件选择过滤器（multi: 是否允许多选）
 const FILE_FILTERS = {
@@ -18,6 +20,7 @@ const FILE_FILTERS = {
   compressGif: { exts: ['gif'] },
   trimGif: { exts: ['gif'] },
   gifText: { exts: ['gif'] },
+  animSprite: { exts: [...VIDEO_EXT, 'gif', 'apng', ...IMG_EXT] },
   compressTarget: { exts: ALL_MEDIA_EXT },
   chromaGif: { exts: ALL_MEDIA_EXT },
   decorateMedia: { exts: ALL_MEDIA_EXT },
@@ -29,6 +32,7 @@ const FILE_FILTERS = {
   imageCutout: { exts: IMG_EXT },
   imageReplaceBg: { exts: IMG_EXT },
   imageFrame: { exts: IMG_EXT },
+  imageCanvas: { exts: IMG_EXT },
   // SVG 矢量模块
   svgToRaster: { exts: SVG_EXT },
   svgOptimize: { exts: SVG_EXT },
@@ -40,7 +44,11 @@ const FILE_FILTERS = {
   docCleanupMedia: { exts: ['docx', 'pptx'] },
   docStyleImages: { exts: ['docx', 'pptx'] },
   mdOrganizeImages: { exts: ['md', 'markdown'] },
+  docToPdf: { exts: ['md', 'markdown', ...HTML_EXT] },
   imagesToPdf: { exts: IMG_EXT, multi: true },
+  pdfToImages: { exts: PDF_EXT },
+  pdfMerge: { exts: PDF_EXT, multi: true },
+  pdfSplit: { exts: PDF_EXT },
   // 剪辑 / 工具（兼容静态图片）
   trimVideo: { exts: VIDEO_EXT },
   multiCut: { exts: VIDEO_EXT },
@@ -61,20 +69,25 @@ const FILE_FILTERS = {
   reverse: { exts: ALL_MEDIA_EXT },
   changeSpeed: { exts: ALL_MEDIA_EXT },
   extractAudio: { exts: [...VIDEO_EXT, ...AUDIO_EXT] },
+  audioConvert: { exts: AUDIO_EXT },
+  audioTrim: { exts: AUDIO_EXT },
+  audioMerge: { exts: AUDIO_EXT, multi: true },
   audioAdjust: { exts: VIDEO_EXT },
   addMusic: { exts: VIDEO_EXT },
+  removeSilence: { exts: [...VIDEO_EXT, ...AUDIO_EXT] },
   snapshot: { exts: ALL_MEDIA_EXT },
   contactSheet: { exts: VIDEO_EXT },
+  videoCover: { exts: ['mp4', 'm4v'] },
   stripMeta: { exts: [...ALL_MEDIA_EXT, ...AUDIO_EXT, ...IMG_EXT] },
   imagesTo: { exts: IMG_EXT, multi: true },
   // 第二文件（背景音乐 / 水印图片 / 分屏副视频 / 外挂字幕 / 替换图片）
-  audioFile: { exts: ['mp3', 'wav', 'm4a', 'flac', 'aac', 'ogg'] },
+  audioFile: { exts: AUDIO_EXT },
   imageFile: { exts: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'avif'] },
   replaceImageFiles: { exts: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'avif', 'gif', 'tif', 'tiff'], multi: true },
   videoGifFile: { exts: ALL_MEDIA_EXT },
   subFile: { exts: ['srt', 'ass', 'ssa', 'vtt'] },
-  anyMedia: { exts: [...VIDEO_EXT, 'gif', ...IMG_EXT, ...SVG_EXT, ...AUDIO_EXT, 'srt', 'ass', 'ssa', 'vtt', ...DOC_EXT], multi: true },
-  anyMediaSingle: { exts: [...VIDEO_EXT, 'gif', ...IMG_EXT, ...SVG_EXT, ...AUDIO_EXT, 'srt', 'ass', 'ssa', 'vtt', ...DOC_EXT] },
+  anyMedia: { exts: [...VIDEO_EXT, 'gif', 'apng', ...IMG_EXT, ...SVG_EXT, ...AUDIO_EXT, 'srt', 'ass', 'ssa', 'vtt', ...DOC_EXT, ...HTML_EXT, ...PDF_EXT], multi: true },
+  anyMediaSingle: { exts: [...VIDEO_EXT, 'gif', 'apng', ...IMG_EXT, ...SVG_EXT, ...AUDIO_EXT, 'srt', 'ass', 'ssa', 'vtt', ...DOC_EXT, ...HTML_EXT, ...PDF_EXT] },
 };
 
 const SINGLE_ONLY = new Set([
@@ -96,6 +109,8 @@ module.exports = {
   IMG_EXT,
   SVG_EXT,
   DOC_EXT,
+  HTML_EXT,
+  PDF_EXT,
   FILE_FILTERS,
   SINGLE_ONLY,
 };

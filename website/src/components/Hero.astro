@@ -1,31 +1,36 @@
 ---
 import { app, data, url, hasAsset, assetUrl, assetSize, fmtBytes, releasesUrl, dlVersion, release } from '../lib/site';
+import { iconSvg } from '../lib/icons';
 
 const shots = [
   {
     id: 'single',
-    label: '🛠️ 单工具模式',
+    icon: 'wrench',
+    label: '单工具模式',
     file: 'screenshots/single-video-to-gif.webp',
     caption: '左侧 8 大分类即点即用，右侧实时视频预览与两遍调色板高清转码参数',
     alt: '单工具模式：视频转 GIF 界面，左侧为 8 大类功能导航，右侧为预览与参数面板',
   },
   {
     id: 'workflow',
-    label: '🕸️ 节点画布工作流',
+    icon: 'workflow',
+    label: '节点画布工作流',
     file: 'screenshots/workflow-canvas.webp',
     caption: '多步骤自由连线、分支前后对比与增量智能缓存，调整下游参数秒级命中',
     alt: '节点画布模式：视频截取、加水印、转 GIF、压缩并分支对比的工作流',
   },
   {
     id: 'batch',
-    label: '📦 批量队列处理',
+    icon: 'package',
+    label: '批量队列处理',
     file: 'screenshots/batch-queue.webp',
     caption: '一次性拖入多文件顺序批处理，实时显示每个文件的压缩率与总体瘦身结果',
     alt: '批量队列处理完成后的界面截图，显示每个文件的体积变化',
   },
   {
     id: 'compare',
-    label: '⛶ 卷帘放大对比',
+    icon: 'maximize',
+    label: '卷帘放大对比',
     file: 'screenshots/single-result-compare.webp',
     caption: '处理结果支持 100%～400% 同步缩放平移与透明棋盘格卷帘细节检视',
     alt: '处理完成后的放大对比弹窗，支持并排同步缩放与卷帘对比',
@@ -39,6 +44,7 @@ const s = data.stats;
   <div class="hero-bg" aria-hidden="true">
     <div class="glow g1"></div>
     <div class="glow g2"></div>
+    <div class="beam"></div>
     <div class="grid"></div>
   </div>
 
@@ -75,10 +81,10 @@ const s = data.stats;
 
     <div class="hero-meta fade-up" style="--d:230ms">
       <ul class="hero-points" aria-label="核心卖点">
-        <li><span class="ck">✓</span>100% 本地离线</li>
-        <li><span class="ck">✓</span>{s.batchFeatures} 项支持批量</li>
-        <li><span class="ck">✓</span>NVENC / QSV / AMF 硬件加速</li>
-        <li><span class="ck">✓</span>MIT 开源</li>
+        <li><span class="ck" set:html={iconSvg('check', 13)} />100% 本地离线</li>
+        <li><span class="ck" set:html={iconSvg('check', 13)} />{s.batchFeatures} 项支持批量</li>
+        <li><span class="ck" set:html={iconSvg('check', 13)} />NVENC / QSV / AMF 硬件加速</li>
+        <li><span class="ck" set:html={iconSvg('check', 13)} />MIT 开源</li>
       </ul>
       <a class="hero-browse" href="#all-features">浏览全部 {s.features} 个功能 ↓</a>
     </div>
@@ -98,6 +104,7 @@ const s = data.stats;
                 data-shot={sh.id}
                 data-caption={sh.caption}
               >
+                <Fragment set:html={iconSvg(sh.icon, 14)} />
                 <span>{sh.label}</span>
                 <span class="shot-bar" aria-hidden="true"><i></i></span>
               </button>
@@ -109,8 +116,8 @@ const s = data.stats;
             <span class="dots"><i></i><i></i><i></i></span>
             <span class="title">{app.name}</span>
             <span class="win-right">
-              <span class="win-pill">🔒 本机离线引擎 · 0 上传</span>
-              <span class="win-zoom-hint">🔍 点击大图</span>
+              <span class="win-pill"><Fragment set:html={iconSvg('lock', 12)} /><span>本机离线引擎 · 0 上传</span></span>
+              <span class="win-zoom-hint"><Fragment set:html={iconSvg('zoomIn', 12)} /><span>点击大图</span></span>
             </span>
           </div>
           <div class="window-body shot-stack">
@@ -144,6 +151,13 @@ const s = data.stats;
   .glow { position: absolute; border-radius: 50%; filter: blur(95px); opacity: .58; }
   .g1 { width: 760px; height: 520px; left: 50%; top: -220px; transform: translateX(-60%); background: radial-gradient(closest-side, rgba(124, 116, 255, .56), transparent); }
   .g2 { width: 540px; height: 430px; left: 56%; top: 30px; background: radial-gradient(closest-side, rgba(103, 199, 230, .28), transparent); }
+  .beam {
+    position: absolute; left: 50%; top: -40px; transform: translateX(-50%);
+    width: min(1100px, 92vw); height: 340px;
+    background: conic-gradient(from 90deg at 50% 0%, transparent 155deg, rgba(139, 132, 255, .14) 176deg, rgba(103, 199, 230, .09) 186deg, transparent 206deg);
+    filter: blur(28px);
+    opacity: .72;
+  }
   .grid {
     position: absolute; inset: 0;
     background-image:
@@ -201,7 +215,7 @@ const s = data.stats;
     font-size: 13.5px; color: var(--text-2);
   }
   .hero-points li { display: flex; align-items: center; gap: 6px; }
-  .ck { color: var(--success); font-weight: 700; }
+  .ck { color: var(--success); display: inline-flex; align-items: center; }
   .hero-browse { font-size: 13.5px; color: var(--accent-hi); transition: color .2s; }
   .hero-browse:hover { color: #fff; text-decoration: underline; text-underline-offset: 4px; }
 
@@ -222,12 +236,14 @@ const s = data.stats;
   .window-bar .title { text-align: center; }
   .win-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
   .win-pill {
-    font-size: 11.5px; color: #b9f5d6; padding: 2px 8px; border-radius: 999px;
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11.5px; color: #b9f5d6; padding: 2px 9px; border-radius: 999px;
     background: rgba(61, 214, 140, .10); border: 1px solid rgba(61, 214, 140, .25);
     white-space: nowrap;
   }
   .win-zoom-hint {
-    font-size: 11.5px; color: var(--text-3); padding: 2px 8px; border-radius: 6px;
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11.5px; color: var(--text-3); padding: 2px 9px; border-radius: 6px;
     background: rgba(255, 255, 255, .04); border: 1px solid var(--border);
     white-space: nowrap;
   }

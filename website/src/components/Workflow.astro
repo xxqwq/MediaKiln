@@ -1,5 +1,6 @@
 ---
 import { data, url, hasAsset } from '../lib/site';
+import { iconPaths, iconSvg } from '../lib/icons';
 
 const HEAD_H = 48;
 const PORT_H = 28;
@@ -142,9 +143,11 @@ const s = data.stats;
 
 <section class="section wf-section" id="workflow">
   <div class="container">
-    <div class="section-head reveal">
-      <div class="eyebrow">节点画布模式</div>
-      <h2 class="h2">像搭积木一样，<span class="grad-text">串起整条处理流程</span></h2>
+    <div class="section-head-split reveal">
+      <div class="sh-left">
+        <div class="eyebrow">节点画布模式</div>
+        <h2 class="h2">像搭积木一样，<span class="grad-text">串起整条处理流程</span></h2>
+      </div>
       <p class="lead">
         {s.nodes} 个节点（{s.ioNodes} 个输入输出节点和 {s.nodes - s.ioNodes} 个功能节点）可自由连线。支持类型校验、按格式分流、分支对比、节点旁路与增量缓存。下面是软件内置的 {s.templates} 套模板：
       </p>
@@ -153,7 +156,7 @@ const s = data.stats;
     <div class="wf-tabs reveal" role="tablist" aria-label="预设工作流模板">
       {templates.map((t, i) => (
         <button type="button" class="wf-tab" role="tab" id={`wf-tab-${i}`} aria-controls={`wf-panel-${i}`} aria-selected={i === 0 ? 'true' : 'false'} data-wf={i}>
-          <span class="wf-emoji">{t.emoji}</span>
+          <span class="wf-emoji" set:html={iconSvg(t.emoji, 14)} />
           <span class="wf-name">{t.graph.name}</span>
         </button>
       ))}
@@ -172,8 +175,8 @@ const s = data.stats;
               <span class="tag">{t.nodes.length} 节点 · {t.edges.length} 连线</span>
               {anyShot && t.shot && (
                 <div class="wf-seg" role="group" aria-label="视图切换">
-                  <button type="button" class="wf-seg-btn" aria-pressed="true" data-view="diagram">✨ 矢量流程图</button>
-                  <button type="button" class="wf-seg-btn" aria-pressed="false" data-view="shot">🖥️ 真实软件截图</button>
+                  <button type="button" class="wf-seg-btn" aria-pressed="true" data-view="diagram"><Fragment set:html={iconSvg('sparkles', 13)} /><span>矢量流程图</span></button>
+                  <button type="button" class="wf-seg-btn" aria-pressed="false" data-view="shot"><Fragment set:html={iconSvg('monitor', 13)} /><span>真实软件截图</span></button>
                 </div>
               )}
             </div>
@@ -185,6 +188,10 @@ const s = data.stats;
                 <pattern id={`dots-${i}`} width="26" height="26" patternUnits="userSpaceOnUse">
                   <circle cx="1.5" cy="1.5" r="1.4" fill="rgba(255,255,255,.07)" />
                 </pattern>
+                <linearGradient id={`node-grad-${i}`} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stop-color="#1b1d28" />
+                  <stop offset="100%" stop-color="#12141c" />
+                </linearGradient>
               </defs>
               <rect x="-10000" y="-10000" width="20000" height="20000" fill={`url(#dots-${i})`} />
               {t.edges.map((e) => (
@@ -197,9 +204,10 @@ const s = data.stats;
                 const c = colorOf(n.group);
                 return (
                   <g class="node">
-                    <rect x={n.x} y={n.y} width={n.w} height={n.h} rx="14" fill="#17181f" stroke="rgba(255,255,255,.13)" stroke-width="1.5" />
+                    <rect x={n.x} y={n.y} width={n.w} height={n.h} rx="14" fill={`url(#node-grad-${i})`} stroke="rgba(255,255,255,.12)" stroke-width="1.5" />
                     <path d={`M${n.x + 14},${n.y} H${n.x + n.w - 14}`} stroke={c} stroke-width="3.8" stroke-linecap="round" />
-                    <text x={n.x + 16} y={n.y + 32} font-size="17.5" font-weight="650" fill="#ececef">{n.icon} {n.name}</text>
+                    <svg x={n.x + 15} y={n.y + 13} width="19" height="19" viewBox="0 0 24 24" fill="none" stroke={c} stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" set:html={iconPaths(n.icon)} />
+                    <text x={n.x + 41} y={n.y + 29.5} font-size="17" font-weight="650" fill="#ececef">{n.name}</text>
                     {n.inputs.map((p, pi) => {
                       const pc = portColor((p as { type?: string }).type, n.group);
                       return (
@@ -244,7 +252,7 @@ const s = data.stats;
                 <>
                   {si > 0 && <li class="wf-step-arr" aria-hidden="true">→</li>}
                   <li class="wf-step" style={`--sc:${st.color}`}>
-                    <span>{st.icon}</span>
+                    <span class="wf-step-ico" style={`color:${st.color}`} set:html={iconSvg(st.icon, 13)} />
                     <span>{st.name}</span>
                   </li>
                 </>
@@ -280,7 +288,8 @@ const s = data.stats;
     color: #fff;
     box-shadow: 0 4px 18px -6px rgba(124, 116, 255, .55);
   }
-  .wf-emoji { width: 26px; height: 26px; display: grid; place-items: center; font-size: 15px; border-radius: 50%; background: rgba(255, 255, 255, .06); }
+  .wf-emoji { width: 26px; height: 26px; display: grid; place-items: center; color: var(--accent-hi); border-radius: 50%; background: rgba(255, 255, 255, .06); }
+  .wf-tab[aria-selected="true"] .wf-emoji { color: #fff; background: rgba(139, 132, 255, .28); }
 
   .wf-stage { padding: 26px; }
   .wf-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; flex-wrap: wrap; }
@@ -294,6 +303,7 @@ const s = data.stats;
     background: rgba(255, 255, 255, .04); border: 1px solid var(--border-2);
   }
   .wf-seg-btn {
+    display: inline-flex; align-items: center; gap: 5px;
     height: 28px; padding: 0 12px; border-radius: 999px;
     font-size: 12.5px; font-weight: 500; color: var(--text-2);
     transition: all .2s var(--ease);
@@ -323,12 +333,13 @@ const s = data.stats;
     display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
   }
   .wf-step {
-    display: inline-flex; align-items: center; gap: 5px;
+    display: inline-flex; align-items: center; gap: 6px;
     padding: 4px 10px; border-radius: 8px; font-size: 12.5px; color: var(--text-2);
     background: rgba(255, 255, 255, .035);
     border: 1px solid var(--border);
     border-left: 2.5px solid var(--sc);
   }
+  .wf-step-ico { display: inline-flex; align-items: center; }
   .wf-step-arr { font-size: 12px; color: var(--text-3); }
   .wf-legend {
     display: flex; align-items: center; flex-wrap: wrap; gap: 10px;

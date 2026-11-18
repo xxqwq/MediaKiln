@@ -33,7 +33,25 @@ function loadSavedParams(featureId) {
   try { return JSON.parse(localStorage.getItem(`vgt_params_${featureId}`) || 'null'); } catch { return null; }
 }
 
-function saveCurrentParams(feature) {
+function loadUserPresets(featureId) {
+  try {
+    const list = JSON.parse(localStorage.getItem(`vgt_presets_${featureId}`) || '[]');
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveUserPresets(featureId, presets) {
+  try {
+    localStorage.setItem(`vgt_presets_${featureId}`, JSON.stringify(presets));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function extractSavableValues(feature) {
   const vals = collectFieldValues();
   const data = {};
   for (const field of feature.fields) {
@@ -41,11 +59,17 @@ function saveCurrentParams(feature) {
       data[field.key] = vals[field.key];
     }
   }
+  return data;
+}
+
+function saveCurrentParams(feature) {
+  const data = extractSavableValues(feature);
   try { localStorage.setItem(`vgt_params_${feature.id}`, JSON.stringify(data)); } catch {}
 }
 
 function createParamsController(appCtx) {
   const { $, getCurrentFeature, getFile, getBatchFiles, toast, prefillTimes } = appCtx;
+  const activePresetByFeature = new Map();
 
   const isContextImage = () => {
     const file = getFile();
@@ -55,10 +79,18 @@ function createParamsController(appCtx) {
     return false;
   };
 
+  const isContextGif = () => {
+    const file = getFile();
+    if (file?.path) return file.path.toLowerCase().endsWith('.gif');
+    const batch = getBatchFiles();
+    if (batch?.length && batch.every((b) => b.path.toLowerCase().endsWith('.gif'))) return true;
+    return false;
+  };
+
   function syncVisibility() {
     const currentFeature = getCurrentFeature();
     const values = collectFieldValues();
-    const ctx = { isImage: isContextImage() };
+    const ctx = { isImage: isContextImage(), isGif: isContextGif() };
     for (const field of currentFeature.fields) {
       if (!field.showIf) continue;
       let target = null;
@@ -71,29 +103,61 @@ function createParamsController(appCtx) {
     }
   }
 
-  function renderParams() {
+  function renderParams({ preserveInputState = false } = {}) {
     const currentFeature = getCurrentFeature();
     const file = getFile();
 
-    window.__crop = null;
-    window.__secondFile = window.__pendingSecondFile || null;
-    window.__pendingSecondFile = null;
-    window.__secondInfo = null;
-    window.__segments = [];
-    window.__docSelectedSectionIds = null;
+    if (!preserveInputState) {
+      window.__crop = null;
+      window.__secondFile = window.__pendingSecondFile || null;
+      window.__pendingSecondFile = null;
+      window.__secondInfo = null;
+      window.__segments = [];
+      window.__docSelectedSectionIds = null;
+    }
     const box = $('params');
     box.innerHTML = '';
 
     if (currentFeature.fields.length) {
+      const presets = loadUserPresets(currentFeature.id);
+      let activePresetId = activePresetByFeature.get(currentFeature.id) || '';
+      if (activePresetId && !presets.some((p) => p.id === activePresetId)) {
+        activePresetId = '';
+        activePresetByFeature.delete(currentFeature.id);
+      }
+
       const head = document.createElement('div');
       head.className = 'params-head';
-      head.innerHTML = `<span>参数设置</span><button class="batch-btn" id="btn-reset-params" title="清除本功能已记忆的参数">↺ 恢复默认</button>`;
+      const optsHtml = [
+        `<option value="">选择已存预设 (${presets.length})…</option>`,
+        ...presets.map((p) => `<option value="${escHtml(p.id)}" ${p.id === activePresetId ? 'selected' : ''}>${escHtml(p.name)}</option>`),
+      ].join('');
+      head.innerHTML = `
+        <span>参数设置</span>
+        <div class="params-head-actions">
+          <select class="preset-select${presets.length ? '' : ' hidden'}" id="user-preset-select" aria-label="应用预设">${optsHtml}</select>
+          <button type="button" class="batch-btn${activePresetId ? '' : ' hidden'}" id="btn-del-preset" aria-label="删除当前选中的预设" title="删除当前选中的预设">🗑</button>
+          <button type="button" class="batch-btn" id="btn-save-preset" title="将当前参数保存为命名预设">💾 存为预设</button>
+          <button type="button" class="batch-btn" id="btn-reset-params" title="清除本功能已记忆的参数">↺ 恢复默认</button>
+          <button type="button" class="batch-btn" id="btn-params-to-wf" title="携带当前参数发送到节点工作流画布">🕸️ 带参数入画布</button>
+        </div>`;
       box.appendChild(head);
+
+      const saveRow = document.createElement('div');
+      saveRow.className = 'preset-save-row hidden';
+      saveRow.id = 'preset-save-row';
+      saveRow.innerHTML = `
+        <input type="text" id="preset-name-input" class="preset-name-input" aria-label="预设名称" placeholder="预设名称" maxlength="40" />
+        <button type="button" class="batch-btn preset-confirm" id="btn-preset-confirm">保存</button>
+        <button type="button" class="batch-btn" id="btn-preset-cancel">取消</button>
+      `;
+      box.appendChild(saveRow);
     }
 
     const grid = document.createElement('div');
     grid.className = 'param-grid';
     const hasVideo = !!document.querySelector('#preview-box video');
+    const hasAudioPlayer = !!document.querySelector('#preview-box audio');
     const saved = loadSavedParams(currentFeature.id);
 
     for (const field of currentFeature.fields) {
@@ -109,8 +173,8 @@ function createParamsController(appCtx) {
 
       if (field.type === 'times') {
         const dur = file?.info?.duration || 0;
-        const canGifScrub = !hasVideo && file && !file.info?.isImage && dur > 0.2;
-        const pickHtml = hasVideo
+        const canGifScrub = !hasVideo && !hasAudioPlayer && file && !file.info?.isImage && dur > 0.2;
+        const pickHtml = hasVideo || hasAudioPlayer
           ? `<div class="chip-row"><button class="chip" id="pick-t-start">⏮ 设为起点</button><button class="chip" id="pick-t-end">⏭ 设为终点</button></div>`
           : (canGifScrub
             ? `<div class="gif-scrub-box">
@@ -284,9 +348,140 @@ function createParamsController(appCtx) {
 
     const persist = () => saveCurrentParams(currentFeature);
 
+    const presetSelect = box.querySelector('#user-preset-select');
+    const delPresetBtn = box.querySelector('#btn-del-preset');
+    const savePresetBtn = box.querySelector('#btn-save-preset');
+    const saveRow = box.querySelector('#preset-save-row');
+    const presetNameInput = box.querySelector('#preset-name-input');
+    const presetConfirmBtn = box.querySelector('#btn-preset-confirm');
+    const presetCancelBtn = box.querySelector('#btn-preset-cancel');
+    const paramsToWfBtn = box.querySelector('#btn-params-to-wf');
+
+    const refreshPresetBar = () => {
+      if (!presetSelect) return;
+      const list = loadUserPresets(currentFeature.id);
+      const activeId = activePresetByFeature.get(currentFeature.id) || '';
+      presetSelect.innerHTML = [
+        `<option value="">选择已存预设 (${list.length})…</option>`,
+        ...list.map((p) => `<option value="${escHtml(p.id)}" ${p.id === activeId ? 'selected' : ''}>${escHtml(p.name)}</option>`),
+      ].join('');
+      presetSelect.classList.toggle('hidden', list.length === 0);
+      if (delPresetBtn) delPresetBtn.classList.toggle('hidden', !activeId || !list.some((p) => p.id === activeId));
+    };
+
+    if (presetSelect) {
+      presetSelect.onchange = () => {
+        const chosenId = presetSelect.value;
+        if (!chosenId) {
+          activePresetByFeature.delete(currentFeature.id);
+          if (delPresetBtn) delPresetBtn.classList.add('hidden');
+          return;
+        }
+        const preset = loadUserPresets(currentFeature.id).find((p) => p.id === chosenId);
+        if (!preset) return;
+        const prevStart = $('t-start')?.value;
+        const prevEnd = $('t-end')?.value;
+        try { localStorage.setItem(`vgt_params_${currentFeature.id}`, JSON.stringify(preset.values || {})); }
+        catch { toast('无法应用预设', true); return; }
+        activePresetByFeature.set(currentFeature.id, preset.id);
+        renderParams({ preserveInputState: true });
+        if (file?.info) prefillTimes(file.info);
+        if (prevStart !== undefined && $('t-start')) $('t-start').value = prevStart;
+        if (prevEnd !== undefined && $('t-end')) $('t-end').value = prevEnd;
+        toast(`已应用预设「${preset.name}」`);
+      };
+    }
+
+    if (delPresetBtn) {
+      delPresetBtn.onclick = () => {
+        const activeId = activePresetByFeature.get(currentFeature.id);
+        if (!activeId) return;
+        const list = loadUserPresets(currentFeature.id);
+        const target = list.find((p) => p.id === activeId);
+        const next = list.filter((p) => p.id !== activeId);
+        if (!saveUserPresets(currentFeature.id, next)) {
+          toast('无法删除预设', true);
+          return;
+        }
+        activePresetByFeature.delete(currentFeature.id);
+        refreshPresetBar();
+        toast(target ? `已删除预设「${target.name}」` : '已删除预设');
+      };
+    }
+
+    if (savePresetBtn && saveRow && presetNameInput) {
+      const closeSaveRow = () => {
+        saveRow.classList.add('hidden');
+        presetNameInput.value = '';
+      };
+      const commitSavePreset = () => {
+        const name = presetNameInput.value.trim();
+        if (!name) {
+          toast('请输入预设名称', true);
+          presetNameInput.focus();
+          return;
+        }
+        const values = extractSavableValues(currentFeature);
+        const existing = loadUserPresets(currentFeature.id);
+        if (existing.some((p) => p.name === name)) {
+          toast('此预设名称已存在', true);
+          return;
+        }
+        if (existing.length >= 20) {
+          toast('此工具已保存 20 个预设，请先删除一个', true);
+          return;
+        }
+        const id = `p_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+        const entry = { id, name, values, createdAt: Date.now() };
+        if (!saveUserPresets(currentFeature.id, [entry, ...existing])) {
+          toast('无法保存预设', true);
+          return;
+        }
+        activePresetByFeature.set(currentFeature.id, id);
+        closeSaveRow();
+        refreshPresetBar();
+        toast(`已保存预设「${name}」`);
+      };
+      savePresetBtn.onclick = () => {
+        const opening = saveRow.classList.contains('hidden');
+        saveRow.classList.toggle('hidden', !opening);
+        if (opening) {
+          presetNameInput.value = '';
+          presetNameInput.focus();
+        }
+      };
+      presetConfirmBtn?.addEventListener('click', commitSavePreset);
+      presetCancelBtn?.addEventListener('click', closeSaveRow);
+      presetNameInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          e.stopPropagation();
+          commitSavePreset();
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
+          closeSaveRow();
+        }
+      });
+    }
+
+    if (paramsToWfBtn) {
+      paramsToWfBtn.onclick = () => {
+        const fv = collectFieldValues();
+        if ($('t-start')) fv.tStart = parseFloat($('t-start').value) || 0;
+        if ($('t-end')) fv.tEnd = parseFloat($('t-end').value) || 0;
+        if (window.__crop) fv.crop = { ...window.__crop };
+        if (Array.isArray(window.__segments) && window.__segments.length) {
+          fv.segments = window.__segments.map((s) => ({ ...s }));
+        }
+        appCtx.onSendFeatureToWorkflow?.(currentFeature, fv);
+      };
+    }
+
     const resetBtn = box.querySelector('#btn-reset-params');
     if (resetBtn) {
       resetBtn.onclick = () => {
+        activePresetByFeature.delete(currentFeature.id);
         localStorage.removeItem(`vgt_params_${currentFeature.id}`);
         renderParams();
         if (file?.info) prefillTimes(file.info);
@@ -417,7 +612,7 @@ function createParamsController(appCtx) {
 
     const gifScrubRange = box.querySelector('#gif-scrub-range');
     const getVidTime = () => {
-      const v = document.querySelector('#preview-box video');
+      const v = document.querySelector('#preview-box video, #preview-box audio');
       if (v) return round1(v.currentTime || 0);
       if (gifScrubRange) return round1(parseFloat(gifScrubRange.value) || 0);
       return 0;
@@ -475,7 +670,9 @@ function createParamsController(appCtx) {
     const segListEl = box.querySelector('#seg-list');
     if (segListEl) {
       const dur = file?.info.duration || 0;
-      window.__segments = [{ start: 0, end: dur > 0 ? round1(Math.min(dur, 5)) : 5 }];
+      if (!window.__segments.length) {
+        window.__segments = [{ start: 0, end: dur > 0 ? round1(Math.min(dur, 5)) : 5 }];
+      }
 
       const renderSegs = () => {
         segListEl.innerHTML = '';

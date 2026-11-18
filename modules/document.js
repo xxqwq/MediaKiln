@@ -17,6 +17,44 @@ const {
 } = require('../core/doc-parser');
 const { FONT, num, normalizeHexColor, imageCodecArgs, writeRoundedMaskPgm } = require('../core/utils');
 const { probe, runFfmpeg, defaultOutput, defaultDirOutput, stampOutput } = require('../core/runner');
+const {
+  parsePageRange,
+  getPdfPageCount,
+  renderPdfPagesToPngs,
+  buildPdfFromJpegPages,
+  getJpegDimensions,
+  mergePdfFiles,
+  extractPdfPages,
+  splitPdfIntoChunks,
+} = require('../core/pdf-engine');
+const { convertDocToPdf } = require('../core/md-renderer');
+
+async function runWithConcurrency(items, concurrency, worker) {
+  if (!items.length) return [];
+  const results = new Array(items.length);
+  let nextIdx = 0;
+  let cancelErr = null;
+  const workerCount = Math.max(1, Math.min(concurrency, items.length));
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (!cancelErr) {
+        const idx = nextIdx++;
+        if (idx >= items.length) break;
+        try {
+          results[idx] = await worker(items[idx], idx);
+        } catch (err) {
+          if (err && err.message === '任务已取消') {
+            cancelErr = err;
+            throw err;
+          }
+          throw err;
+        }
+      }
+    }),
+  );
+  if (cancelErr) throw cancelErr;
+  return results;
+}
 
 const MIME_EXT = {
   'image/png': 'png',
@@ -538,23 +576,48 @@ function docCompressImages(p) {
       let skippedCount = 0;
 
       try {
-        for (let i = 0; i < targets.length; i++) {
-          const t = targets[i];
-          const origBuf = t.entry.getData();
-          const tmpIn = path.join(tmpDir, `in_${i}.${t.origExt}`);
+        const origBufs = targets.map((t) => t.entry.getData());
+        const results = new Array(targets.length).fill(null);
+        let completedCount = 0;
+
+        const processOne = async (idx) => {
+          const t = targets[idx];
+          const origBuf = origBufs[idx];
+          const tmpIn = path.join(tmpDir, `in_${idx}.${t.origExt}`);
           fs.writeFileSync(tmpIn, origBuf);
 
           let res = null;
           try {
             if (t.kind === 'video') {
-              res = await compressEmbeddedVideoFile(taskId, tmpIn, { maxSide, preset }, tmpDir, i);
+              res = await compressEmbeddedVideoFile(taskId, tmpIn, { maxSide, preset }, tmpDir, idx);
             } else {
-              res = await compressRasterFile(taskId, tmpIn, t.origExt, { maxSide, preset, formatMode }, tmpDir, i);
+              res = await compressRasterFile(taskId, tmpIn, t.origExt, { maxSide, preset, formatMode }, tmpDir, idx);
             }
           } catch (err) {
             if (err.message === '任务已取消') throw err;
             res = null;
           }
+          results[idx] = res;
+          completedCount++;
+          onProgress?.(0.08 + (0.86 * completedCount) / targets.length);
+        };
+
+        const imageIndices = [];
+        const videoIndices = [];
+        for (let i = 0; i < targets.length; i++) {
+          if (targets[i].kind === 'video') videoIndices.push(i);
+          else imageIndices.push(i);
+        }
+
+        await runWithConcurrency(imageIndices, 3, processOne);
+        for (const vIdx of videoIndices) {
+          await processOne(vIdx);
+        }
+
+        for (let i = 0; i < targets.length; i++) {
+          const t = targets[i];
+          const origBuf = origBufs[i];
+          const res = results[i];
 
           if (!res || !res.buf || res.buf.length >= origBuf.length) {
             skippedCount++;
@@ -574,8 +637,6 @@ function docCompressImages(p) {
               renameMap.set(t.entryName, newEntryName);
             }
           }
-
-          onProgress?.(0.08 + (0.86 * (i + 1)) / targets.length);
         }
 
         if (renameMap.size) {
@@ -1105,102 +1166,127 @@ function docStyleImages(p) {
       }
 
       try {
+        const origBufs = targets.map((t) => t.entry.getData());
+        const results = new Array(targets.length).fill(null);
+        let completedCount = 0;
+
+        await runWithConcurrency(
+          targets.map((_, idx) => idx),
+          3,
+          async (i) => {
+            const t = targets[i];
+            const tmpIn = path.join(tmpDir, `in_${i}.${t.origExt}`);
+            fs.writeFileSync(tmpIn, origBufs[i]);
+
+            let info;
+            try {
+              info = await probe(tmpIn);
+            } catch {
+              info = null;
+            }
+            const W = info?.width || 0;
+            const H = info?.height || 0;
+            if (W < 8 || H < 8) {
+              completedCount++;
+              onProgress?.(0.08 + (0.84 * completedCount) / targets.length);
+              return;
+            }
+
+            const normOrigExt = t.origExt === 'jpeg' ? 'jpg' : t.origExt;
+            const needRounded = frameMode === 'rounded' || frameMode === 'roundedBorder';
+            const needTransparentCorners = frameMode === 'rounded';
+            const origHasAlpha = normOrigExt === 'png' && isAlphaPixFmt(info.pixFmt);
+
+            let outExt;
+            if (needTransparentCorners) {
+              outExt = 'png';
+            } else if (WORD_SAFE_EXTS.has(normOrigExt)) {
+              outExt = normOrigExt;
+            } else {
+              outExt = origHasAlpha ? 'png' : 'jpg';
+            }
+
+            const outPath = path.join(tmpDir, `out_${i}.${outExt}`);
+            const extraInputs = [];
+            let chain = '[0:v]setsar=1,format=rgba[v0]';
+            let last = 'v0';
+
+            if (wmText) {
+              const sizeK = { small: 26, medium: 17, large: 11 }[wmSize] || 17;
+              const fontsize = Math.max(14, Math.min(72, Math.round(Math.min(W, H) / sizeK)));
+              const margin = Math.max(10, Math.round(fontsize * 0.6));
+              const posExpr = {
+                tl: `x=${margin}:y=${margin}`,
+                tr: `x=w-text_w-${margin}:y=${margin}`,
+                bl: `x=${margin}:y=h-text_h-${margin}`,
+                br: `x=w-text_w-${margin}:y=h-text_h-${margin}`,
+                center: 'x=(w-text_w)/2:y=(h-text_h)/2',
+              }[wmPos] || `x=w-text_w-${margin}:y=h-text_h-${margin}`;
+
+              const borderOp = Math.min(1, Number(wmOpacity) * 0.75).toFixed(2);
+              const colorArgs = wmColor === 'black'
+                ? `fontcolor=black@${wmOpacity}:borderw=1:bordercolor=white@${borderOp}`
+                : (wmColor === 'gray'
+                  ? `fontcolor=#e2e8f0@${wmOpacity}:borderw=2:bordercolor=black@${borderOp}`
+                  : `fontcolor=white@${wmOpacity}:borderw=2:bordercolor=black@${borderOp}`);
+
+              chain += `;[${last}]drawtext=fontfile='${FONT}':textfile='${wmTextFileArg}':fontsize=${fontsize}:${colorArgs}:${posExpr}:expansion=none[vwm]`;
+              last = 'vwm';
+            }
+
+            if (needRounded) {
+              const r = Math.min(radiusRaw, Math.floor(Math.min(W, H) / 2));
+              const maskFile = path.join(tmpDir, `mask_${i}.pgm`);
+              writeRoundedMaskPgm(maskFile, W, H, r);
+              extraInputs.push('-i', maskFile);
+              chain += `;[1:v]format=gray[msk];[${last}][msk]alphamerge[vrnd]`;
+              last = 'vrnd';
+            }
+
+            const outW = W + borderWidth * 2;
+            const outH = H + borderWidth * 2;
+            if (borderWidth > 0) {
+              chain += `;[${last}]pad=${outW}:${outH}:${borderWidth}:${borderWidth}:color=0x${borderHex}ff[vpad]`;
+              last = 'vpad';
+              // 边框模式为纯色背景，把内侧圆角透明区域也用边框色铺平，视觉如相框
+              chain += `;[${last}]format=rgba,split[__fg][__bgsrc];[__bgsrc]drawbox=x=0:y=0:w=iw:h=ih:color=0x${borderHex}@1:t=fill[__bg];[__bg][__fg]overlay=0:0:shortest=1[vflat]`;
+              last = 'vflat';
+            }
+
+            if (outExt === 'jpg' || outExt === 'bmp') {
+              chain += `;[${last}]format=rgba,split[__jfg][__jbgsrc];[__jbgsrc]drawbox=x=0:y=0:w=iw:h=ih:color=0x${borderWidth > 0 ? borderHex : 'ffffff'}@1:t=fill[__jbg];[__jbg][__jfg]overlay=0:0:shortest=1,format=rgb24[vout]`;
+            } else {
+              chain += `;[${last}]format=rgba[vout]`;
+            }
+
+            await runFfmpeg(taskId, [
+              '-i', tmpIn,
+              ...extraInputs,
+              '-filter_complex', chain,
+              '-map', '[vout]',
+              '-map_metadata', '-1',
+              ...imageCodecArgs(outExt, { quality: 'high' }),
+              outPath,
+            ], { totalDuration: 0 });
+
+            results[i] = {
+              newBuf: fs.readFileSync(outPath),
+              outExt,
+              normOrigExt,
+              outW,
+              outH,
+            };
+            completedCount++;
+            onProgress?.(0.08 + (0.84 * completedCount) / targets.length);
+          },
+        );
+
         for (let i = 0; i < targets.length; i++) {
+          const itemRes = results[i];
+          if (!itemRes) continue;
           const t = targets[i];
-          const tmpIn = path.join(tmpDir, `in_${i}.${t.origExt}`);
-          fs.writeFileSync(tmpIn, t.entry.getData());
+          const { newBuf, outExt, normOrigExt, outW, outH } = itemRes;
 
-          let info;
-          try {
-            info = await probe(tmpIn);
-          } catch {
-            info = null;
-          }
-          const W = info?.width || 0;
-          const H = info?.height || 0;
-          if (W < 8 || H < 8) {
-            onProgress?.(0.08 + (0.84 * (i + 1)) / targets.length);
-            continue;
-          }
-
-          const normOrigExt = t.origExt === 'jpeg' ? 'jpg' : t.origExt;
-          const needRounded = frameMode === 'rounded' || frameMode === 'roundedBorder';
-          const needTransparentCorners = frameMode === 'rounded';
-          const origHasAlpha = normOrigExt === 'png' && isAlphaPixFmt(info.pixFmt);
-
-          let outExt;
-          if (needTransparentCorners) {
-            outExt = 'png';
-          } else if (WORD_SAFE_EXTS.has(normOrigExt)) {
-            outExt = normOrigExt;
-          } else {
-            outExt = origHasAlpha ? 'png' : 'jpg';
-          }
-
-          const outPath = path.join(tmpDir, `out_${i}.${outExt}`);
-          const extraInputs = [];
-          let chain = '[0:v]setsar=1,format=rgba[v0]';
-          let last = 'v0';
-
-          if (wmText) {
-            const sizeK = { small: 26, medium: 17, large: 11 }[wmSize] || 17;
-            const fontsize = Math.max(14, Math.min(72, Math.round(Math.min(W, H) / sizeK)));
-            const margin = Math.max(10, Math.round(fontsize * 0.6));
-            const posExpr = {
-              tl: `x=${margin}:y=${margin}`,
-              tr: `x=w-text_w-${margin}:y=${margin}`,
-              bl: `x=${margin}:y=h-text_h-${margin}`,
-              br: `x=w-text_w-${margin}:y=h-text_h-${margin}`,
-              center: 'x=(w-text_w)/2:y=(h-text_h)/2',
-            }[wmPos] || `x=w-text_w-${margin}:y=h-text_h-${margin}`;
-
-            const borderOp = Math.min(1, Number(wmOpacity) * 0.75).toFixed(2);
-            const colorArgs = wmColor === 'black'
-              ? `fontcolor=black@${wmOpacity}:borderw=1:bordercolor=white@${borderOp}`
-              : (wmColor === 'gray'
-                ? `fontcolor=#e2e8f0@${wmOpacity}:borderw=2:bordercolor=black@${borderOp}`
-                : `fontcolor=white@${wmOpacity}:borderw=2:bordercolor=black@${borderOp}`);
-
-            chain += `;[${last}]drawtext=fontfile='${FONT}':textfile='${wmTextFileArg}':fontsize=${fontsize}:${colorArgs}:${posExpr}:expansion=none[vwm]`;
-            last = 'vwm';
-          }
-
-          if (needRounded) {
-            const r = Math.min(radiusRaw, Math.floor(Math.min(W, H) / 2));
-            const maskFile = path.join(tmpDir, `mask_${i}.pgm`);
-            writeRoundedMaskPgm(maskFile, W, H, r);
-            extraInputs.push('-i', maskFile);
-            chain += `;[1:v]format=gray[msk];[${last}][msk]alphamerge[vrnd]`;
-            last = 'vrnd';
-          }
-
-          const outW = W + borderWidth * 2;
-          const outH = H + borderWidth * 2;
-          if (borderWidth > 0) {
-            chain += `;[${last}]pad=${outW}:${outH}:${borderWidth}:${borderWidth}:color=0x${borderHex}ff[vpad]`;
-            last = 'vpad';
-            // 边框模式为纯色背景，把内侧圆角透明区域也用边框色铺平，视觉如相框
-            chain += `;[${last}]format=rgba,split[__fg][__bgsrc];[__bgsrc]drawbox=x=0:y=0:w=iw:h=ih:color=0x${borderHex}@1:t=fill[__bg];[__bg][__fg]overlay=0:0:shortest=1[vflat]`;
-            last = 'vflat';
-          }
-
-          if (outExt === 'jpg' || outExt === 'bmp') {
-            chain += `;[${last}]format=rgba,split[__jfg][__jbgsrc];[__jbgsrc]drawbox=x=0:y=0:w=iw:h=ih:color=0x${borderWidth > 0 ? borderHex : 'ffffff'}@1:t=fill[__jbg];[__jbg][__jfg]overlay=0:0:shortest=1,format=rgb24[vout]`;
-          } else {
-            chain += `;[${last}]format=rgba[vout]`;
-          }
-
-          await runFfmpeg(taskId, [
-            '-i', tmpIn,
-            ...extraInputs,
-            '-filter_complex', chain,
-            '-map', '[vout]',
-            '-map_metadata', '-1',
-            ...imageCodecArgs(outExt, { quality: 'high' }),
-            outPath,
-          ], { totalDuration: 0 });
-
-          const newBuf = fs.readFileSync(outPath);
           styledCount++;
           usedExts.add(outExt);
 
@@ -1218,8 +1304,6 @@ function docStyleImages(p) {
             zip.addFile(newEntryName, newBuf);
             renameMap.set(t.entryName, newEntryName);
           }
-
-          onProgress?.(0.08 + (0.84 * (i + 1)) / targets.length);
         }
 
         if (!styledCount) {
@@ -1577,116 +1661,6 @@ function mdOrganizeImages(p) {
 // ---------------------------------------------------------------------------
 // 7. 多图合并为 PDF（纯 Node PDF 1.4 组装 + FFmpeg JPEG 归一化）
 // ---------------------------------------------------------------------------
-function getJpegDimensions(buf) {
-  if (!buf || buf.length < 4 || buf[0] !== 0xff || buf[1] !== 0xd8) return null;
-  let pos = 2;
-  while (pos + 4 < buf.length) {
-    while (pos < buf.length && buf[pos] !== 0xff) pos++;
-    while (pos < buf.length && buf[pos] === 0xff) pos++;
-    if (pos >= buf.length) break;
-    const marker = buf[pos++];
-    if (marker === 0x00 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd9)) continue;
-    if (pos + 2 > buf.length) break;
-    const segLen = buf.readUInt16BE(pos);
-    if (segLen < 2 || pos + segLen > buf.length) break;
-    if (marker >= 0xc0 && marker <= 0xc3 && segLen >= 7) {
-      const h = buf.readUInt16BE(pos + 3);
-      const w = buf.readUInt16BE(pos + 5);
-      if (w > 0 && h > 0) return { width: w, height: h };
-    }
-    pos += segLen;
-  }
-  return null;
-}
-
-function buildPdfFromJpegPages(pages, { pageSize = 'a4p', margin = 20 } = {}) {
-  // PDF objects: 1=Catalog, 2=Pages, per page i: (3+i*3)=Page, (4+i*3)=Contents, (5+i*3)=Image XObject
-  const n = pages.length;
-  const totalObjs = 2 + n * 3;
-  const kidsRefs = [];
-  for (let i = 0; i < n; i++) kidsRefs.push(`${3 + i * 3} 0 R`);
-
-  const chunks = [];
-  const offsets = new Array(totalObjs + 1).fill(0);
-  let byteLen = 0;
-
-  const pushBuf = (b) => {
-    chunks.push(b);
-    byteLen += b.length;
-  };
-  const pushAscii = (s) => pushBuf(Buffer.from(s, 'latin1'));
-
-  pushAscii('%PDF-1.4\n');
-  pushBuf(Buffer.from([0x25, 0xe2, 0xe3, 0xcf, 0xd3, 0x0a]));
-
-  const writeObj = (id, bodyParts) => {
-    offsets[id] = byteLen;
-    pushAscii(`${id} 0 obj\n`);
-    for (const part of bodyParts) {
-      if (Buffer.isBuffer(part)) pushBuf(part);
-      else pushAscii(part);
-    }
-    pushAscii('\nendobj\n');
-  };
-
-  writeObj(1, ['<< /Type /Catalog /Pages 2 0 R >>']);
-  writeObj(2, [`<< /Type /Pages /Kids [ ${kidsRefs.join(' ')} ] /Count ${n} >>`]);
-
-  for (let i = 0; i < n; i++) {
-    const { jpgBuf, width, height } = pages[i];
-    const pageObjId = 3 + i * 3;
-    const cntObjId = 4 + i * 3;
-    const imgObjId = 5 + i * 3;
-
-    let pageW;
-    let pageH;
-    if (pageSize === 'a4p') {
-      pageW = 595.28;
-      pageH = 841.89;
-    } else if (pageSize === 'a4l') {
-      pageW = 841.89;
-      pageH = 595.28;
-    } else {
-      pageW = width * 0.75 + margin * 2;
-      pageH = height * 0.75 + margin * 2;
-    }
-
-    const availW = Math.max(10, pageW - margin * 2);
-    const availH = Math.max(10, pageH - margin * 2);
-    const scale = Math.min(availW / width, availH / height);
-    const drawW = width * scale;
-    const drawH = height * scale;
-    const drawX = (pageW - drawW) / 2;
-    const drawY = (pageH - drawH) / 2;
-
-    const contentStr = `q\n${drawW.toFixed(2)} 0 0 ${drawH.toFixed(2)} ${drawX.toFixed(2)} ${drawY.toFixed(2)} cm\n/Im0 Do\nQ\n`;
-    const contentBuf = Buffer.from(contentStr, 'latin1');
-
-    writeObj(pageObjId, [
-      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageW.toFixed(2)} ${pageH.toFixed(2)}] /Resources << /XObject << /Im0 ${imgObjId} 0 R >> >> /Contents ${cntObjId} 0 R >>`,
-    ]);
-    writeObj(cntObjId, [
-      `<< /Length ${contentBuf.length} >>\nstream\n`,
-      contentBuf,
-      '\nendstream',
-    ]);
-    writeObj(imgObjId, [
-      `<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpgBuf.length} >>\nstream\n`,
-      jpgBuf,
-      '\nendstream',
-    ]);
-  }
-
-  const xrefOffset = byteLen;
-  pushAscii(`xref\n0 ${totalObjs + 1}\n0000000000 65535 f \n`);
-  for (let id = 1; id <= totalObjs; id++) {
-    pushAscii(`${String(offsets[id]).padStart(10, '0')} 00000 n \n`);
-  }
-  pushAscii(`trailer\n<< /Size ${totalObjs + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`);
-
-  return Buffer.concat(chunks);
-}
-
 function imagesToPdf(p) {
   const files = Array.isArray(p.files) ? p.files.filter(Boolean) : [];
   if (!files.length) throw new Error('请至少选择 1 张图片');
@@ -1751,6 +1725,378 @@ function imagesToPdf(p) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// 8. PDF 转图片（逐页导出 / 纵向拼接长图）
+// ---------------------------------------------------------------------------
+function readPngWidth(pngPath) {
+  try {
+    const fd = fs.openSync(pngPath, 'r');
+    const hdr = Buffer.alloc(24);
+    const bytesRead = fs.readSync(fd, hdr, 0, 24, 0);
+    fs.closeSync(fd);
+    if (bytesRead === 24 && hdr[0] === 0x89 && hdr[1] === 0x50 && hdr[2] === 0x4e && hdr[3] === 0x47) {
+      return hdr.readUInt32BE(16);
+    }
+  } catch {}
+  return 0;
+}
+
+function pdfToImages(p) {
+  const ext = path.extname(String(p.input || '')).slice(1).toLowerCase();
+  if (ext !== 'pdf') {
+    throw new Error('请选择 PDF (.pdf) 文件');
+  }
+  const mode = p.mode === 'longImage' ? 'longImage' : 'pages';
+  const format = ['png', 'jpg', 'webp'].includes(p.format) ? p.format : 'png';
+  const dpiScale = Math.min(Math.max(num(p.dpiScale, 2), 1), 4);
+  const pageRange = String(p.pageRange || '').trim();
+  const gap = Math.min(Math.max(Math.round(num(p.gap, 0)), 0), 200);
+  const output = mode === 'pages'
+    ? (p.output || defaultDirOutput(p.input, 'PDF转图片'))
+    : (p.output || defaultOutput(p.input, 'PDF长图', format));
+  const outputType = mode === 'pages' ? 'dir' : 'file';
+
+  return {
+    output,
+    outputType,
+    async run(taskId, onProgress) {
+      onProgress?.(0.03);
+      const totalPages = await getPdfPageCount(p.input);
+      const pages = parsePageRange(pageRange, totalPages);
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vgt_pdf_img_'));
+
+      try {
+        const pngs = await renderPdfPagesToPngs(p.input, tmpDir, {
+          pages,
+          scale: dpiScale,
+          taskId,
+          onProgress: (r) => onProgress?.(0.05 + r * 0.65),
+        });
+
+        if (mode === 'pages') {
+          fs.mkdirSync(output, { recursive: true });
+          const padLen = Math.max(3, String(pngs.length).length);
+          const outFiles = [];
+
+          for (let i = 0; i < pngs.length; i++) {
+            const dest = path.join(output, `${String(i + 1).padStart(padLen, '0')}.${format}`);
+            if (format === 'png') {
+              fs.copyFileSync(pngs[i], dest);
+            } else if (format === 'jpg') {
+              await runFfmpeg(taskId, [
+                '-i', pngs[i],
+                '-filter_complex',
+                '[0:v]setsar=1,format=rgba,split[__fg][__bgsrc];[__bgsrc]drawbox=x=0:y=0:w=iw:h=ih:color=0xffffff@1:t=fill[__bg];[__bg][__fg]overlay=0:0:shortest=1:format=rgb,format=rgb24[vout]',
+                '-map', '[vout]',
+                '-map_metadata', '-1',
+                ...imageCodecArgs('jpg', { quality: 'high' }),
+                dest,
+              ], { totalDuration: 0 });
+            } else {
+              await runFfmpeg(taskId, [
+                '-i', pngs[i],
+                '-vf', 'setsar=1,format=rgba',
+                '-map_metadata', '-1',
+                ...imageCodecArgs('webp', { quality: 'high' }),
+                dest,
+              ], { totalDuration: 0 });
+            }
+            outFiles.push(dest);
+            onProgress?.(0.7 + (0.3 * (i + 1)) / pngs.length);
+          }
+
+          onProgress?.(1);
+          return {
+            output,
+            outputType: 'dir',
+            pdfToImagesSummary: {
+              totalPages,
+              exportedCount: outFiles.length,
+              mode,
+              format,
+              files: outFiles,
+            },
+          };
+        }
+
+        // mode === 'longImage'
+        const widths = [];
+        for (const fp of pngs) {
+          let w = readPngWidth(fp);
+          if (!w) {
+            const info = await probe(fp);
+            w = info.width || 1000;
+          }
+          widths.push(w);
+        }
+        const maxW = Math.max(16, ...widths);
+
+        const outExt = path.extname(output);
+        const tmpOut = `${output.slice(0, output.length - outExt.length)}.tmp-${crypto.randomBytes(4).toString('hex')}${outExt}`;
+        fs.mkdirSync(path.dirname(output), { recursive: true });
+
+        try {
+          const stitchList = async (items, targetPath, targetFmt, addTrailGapFlags) => {
+            if (items.length === 1) {
+              const args = ['-i', items[0]];
+              if (targetFmt === 'jpg') {
+                args.push(
+                  '-filter_complex',
+                  `[0:v]setsar=1,scale=${maxW}:-1:flags=lanczos,format=rgba,split[__fg][__bgsrc];[__bgsrc]drawbox=x=0:y=0:w=iw:h=ih:color=0xffffff@1:t=fill[__bg];[__bg][__fg]overlay=0:0:shortest=1:format=rgb,format=rgb24[vout]`,
+                  '-map', '[vout]',
+                );
+              } else {
+                args.push('-vf', `setsar=1,scale=${maxW}:-1:flags=lanczos,format=rgba`);
+              }
+              args.push('-map_metadata', '-1', ...imageCodecArgs(targetFmt, { quality: 'high' }), targetPath);
+              await runFfmpeg(taskId, args, { totalDuration: 0 });
+              return;
+            }
+
+            const inputArgs = [];
+            const fcParts = [];
+            const stackRefs = [];
+            items.forEach((fp, idx) => {
+              inputArgs.push('-i', fp);
+              const padTail = addTrailGapFlags[idx] && gap > 0 ? `,pad=iw:ih+${gap}:0:0:color=0xffffff` : '';
+              fcParts.push(
+                `[${idx}:v]setsar=1,scale=${maxW}:-1:flags=lanczos,format=rgba,split[__fg${idx}][__bgsrc${idx}];[__bgsrc${idx}]drawbox=x=0:y=0:w=iw:h=ih:color=0xffffff@1:t=fill[__bg${idx}];[__bg${idx}][__fg${idx}]overlay=0:0:shortest=1:format=rgb${padTail}[p${idx}]`,
+              );
+              stackRefs.push(`[p${idx}]`);
+            });
+            const finalFmt = targetFmt === 'jpg' ? 'rgb24' : 'rgba';
+            fcParts.push(`${stackRefs.join('')}vstack=inputs=${items.length},format=${finalFmt}[vout]`);
+            await runFfmpeg(taskId, [
+              ...inputArgs,
+              '-filter_complex', fcParts.join(';'),
+              '-map', '[vout]',
+              '-map_metadata', '-1',
+              ...imageCodecArgs(targetFmt, { quality: 'high' }),
+              targetPath,
+            ], { totalDuration: 0 });
+          };
+
+          const batchSize = 15;
+          if (pngs.length <= batchSize) {
+            const flags = pngs.map((_, idx) => idx < pngs.length - 1);
+            await stitchList(pngs, tmpOut, format, flags);
+          } else {
+            let current = pngs.map((fp, idx) => ({ fp, needsGap: idx < pngs.length - 1 }));
+            let round = 0;
+            while (current.length > batchSize) {
+              const next = [];
+              for (let i = 0; i < current.length; i += batchSize) {
+                const slice = current.slice(i, i + batchSize);
+                const stripPath = path.join(tmpDir, `strip_${round}_${i}.png`);
+                await stitchList(
+                  slice.map((s) => s.fp),
+                  stripPath,
+                  'png',
+                  slice.map((s) => s.needsGap),
+                );
+                next.push({ fp: stripPath, needsGap: false });
+              }
+              current = next;
+              round++;
+            }
+            await stitchList(
+              current.map((s) => s.fp),
+              tmpOut,
+              format,
+              current.map((s) => s.needsGap),
+            );
+          }
+
+          fs.renameSync(tmpOut, output);
+          onProgress?.(1);
+          return {
+            output,
+            outputType: 'file',
+            pdfToImagesSummary: {
+              totalPages,
+              exportedCount: pngs.length,
+              mode,
+              format,
+              files: [output],
+            },
+          };
+        } finally {
+          await fs.promises.rm(tmpOut, { force: true, maxRetries: 5, retryDelay: 200 }).catch(() => {});
+        }
+      } finally {
+        try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+      }
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 9. PDF 合并
+// ---------------------------------------------------------------------------
+function pdfMerge(p) {
+  const files = Array.isArray(p.files) ? p.files.filter(Boolean) : [];
+  if (files.length < 2) {
+    throw new Error('请至少选择 2 个 PDF 文件进行合并');
+  }
+  const output = p.output || stampOutput(files[0], 'PDF合并', 'pdf');
+
+  return {
+    output,
+    outputType: 'file',
+    async run(taskId, onProgress) {
+      const res = await mergePdfFiles(files, output, { taskId, onProgress });
+      return {
+        output,
+        outputType: 'file',
+        pdfSummary: {
+          action: 'merge',
+          fileCount: files.length,
+          pageCount: res.pageCount,
+          outputSize: res.outputSize,
+        },
+      };
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 10. PDF 拆分 / 提取 / 删除指定页
+// ---------------------------------------------------------------------------
+function pdfSplit(p) {
+  const ext = path.extname(String(p.input || '')).slice(1).toLowerCase();
+  if (ext !== 'pdf') {
+    throw new Error('请选择 PDF (.pdf) 文件');
+  }
+  const mode = ['extract', 'remove', 'burst'].includes(p.mode) ? p.mode : 'extract';
+  const pageRange = String(p.pageRange || '').trim();
+  const everyN = Math.max(1, Math.round(num(p.everyN, 1)));
+  const output = mode === 'burst'
+    ? (p.output || defaultDirOutput(p.input, 'PDF拆分'))
+    : (p.output || defaultOutput(p.input, mode === 'remove' ? '删页' : '提取页', 'pdf'));
+  const outputType = mode === 'burst' ? 'dir' : 'file';
+
+  if (mode === 'extract' && !pageRange) {
+    throw new Error('请输入要提取的页码范围（如 1-3, 5）');
+  }
+  if (mode === 'remove' && !pageRange) {
+    throw new Error('请输入要删除的页码范围（如 2, 4-6）');
+  }
+
+  return {
+    output,
+    outputType,
+    async run(taskId, onProgress) {
+      onProgress?.(0.05);
+      const totalPages = await getPdfPageCount(p.input);
+
+      if (mode === 'extract') {
+        const keepPages = parsePageRange(pageRange, totalPages);
+        const res = await extractPdfPages(p.input, keepPages, output, { taskId, onProgress });
+        return {
+          output,
+          outputType: 'file',
+          pdfSummary: {
+            action: mode,
+            totalPages,
+            pageCount: res.pageCount,
+            fileCount: 1,
+            outputSize: res.outputSize,
+          },
+        };
+      }
+
+      if (mode === 'remove') {
+        const removeSet = new Set(parsePageRange(pageRange, totalPages));
+        const keepPages = [];
+        for (let i = 1; i <= totalPages; i++) {
+          if (!removeSet.has(i)) keepPages.push(i);
+        }
+        if (!keepPages.length) {
+          throw new Error('删除所选页码后没有剩余页面');
+        }
+        const res = await extractPdfPages(p.input, keepPages, output, { taskId, onProgress });
+        return {
+          output,
+          outputType: 'file',
+          pdfSummary: {
+            action: mode,
+            totalPages,
+            pageCount: res.pageCount,
+            fileCount: 1,
+            outputSize: res.outputSize,
+          },
+        };
+      }
+
+      // mode === 'burst'
+      const chunks = [];
+      for (let i = 1; i <= totalPages; i += everyN) {
+        const chunk = [];
+        for (let j = i; j < i + everyN && j <= totalPages; j++) {
+          chunk.push(j);
+        }
+        chunks.push(chunk);
+      }
+      const res = await splitPdfIntoChunks(p.input, chunks, output, { taskId, onProgress });
+      onProgress?.(1);
+      return {
+        output,
+        outputType: 'dir',
+        pdfSummary: {
+          action: mode,
+          totalPages,
+          pageCount: totalPages,
+          fileCount: res.files.length,
+          outputSize: res.totalSize,
+        },
+      };
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 11. Markdown / HTML 转精美排版 PDF
+// ---------------------------------------------------------------------------
+function docToPdf(p) {
+  const ext = path.extname(String(p.input || '')).slice(1).toLowerCase();
+  if (!['md', 'markdown', 'html', 'htm'].includes(ext)) {
+    throw new Error('请选择 Markdown (.md) 或 HTML (.html / .htm) 文件');
+  }
+  const theme = ['clean', 'github', 'warm', 'dark'].includes(p.theme) ? p.theme : 'clean';
+  const pageSize = ['a4p', 'a4l', 'letter'].includes(p.pageSize) ? p.pageSize : 'a4p';
+  const margin = ['narrow', 'normal', 'wide'].includes(p.margin) ? p.margin : 'normal';
+  const pageNumbers = p.pageNumbers === 'yes' ? 'yes' : 'no';
+  const output = p.output || defaultOutput(p.input, '排版PDF', 'pdf');
+
+  return {
+    output,
+    outputType: 'file',
+    async run(taskId, onProgress) {
+      onProgress?.(0.15);
+      const res = await convertDocToPdf(p.input, output, {
+        theme,
+        pageSize,
+        margin,
+        pageNumbers,
+        taskId,
+      });
+      onProgress?.(1);
+      return {
+        output,
+        outputType: 'file',
+        docToPdfSummary: {
+          title: res.title,
+          theme,
+          pageSize,
+          margin,
+          pageNumbers,
+          outputSize: res.outputSize,
+        },
+      };
+    },
+  };
+}
+
 module.exports = {
   docExtractImages,
   docCompressImages,
@@ -1758,5 +2104,9 @@ module.exports = {
   docCleanupMedia,
   docStyleImages,
   mdOrganizeImages,
+  docToPdf,
   imagesToPdf,
+  pdfToImages,
+  pdfMerge,
+  pdfSplit,
 };

@@ -6,6 +6,8 @@ const os = require('os');
 const crypto = require('crypto');
 const {
   FONT,
+  IMG_EXTS,
+  AUDIO_EXTS,
   isImagePath,
   num,
   even,
@@ -27,6 +29,49 @@ const {
   defaultDirOutput,
   stampOutput,
 } = require('../core/runner');
+
+function audioCodecArgs(format, bitrate = '192k') {
+  return ({
+    mp3: ['-c:a', 'libmp3lame', '-b:a', bitrate],
+    m4a: ['-c:a', 'aac', '-b:a', bitrate],
+    aac: ['-c:a', 'aac', '-b:a', bitrate],
+    wav: ['-c:a', 'pcm_s16le'],
+    flac: ['-c:a', 'flac'],
+    ogg: ['-c:a', 'libvorbis', '-b:a', bitrate],
+    opus: ['-c:a', 'libopus', '-b:a', bitrate],
+  }[format] || ['-c:a', 'libmp3lame', '-b:a', bitrate]);
+}
+
+function resolveVideoCodecArgs(p, { crf = 23, preset = 'medium', codec = 'h264' } = {}) {
+  const raw = videoCodecArgs(p, { crf, preset, codec });
+  if (codec === 'hevc') {
+    let out;
+    if (raw.includes('libx264')) {
+      out = ['-c:v', 'libx265', '-crf', String(crf), '-preset', preset, '-pix_fmt', 'yuv420p', '-tag:v', 'hvc1'];
+    } else if (raw.includes('h264_nvenc')) {
+      out = raw.map((a) => (a === 'h264_nvenc' ? 'hevc_nvenc' : a));
+    } else if (raw.includes('h264_qsv')) {
+      out = raw.map((a) => (a === 'h264_qsv' ? 'hevc_qsv' : a));
+    } else if (raw.includes('h264_amf')) {
+      out = raw.map((a) => (a === 'h264_amf' ? 'hevc_amf' : a));
+    } else {
+      out = [...raw];
+    }
+    if (!out.includes('-tag:v')) out.push('-tag:v', 'hvc1');
+    return out;
+  }
+  if (codec === 'av1') {
+    const isH264Fallback = raw.includes('libx264')
+      || raw.includes('h264_nvenc')
+      || raw.includes('h264_qsv')
+      || raw.includes('h264_amf');
+    if (isH264Fallback) {
+      return ['-c:v', 'libaom-av1', '-crf', String(crf + 10), '-b:v', '0', '-cpu-used', '6', '-row-mt', '1', '-pix_fmt', 'yuv420p'];
+    }
+    return [...raw];
+  }
+  return raw;
+}
 
 const builders = {
   // ============================ 转换 ============================
@@ -89,7 +134,7 @@ const builders = {
     };
   },
 
-  // 4. 视频格式转换（支持重编码 & 无损秒转封装）
+  // 4. 视频格式转换（支持重编码 & 无损秒转封装，支持 H.264 / HEVC / AV1）
   convertVideo(p) {
     const isCopy = p.mode === 'copy';
     const format = ['mp4', 'mkv', 'mov', 'webm'].includes(p.format) ? p.format : 'mp4';
@@ -104,6 +149,7 @@ const builders = {
       };
     }
 
+    const vcodec = ['h264', 'hevc', 'av1'].includes(p.vcodec) ? p.vcodec : 'h264';
     const output = defaultOutput(p.input, format, format);
     const res = num(p.height, 0);
     const crf = { high: 18, medium: 23, low: 28 }[p.quality] || 23;
@@ -111,10 +157,16 @@ const builders = {
     const args = ['-i', p.input];
     if (vf) args.push('-vf', vf);
     if (format === 'webm') {
-      args.push('-c:v', 'libvpx-vp9', '-crf', String(crf + 8), '-b:v', '0', '-row-mt', '1',
-        '-c:a', 'libopus', '-b:a', '128k');
+      if (vcodec === 'av1') {
+        args.push('-c:v', 'libaom-av1', '-crf', String(crf + 10), '-b:v', '0', '-cpu-used', '6', '-row-mt', '1',
+          '-pix_fmt', 'yuv420p', '-c:a', 'libopus', '-b:a', '128k');
+      } else {
+        args.push('-c:v', 'libvpx-vp9', '-crf', String(crf + 8), '-b:v', '0', '-row-mt', '1',
+          '-c:a', 'libopus', '-b:a', '128k');
+      }
     } else {
-      args.push(...videoCodecArgs(p, { crf, preset: 'medium' }), '-c:a', 'aac', '-b:a', '128k');
+      const codec = vcodec === 'hevc' ? 'hevc' : (vcodec === 'av1' && format !== 'mov' ? 'av1' : 'h264');
+      args.push(...resolveVideoCodecArgs(p, { crf, preset: 'medium', codec }), '-c:a', 'aac', '-b:a', '128k');
       if (format === 'mp4' || format === 'mov') args.push('-movflags', '+faststart');
     }
     return {
@@ -295,9 +347,33 @@ const builders = {
       const audioKbps = p.hasAudio ? 128 : 0;
       const totalKbps = (targetMB * 8192) / duration * 0.95;
       const videoKbps = Math.max(64, Math.round(totalKbps - audioKbps));
-      const args = ['-i', p.input,
-        '-c:v', 'libx264', '-b:v', `${videoKbps}k`, '-maxrate', `${Math.round(videoKbps * 1.5)}k`,
-        '-bufsize', `${videoKbps * 2}k`, '-preset', 'medium', '-pix_fmt', 'yuv420p'];
+      const args = ['-i', p.input];
+      if (p.vcodec === 'hevc') {
+        const probeArgs = resolveVideoCodecArgs(p, { crf: 23, preset: 'medium', codec: 'hevc' });
+        const encIdx = probeArgs.indexOf('-c:v');
+        const enc = encIdx >= 0 ? probeArgs[encIdx + 1] : 'libx265';
+        const brArgs = [
+          '-b:v', `${videoKbps}k`,
+          '-maxrate', `${Math.round(videoKbps * 1.5)}k`,
+          '-bufsize', `${videoKbps * 2}k`,
+          '-pix_fmt', 'yuv420p',
+          '-tag:v', 'hvc1',
+        ];
+        if (enc === 'hevc_nvenc') {
+          args.push('-c:v', 'hevc_nvenc', '-preset', 'p4', ...brArgs);
+        } else if (enc === 'hevc_qsv') {
+          args.push('-c:v', 'hevc_qsv', '-preset', 'medium', ...brArgs);
+        } else if (enc === 'hevc_amf') {
+          args.push('-c:v', 'hevc_amf', '-quality', 'balanced', '-rc', 'vbr_peak', ...brArgs);
+        } else {
+          args.push('-c:v', 'libx265', '-preset', 'medium', ...brArgs);
+        }
+      } else {
+        args.push(
+          '-c:v', 'libx264', '-b:v', `${videoKbps}k`, '-maxrate', `${Math.round(videoKbps * 1.5)}k`,
+          '-bufsize', `${videoKbps * 2}k`, '-preset', 'medium', '-pix_fmt', 'yuv420p',
+        );
+      }
       if (p.hasAudio) args.push('-c:a', 'aac', '-b:a', '128k');
       args.push('-movflags', '+faststart', output);
       return {
@@ -694,7 +770,7 @@ const builders = {
     };
   },
 
-  // 添加水印（支持视频 / GIF / 静态图片）
+  // 添加水印（支持视频 / GIF / 静态图片，含全屏斜向平铺防盗水印）
   watermark(p) {
     const ext = path.extname(p.input).slice(1).toLowerCase();
     const isGif = ext === 'gif';
@@ -703,6 +779,134 @@ const builders = {
     const opacity = Math.min(Math.max(num(p.opacity, 0.7), 0.1), 1);
     const size = p.size || 'medium';
     const pos = p.pos || 'br';
+    const wmColorHex = ({ white: '#ffffff', yellow: '#facc15', black: '#111827', gray: '#cbd5e1' }[p.wmColor]) || '#ffffff';
+    const shadowHex = p.wmColor === 'black' ? '#ffffff' : 'black';
+
+    if (pos === 'tiled') {
+      if (p.mode === 'image') {
+        const wmImg = p.image;
+        if (!wmImg) throw new Error('请先选择水印图片');
+      } else if (!String(p.text || '').trim()) {
+        throw new Error('请输入水印文字');
+      }
+
+      const degRaw = Number(p.tileAngle);
+      const deg = [-45, -30, 0, 30, 45].includes(degRaw) ? degRaw : -30;
+      const rad = ((deg * Math.PI) / 180).toFixed(4);
+      const density = p.tileDensity || 'normal';
+
+      const outExt = isImg ? imageExt(p.input) : (isGif ? 'gif' : videoExt(p.input));
+      const output = defaultOutput(p.input, '平铺水印', outExt);
+
+      return {
+        output,
+        outputType: 'file',
+        async run(taskId, onProgress) {
+          onProgress?.(0.05);
+          let W = num(p.srcW, 0);
+          let H = num(p.srcH, 0);
+          let dur = total;
+          if (!W || !H || (!isImg && dur <= 0)) {
+            const info = await probe(p.input);
+            W = info.width || W || 720;
+            H = info.height || H || 720;
+            if (!isImg) dur = info.duration || dur;
+          }
+          W = even(Math.max(W, 64));
+          H = even(Math.max(H, 64));
+
+          const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vgt_wmtile_'));
+          const tilePng = path.join(tmpDir, 'wm_tiled.png');
+          const outFileExt = path.extname(output);
+          const tmpOut = `${output.slice(0, output.length - outFileExt.length)}.tmp-${crypto.randomBytes(4).toString('hex')}${outFileExt}`;
+          fs.mkdirSync(path.dirname(output), { recursive: true });
+
+          try {
+            const span = even(Math.ceil(Math.hypot(W, H) * 1.45));
+            const gap = ({ sparse: 180, normal: 110, dense: 56 }[density]) || 110;
+
+            if (p.mode === 'image') {
+              const wmRatio = { small: 0.12, medium: 0.18, large: 0.26 }[size] || 0.18;
+              const wmW = even(Math.max(32, W * wmRatio));
+              const wmMeta = await probe(p.image).catch(() => null);
+              const wmAspect = wmMeta?.width && wmMeta?.height ? wmMeta.height / wmMeta.width : 0.6;
+              const cellW = even(wmW + gap);
+              const cellH = even(Math.round(wmW * wmAspect) + gap);
+              const cols = Math.max(2, Math.ceil(span / cellW) + 1);
+              const rows = Math.max(2, Math.ceil(span / cellH) + 1);
+              const fcTile = `[0:v]scale=${wmW}:-1:flags=lanczos,format=rgba,colorchannelmixer=aa=${opacity},pad=${cellW}:${cellH}:(ow-iw)/2:(oh-ih)/2:color=0x00000000,loop=${cols * rows}:size=1:start=0,tile=${cols}x${rows},rotate=${rad}:ow=${span}:oh=${span}:fillcolor=0x00000000,crop=${W}:${H}:(${span}-${W})/2:(${span}-${H})/2,format=rgba[wm]`;
+              await runFfmpeg(taskId, [
+                '-i', p.image, '-filter_complex', fcTile, '-map', '[wm]',
+                '-frames:v', '1', '-update', '1', tilePng,
+              ], { totalDuration: 0 });
+            } else {
+              const text = String(p.text || '').trim();
+              const textFile = path.join(tmpDir, 'wm_text.txt');
+              fs.writeFileSync(textFile, text, 'utf8');
+              const textFileArg = textFile.replace(/\\/g, '/').replace(/:/g, '\\:');
+              const fontsize = Math.max(18, even(H / ({ small: 30, medium: 20, large: 13 }[size] || 20)));
+              const textChars = Math.max(3, [...text].length);
+              const cellW = even(Math.min(span, Math.max(200, Math.round(fontsize * textChars * 0.95) + gap)));
+              const cellH = even(Math.min(span, Math.max(96, Math.round(fontsize * 2.2) + Math.round(gap * 0.8))));
+              const cols = Math.max(2, Math.ceil(span / cellW) + 1);
+              const rows = Math.max(2, Math.ceil(span / cellH) + 1);
+              const drawtext = `drawtext=fontfile='${FONT}':textfile='${textFileArg}':fontsize=${fontsize}:fontcolor=${wmColorHex}@${opacity}:shadowcolor=${shadowHex}@${(opacity * 0.45).toFixed(2)}:shadowx=1:shadowy=1:x=(w-text_w)/2:y=(h-text_h)/2:expansion=none`;
+              const vfTile = `${drawtext},loop=${cols * rows}:size=1:start=0,tile=${cols}x${rows},rotate=${rad}:ow=${span}:oh=${span}:fillcolor=0x00000000,crop=${W}:${H}:(${span}-${W})/2:(${span}-${H})/2,format=rgba`;
+              await runFfmpeg(taskId, [
+                '-f', 'lavfi', '-i', `color=c=black@0.0:s=${cellW}x${cellH}:d=1,format=rgba`,
+                '-vf', vfTile, '-frames:v', '1', '-update', '1', tilePng,
+              ], { totalDuration: 0 });
+            }
+
+            onProgress?.(0.2);
+
+            if (isImg) {
+              const fc = '[0:v][1:v]overlay=0:0:shortest=1[v]';
+              await runFfmpeg(taskId, [
+                '-i', p.input, '-i', tilePng, '-filter_complex', fc, '-map', '[v]',
+                ...imageCodecArgs(outExt, { quality: 'high' }), tmpOut,
+              ], { totalDuration: 0 });
+            } else if (isGif) {
+              const plan = gifPlan({
+                input: p.input,
+                output: tmpOut,
+                extraInputs: ['-i', tilePng],
+                fc: '[0:v][1:v]overlay=0:0:eof_action=repeat[x]',
+                colors: 256,
+                totalDuration: dur,
+              });
+              try {
+                for (const step of plan.steps) {
+                  await runFfmpeg(taskId, step.args, {
+                    ...step,
+                    from: 0.2 + step.from * 0.8,
+                    to: 0.2 + step.to * 0.8,
+                    onProgress,
+                  });
+                }
+              } finally {
+                for (const f of plan.cleanup || []) {
+                  try { fs.unlinkSync(f); } catch {}
+                }
+              }
+            } else {
+              const fc = '[0:v][1:v]overlay=0:0:eof_action=repeat[v]';
+              await runFfmpeg(taskId, [
+                '-i', p.input, '-i', tilePng, '-filter_complex', fc, '-map', '[v]', '-map', '0:a?',
+                ...videoCodecArgs(p), '-c:a', 'copy', tmpOut,
+              ], { totalDuration: dur, from: 0.2, to: 1, onProgress });
+            }
+
+            fs.renameSync(tmpOut, output);
+            onProgress?.(1);
+            return { output, outputType: 'file' };
+          } finally {
+            try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+            await fs.promises.rm(tmpOut, { force: true, maxRetries: 5, retryDelay: 200 }).catch(() => {});
+          }
+        },
+      };
+    }
 
     if (p.mode === 'image') {
       const wmImg = p.image;
@@ -759,7 +963,7 @@ const builders = {
     const textFile = path.join(os.tmpdir(), `vgt_wm_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.txt`);
     fs.writeFileSync(textFile, text, 'utf8');
     const textFileArg = textFile.replace(/\\/g, '/').replace(/:/g, '\\:');
-    const drawtext = `drawtext=fontfile='${FONT}':textfile='${textFileArg}':fontsize=${fontsize}:fontcolor=white@${opacity}:shadowcolor=black@${(opacity * 0.7).toFixed(2)}:shadowx=2:shadowy=2:${textPos}:expansion=none`;
+    const drawtext = `drawtext=fontfile='${FONT}':textfile='${textFileArg}':fontsize=${fontsize}:fontcolor=${wmColorHex}@${opacity}:shadowcolor=${shadowHex}@${(opacity * 0.7).toFixed(2)}:shadowx=2:shadowy=2:${textPos}:expansion=none`;
 
     if (isImg) {
       const imgFmt = imageExt(p.input);
@@ -894,19 +1098,133 @@ const builders = {
   // ============================ 音频 ============================
 
   extractAudio(p) {
-    const format = ['mp3', 'm4a', 'wav'].includes(p.format) ? p.format : 'mp3';
+    const allowed = ['mp3', 'm4a', 'wav', 'flac', 'ogg', 'opus'];
+    const format = allowed.includes(p.format) ? p.format : 'mp3';
     const output = defaultOutput(p.input, 'audio', format);
-    const codecArgs = {
-      mp3: ['-c:a', 'libmp3lame', '-q:a', '2'],
-      m4a: ['-c:a', 'aac', '-b:a', '192k'],
-      wav: ['-c:a', 'pcm_s16le'],
-    }[format];
+    const codecArgs = format === 'mp3'
+      ? ['-c:a', 'libmp3lame', '-q:a', '2']
+      : audioCodecArgs(format, p.bitrate || '192k');
+    if (format === 'opus') codecArgs.push('-ar', '48000');
     return {
       output,
       steps: [{
         args: ['-i', p.input, '-vn', ...codecArgs, output],
         totalDuration: num(p.totalDuration, 0),
       }],
+    };
+  },
+
+  audioConvert(p) {
+    const allowed = ['mp3', 'm4a', 'wav', 'flac', 'ogg', 'opus'];
+    const format = allowed.includes(p.format) ? p.format : 'mp3';
+    const bitrate = ['64k', '96k', '128k', '192k', '256k', '320k'].includes(p.bitrate) ? p.bitrate : '192k';
+    const sr = String(p.sampleRate || '0');
+    const ch = String(p.channels || '0');
+    const output = defaultOutput(p.input, '转码', format);
+    const args = ['-i', p.input, '-vn', ...audioCodecArgs(format, bitrate)];
+    if (format === 'opus') {
+      const opusSrMap = { '8000': '8000', '12000': '12000', '16000': '16000', '22050': '24000', '24000': '24000', '44100': '48000', '48000': '48000' };
+      args.push('-ar', opusSrMap[sr] || '48000');
+    } else if (['48000', '44100', '24000', '16000'].includes(sr)) {
+      args.push('-ar', sr);
+    }
+    if (ch === '1' || ch === '2') args.push('-ac', ch);
+    args.push(output);
+    return {
+      output,
+      steps: [{ args, totalDuration: num(p.totalDuration, 0) }],
+    };
+  },
+
+  audioTrim(p) {
+    const ext = path.extname(String(p.input || '')).slice(1).toLowerCase();
+    const outExt = ext === 'aac' ? 'm4a' : (AUDIO_EXTS.includes(ext) ? ext : 'mp3');
+    const start = Math.max(num(p.start, 0), 0);
+    const dur = num(p.duration, 0);
+    if (dur <= 0) throw new Error('截取时长必须大于 0');
+    const fi = Math.min(Math.max(num(p.fadeIn, 0), 0), dur / 2);
+    const fo = Math.min(Math.max(num(p.fadeOut, 0), 0), dur / 2);
+    const vol = Math.min(Math.max(num(p.volume, 1), 0.1), 5);
+    const hasFilter = fi > 0 || fo > 0 || Math.abs(vol - 1) > 0.01;
+    const output = defaultOutput(p.input, 'clip', outExt);
+    const args = ['-ss', String(start), '-i', p.input, '-t', String(dur), '-map', '0:a:0'];
+    if (!p.precise && !hasFilter && ext !== 'aac') {
+      args.push('-c:a', 'copy');
+    } else {
+      const af = [];
+      if (Math.abs(vol - 1) > 0.01) af.push(`volume=${vol.toFixed(2)}`);
+      if (fi > 0) af.push(`afade=t=in:st=0:d=${fi.toFixed(2)}`);
+      if (fo > 0) af.push(`afade=t=out:st=${Math.max(0, dur - fo).toFixed(2)}:d=${fo.toFixed(2)}`);
+      if (af.length) args.push('-af', af.join(','));
+      args.push(...audioCodecArgs(outExt, '192k'));
+      if (outExt === 'opus') args.push('-ar', '48000');
+    }
+    args.push(output);
+    return {
+      output,
+      steps: [{ args, totalDuration: dur }],
+    };
+  },
+
+  audioMerge(p) {
+    const files = p.files || [];
+    if (files.length < 2) throw new Error('请至少选择 2 个音频文件');
+    const allowed = ['mp3', 'm4a', 'wav', 'flac', 'ogg', 'opus'];
+    const format = allowed.includes(p.format) ? p.format : 'mp3';
+    const mode = p.mode === 'crossfade' ? 'crossfade' : 'concat';
+    const reqFade = Math.min(Math.max(num(p.fadeDur, 1), 0.2), 5);
+    const output = stampOutput(files[0], mode === 'crossfade' ? '淡入拼接' : '合并', format);
+
+    return {
+      output,
+      async run(taskId, onProgress) {
+        const infos = [];
+        for (let i = 0; i < files.length; i++) {
+          const cached = p.infos?.[i];
+          if (cached && num(cached.duration, 0) > 0) {
+            infos.push(cached);
+          } else {
+            infos.push(await probe(files[i]));
+          }
+          onProgress?.(0.1 * ((i + 1) / files.length));
+        }
+        const durs = infos.map((inf) => Math.max(0, num(inf?.duration, 0)));
+        const inputArgs = [];
+        const fcParts = [];
+        files.forEach((f, idx) => {
+          inputArgs.push('-i', f);
+          fcParts.push(`[${idx}:a]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,asetpts=PTS-STARTPTS[a${idx}]`);
+        });
+
+        let totalDur = durs.reduce((s, d) => s + d, 0);
+        if (mode === 'crossfade') {
+          const minDur = Math.min(...durs);
+          if (minDur < 0.3) throw new Error('交叉淡入拼接要求每个音频时长不少于 0.3 秒');
+          const T = Math.min(reqFade, Math.max(0.1, minDur * 0.4));
+          let prev = 'a0';
+          for (let idx = 1; idx < files.length; idx++) {
+            const outLbl = idx === files.length - 1 ? 'outa' : `ax${idx}`;
+            fcParts.push(`[${prev}][a${idx}]acrossfade=d=${T.toFixed(3)}:c1=tri:c2=tri[${outLbl}]`);
+            prev = outLbl;
+          }
+          totalDur = Math.max(0.1, totalDur - T * (files.length - 1));
+        } else {
+          const refs = files.map((_, idx) => `[a${idx}]`).join('');
+          fcParts.push(`${refs}concat=n=${files.length}:v=0:a=1[outa]`);
+        }
+
+        const encArgs = audioCodecArgs(format, '192k');
+        if (format === 'opus') encArgs.push('-ar', '48000');
+        await runFfmpeg(taskId, [
+          ...inputArgs,
+          '-filter_complex', fcParts.join(';'),
+          '-map', '[outa]',
+          ...encArgs,
+          output,
+        ], { totalDuration: totalDur, from: 0.1, to: 1, onProgress });
+        onProgress?.(1);
+        return { output };
+      },
     };
   },
 
@@ -950,7 +1268,9 @@ const builders = {
     let args;
     if (p.mode === 'mix') {
       if (!p.hasAudio) throw new Error('原视频没有音轨，无法混合，请选择"替换"');
-      const fc = `[0:a]volume=1.0[va];[1:a]volume=${vol}[ma];[va][ma]amix=inputs=2:duration=first:dropout_transition=2[a]`;
+      const fc = p.ducking === 'yes'
+        ? `[0:a]volume=1.0,asplit[va][sc];[1:a]volume=${vol}[ma];[ma][sc]sidechaincompress=threshold=0.03:ratio=8:attack=20:release=300[ducked];[va][ducked]amix=inputs=2:duration=first:dropout_transition=2[a]`
+        : `[0:a]volume=1.0[va];[1:a]volume=${vol}[ma];[va][ma]amix=inputs=2:duration=first:dropout_transition=2[a]`;
       args = ['-i', p.input, '-stream_loop', '-1', '-i', music,
         '-filter_complex', fc, '-map', '0:v', '-map', '[a]',
         '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-shortest'];
@@ -962,6 +1282,212 @@ const builders = {
     return {
       output,
       steps: [{ args: [...args, output], totalDuration: num(p.totalDuration, 0) }],
+    };
+  },
+
+  // 一键智能去静音（自动检测并裁剪停顿气口，支持视频与纯音频，音画帧级同步）
+  removeSilence(p) {
+    const ext = path.extname(String(p.input || '')).slice(1).toLowerCase();
+    const isAudioByExt = AUDIO_EXTS.includes(ext);
+    const outExt = isAudioByExt ? (ext === 'aac' ? 'm4a' : ext) : videoExt(p.input);
+    const output = defaultOutput(p.input, '去静音', outExt);
+    const threshold = Math.min(Math.max(num(p.threshold, -35), -60), -10);
+    const minSilence = Math.min(Math.max(num(p.minSilence, 0.4), 0.1), 5);
+    const padding = Math.min(Math.max(num(p.padding, 0.12), 0), 1);
+
+    return {
+      output,
+      outputType: 'file',
+      async run(taskId, onProgress) {
+        onProgress?.(0.03);
+        const info = await probe(p.input);
+        if (!info.hasAudio && !isAudioByExt) {
+          throw new Error('该视频不包含音轨，无法检测静音片段');
+        }
+        const audioOnly = isAudioByExt || (!info.width || !info.height);
+        const totalDur = Math.max(num(info.duration, 0), num(p.totalDuration, 0));
+        if (totalDur <= 0) {
+          throw new Error('无法读取媒体时长');
+        }
+
+        onProgress?.(0.1);
+        const stderr = await runFfmpegCapture(taskId, [
+          '-i', p.input,
+          '-af', `silencedetect=noise=${threshold}dB:d=${minSilence}`,
+          '-f', 'null', '-',
+        ]);
+        onProgress?.(0.25);
+
+        const silences = [];
+        let curStart = null;
+        const re = /silence_(start|end):\s*(-?\d+(?:\.\d+)?)/g;
+        let m;
+        while ((m = re.exec(stderr)) !== null) {
+          const val = Math.max(0, Math.min(totalDur, parseFloat(m[2])));
+          if (m[1] === 'start') {
+            if (curStart === null) curStart = val;
+          } else if (curStart !== null) {
+            if (val > curStart) silences.push({ start: curStart, end: val });
+            curStart = null;
+          }
+        }
+        if (curStart !== null && totalDur > curStart) {
+          silences.push({ start: curStart, end: totalDur });
+        }
+
+        const rawSpeech = [];
+        let cursor = 0;
+        for (const s of silences) {
+          if (s.start > cursor + 0.005) {
+            rawSpeech.push({ start: cursor, end: s.start });
+          }
+          cursor = Math.max(cursor, s.end);
+        }
+        if (totalDur > cursor + 0.005) {
+          rawSpeech.push({ start: cursor, end: totalDur });
+        }
+
+        const padded = rawSpeech
+          .map((seg) => ({
+            start: Math.max(0, seg.start - padding),
+            end: Math.min(totalDur, seg.end + padding),
+          }))
+          .sort((a, b) => a.start - b.start);
+
+        const merged = [];
+        for (const seg of padded) {
+          if (!merged.length || seg.start - merged[merged.length - 1].end >= 0.05) {
+            merged.push({ ...seg });
+          } else {
+            merged[merged.length - 1].end = Math.max(merged[merged.length - 1].end, seg.end);
+          }
+        }
+
+        const intervals = merged.filter((seg) => seg.end - seg.start >= 0.06);
+        if (!intervals.length) {
+          throw new Error('整段媒体均为静音，未检测到有效人声片段（可尝试调低静音阈值如 -45dB）');
+        }
+
+        const outFileExt = path.extname(output);
+        const tmpOut = `${output.slice(0, output.length - outFileExt.length)}.tmp-${crypto.randomBytes(4).toString('hex')}${outFileExt}`;
+        fs.mkdirSync(path.dirname(output), { recursive: true });
+
+        // 几乎无静音被裁掉时直接快速无损复制
+        if (intervals.length === 1 && intervals[0].start <= 0.04 && intervals[0].end >= totalDur - 0.08) {
+          try {
+            if (ext === outExt) {
+              fs.copyFileSync(p.input, tmpOut);
+            } else {
+              await runFfmpeg(taskId, ['-i', p.input, '-c', 'copy', tmpOut], {
+                totalDuration: totalDur, from: 0.3, to: 1, onProgress,
+              });
+            }
+            fs.renameSync(tmpOut, output);
+            onProgress?.(1);
+            return {
+              output,
+              outputType: 'file',
+              silenceSummary: {
+                origDuration: totalDur,
+                newDuration: totalDur,
+                removedCount: 0,
+                savedSec: 0,
+              },
+            };
+          } finally {
+            await fs.promises.rm(tmpOut, { force: true, maxRetries: 5, retryDelay: 200 }).catch(() => {});
+          }
+        }
+
+        const newDuration = intervals.reduce((sum, seg) => sum + (seg.end - seg.start), 0);
+        const silencesCount = (intervals.length - 1)
+          + (intervals[0].start > 0.05 ? 1 : 0)
+          + (intervals[intervals.length - 1].end < totalDur - 0.05 ? 1 : 0);
+
+        const buildArgsForBatch = (segs, outTarget) => {
+          const fcParts = [];
+          const concatRefs = [];
+          segs.forEach((seg, i) => {
+            const s = seg.start.toFixed(3);
+            const e = seg.end.toFixed(3);
+            if (audioOnly) {
+              fcParts.push(`[0:a]atrim=start=${s}:end=${e},asetpts=PTS-STARTPTS[a${i}]`);
+              concatRefs.push(`[a${i}]`);
+            } else {
+              fcParts.push(`[0:v]trim=start=${s}:end=${e},setpts=PTS-STARTPTS[v${i}]`);
+              fcParts.push(`[0:a]atrim=start=${s}:end=${e},asetpts=PTS-STARTPTS[a${i}]`);
+              concatRefs.push(`[v${i}][a${i}]`);
+            }
+          });
+
+          if (audioOnly) {
+            fcParts.push(`${concatRefs.join('')}concat=n=${segs.length}:v=0:a=1[outa]`);
+            const audioEnc = outExt === 'mp3'
+              ? ['-c:a', 'libmp3lame', '-q:a', '2']
+              : (outExt === 'ogg' ? ['-c:a', 'libvorbis', '-q:a', '5'] : audioCodecArgs(outExt === 'aac' ? 'm4a' : outExt, '192k'));
+            if (outExt === 'opus') audioEnc.push('-ar', '48000');
+            return ['-i', p.input, '-filter_complex', fcParts.join(';'), '-map', '[outa]', ...audioEnc, outTarget];
+          }
+
+          fcParts.push(`${concatRefs.join('')}concat=n=${segs.length}:v=1:a=1[outv][outa]`);
+          const vEnc = outExt === 'webm'
+            ? ['-c:v', 'libvpx-vp9', '-crf', '30', '-b:v', '0', '-row-mt', '1', '-c:a', 'libopus', '-b:a', '128k']
+            : [...videoCodecArgs(p, { crf: 20, preset: 'fast' }), '-c:a', 'aac', '-b:a', '160k',
+              ...((outExt === 'mp4' || outExt === 'mov') ? ['-movflags', '+faststart'] : [])];
+          return ['-i', p.input, '-filter_complex', fcParts.join(';'), '-map', '[outv]', '-map', '[outa]', ...vEnc, outTarget];
+        };
+
+        onProgress?.(0.3);
+        const tmpDir = intervals.length > 25 ? fs.mkdtempSync(path.join(os.tmpdir(), 'vgt_sil_')) : null;
+        try {
+          if (intervals.length <= 25) {
+            await runFfmpeg(taskId, buildArgsForBatch(intervals, tmpOut), {
+              totalDuration: newDuration, from: 0.3, to: 1, onProgress,
+            });
+          } else {
+            const batchSize = 20;
+            const batches = [];
+            for (let i = 0; i < intervals.length; i += batchSize) {
+              batches.push(intervals.slice(i, i + batchSize));
+            }
+            const chunkFiles = [];
+            for (let b = 0; b < batches.length; b++) {
+              const segs = batches[b];
+              const chunkPath = path.join(tmpDir, `chunk_${String(b).padStart(3, '0')}.${outExt}`);
+              const chunkDur = segs.reduce((sum, seg) => sum + (seg.end - seg.start), 0);
+              const lo = 0.3 + (0.62 * b) / batches.length;
+              const hi = 0.3 + (0.62 * (b + 1)) / batches.length;
+              await runFfmpeg(taskId, buildArgsForBatch(segs, chunkPath), {
+                totalDuration: chunkDur, from: lo, to: hi, onProgress,
+              });
+              chunkFiles.push(chunkPath);
+            }
+            const listFile = path.join(tmpDir, 'list.txt');
+            fs.writeFileSync(listFile, chunkFiles.map((f) => `file '${f.replaceAll("'", "'\\''")}'`).join('\n'), 'utf8');
+            await runFfmpeg(taskId, ['-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', tmpOut], {
+              totalDuration: newDuration, from: 0.92, to: 1, onProgress,
+            });
+          }
+
+          fs.renameSync(tmpOut, output);
+          onProgress?.(1);
+          return {
+            output,
+            outputType: 'file',
+            silenceSummary: {
+              origDuration: totalDur,
+              newDuration,
+              removedCount: silencesCount,
+              savedSec: Math.max(0, totalDur - newDuration),
+            },
+          };
+        } finally {
+          if (tmpDir) {
+            try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+          }
+          await fs.promises.rm(tmpOut, { force: true, maxRetries: 5, retryDelay: 200 }).catch(() => {});
+        }
+      },
     };
   },
 
@@ -1377,6 +1903,200 @@ const builders = {
     };
   },
 
+  // APNG / GIF / 雪碧图序列帧互转
+  animSprite(p) {
+    const mode = ['toApng', 'apngToGif', 'toSprite', 'fromSprite'].includes(p.mode) ? p.mode : 'toApng';
+    const D = num(p.totalDuration, 0);
+
+    if (mode === 'toApng') {
+      const fps = Math.min(Math.max(num(p.fps, 15), 1), 30);
+      const w = num(p.width, 480);
+      const output = defaultOutput(p.input, '动图', 'apng');
+      const vfParts = [`fps=${fps}`];
+      if (w > 0) vfParts.push(scaleFilter(even(w)));
+      vfParts.push('format=rgba');
+      const seg = [];
+      if (num(p.start, 0) > 0) seg.push('-ss', String(num(p.start, 0)));
+      if (num(p.duration, 0) > 0) seg.push('-t', String(num(p.duration, 0)));
+      return {
+        output,
+        steps: [{
+          args: [...seg, '-i', p.input, '-vf', vfParts.join(','), '-plays', '0', '-f', 'apng', '-c:v', 'apng', output],
+          totalDuration: num(p.duration, 0) > 0 ? num(p.duration, 0) : D,
+        }],
+      };
+    }
+
+    if (mode === 'apngToGif') {
+      const fps = num(p.fps, 15);
+      const w = num(p.width, 0);
+      const colors = Math.min(Math.max(Math.round(num(p.colors, 256)), 16), 256);
+      const output = defaultOutput(p.input, '动图', 'gif');
+      const vfParts = [];
+      if (fps > 0) vfParts.push(`fps=${Math.min(Math.max(fps, 1), 30)}`);
+      if (w > 0) vfParts.push(scaleFilter(even(w)));
+      vfParts.push('format=rgba');
+      return gifPlan({
+        input: p.input,
+        output,
+        colors,
+        statsMode: 'diff',
+        diffMode: 'none',
+        reserveTransparent: true,
+        totalDuration: D,
+        vf: vfParts.join(','),
+      });
+    }
+
+    if (mode === 'toSprite') {
+      const fps = Math.min(Math.max(num(p.fps, 10), 1), 30);
+      const maxFrames = Math.min(Math.max(Math.round(num(p.maxFrames, 36)), 2), 120);
+      const cellW = num(p.cellWidth, 160);
+      const colsReq = Math.round(num(p.cols, 5));
+      const layout = p.layout === 'row' ? 'row' : 'grid';
+      const output = defaultOutput(p.input, '雪碧图', 'png');
+
+      return {
+        output,
+        async run(taskId, onProgress) {
+          const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vgt_spr_'));
+          try {
+            const vfParts = [`fps=${fps}`];
+            if (cellW > 0) vfParts.push(scaleFilter(even(Math.max(32, cellW))));
+            vfParts.push('format=rgba');
+            const framePattern = path.join(tmpDir, 'f_%04d.png');
+            await runFfmpeg(taskId, [
+              '-i', p.input,
+              '-vf', vfParts.join(','),
+              '-frames:v', String(maxFrames),
+              framePattern,
+            ], { totalDuration: D, from: 0, to: 0.7, onProgress });
+
+            const frames = fs.readdirSync(tmpDir).filter((f) => f.endsWith('.png')).sort();
+            if (!frames.length) throw new Error('未能从媒体中提取到任何视频帧');
+            const N = frames.length;
+            const cols = layout === 'row' ? N : Math.min(N, Math.max(1, colsReq));
+            const rows = Math.ceil(N / cols);
+
+            await runFfmpeg(taskId, [
+              '-framerate', '1',
+              '-i', framePattern,
+              '-vf', `format=rgba,tile=${cols}x${rows}:padding=0:margin=0:color=black@0`,
+              '-frames:v', '1',
+              '-c:v', 'png',
+              '-update', '1',
+              output,
+            ], { totalDuration: 0, from: 0.7, to: 1, onProgress });
+            onProgress?.(1);
+            return {
+              output,
+              animSpriteSummary: { mode: 'toSprite', cols, rows, frames: N },
+            };
+          } finally {
+            try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+          }
+        },
+      };
+    }
+
+    // fromSprite: 雪碧图切分合成 GIF 或 APNG
+    const cols = Math.min(Math.max(Math.round(num(p.cols, 5)), 1), 120);
+    const rows = Math.min(Math.max(Math.round(num(p.rows, 4)), 1), 20);
+    const totalCells = cols * rows;
+    const reqFrames = Math.round(num(p.frameCount, 0));
+    const frameCount = reqFrames > 0 ? Math.min(reqFrames, totalCells) : totalCells;
+    if (frameCount < 2) throw new Error('雪碧图至少需要 2 帧才能合成动图');
+    if (frameCount > 400) throw new Error('请输入不超过 400 的有效总帧数');
+    const fps = Math.min(Math.max(num(p.fps, 10), 1), 30);
+    const outFormat = p.outFormat === 'apng' ? 'apng' : 'gif';
+    const output = defaultOutput(p.input, '动图', outFormat);
+
+    return {
+      output,
+      async run(taskId, onProgress) {
+        const info = (num(p.srcW, 0) > 0 && num(p.srcH, 0) > 0) ? { width: num(p.srcW, 0), height: num(p.srcH, 0) } : await probe(p.input);
+        const W = Math.max(2, num(info.width, 0));
+        const H = Math.max(2, num(info.height, 0));
+        const cw = Math.floor(W / cols);
+        const ch = Math.floor(H / rows);
+        if (cw < 4 || ch < 4) throw new Error('雪碧图按指定行列划分后单帧尺寸过小，请检查行列数');
+
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vgt_fspr_'));
+        try {
+          const splitLabels = Array.from({ length: frameCount }, (_, i) => `[s${i}]`).join('');
+          const fcParts = [`[0:v]format=rgba,split=${frameCount}${splitLabels}`];
+          const concatRefs = [];
+          for (let i = 0; i < frameCount; i++) {
+            const c = i % cols;
+            const r = Math.floor(i / cols);
+            const x = c * cw;
+            const y = r * ch;
+            fcParts.push(`[s${i}]crop=${cw}:${ch}:${x}:${y}[c${i}]`);
+            concatRefs.push(`[c${i}]`);
+          }
+          fcParts.push(`${concatRefs.join('')}concat=n=${frameCount}:v=1:a=0[outseq]`);
+
+          if (outFormat === 'apng') {
+            await runFfmpeg(taskId, [
+              '-i', p.input,
+              '-filter_complex', `${fcParts.join(';')};[outseq]setpts=N/(${fps}*TB)[outv]`,
+              '-map', '[outv]',
+              '-plays', '0',
+              '-f', 'apng',
+              '-c:v', 'apng',
+              output,
+            ], { totalDuration: frameCount / fps, from: 0, to: 1, onProgress });
+            onProgress?.(1);
+            return {
+              output,
+              animSpriteSummary: { mode: 'fromSprite', cols, rows, frames: frameCount, outFormat },
+            };
+          }
+
+          const framePattern = path.join(tmpDir, 'f_%04d.png');
+          await runFfmpeg(taskId, [
+            '-i', p.input,
+            '-filter_complex', fcParts.join(';'),
+            '-map', '[outseq]',
+            '-fps_mode', 'passthrough',
+            framePattern,
+          ], { totalDuration: 0, from: 0, to: 0.4, onProgress });
+
+          const plan = gifPlan({
+            input: framePattern,
+            seg: ['-framerate', String(fps)],
+            output,
+            colors: 256,
+            statsMode: 'diff',
+            diffMode: 'none',
+            reserveTransparent: true,
+            totalDuration: frameCount / fps,
+            vf: 'format=rgba',
+          });
+          try {
+            for (const step of plan.steps) {
+              await runFfmpeg(taskId, step.args, {
+                totalDuration: step.totalDuration,
+                from: 0.4 + 0.6 * (step.from || 0),
+                to: 0.4 + 0.6 * (step.to || 1),
+                onProgress,
+              });
+            }
+          } finally {
+            for (const f of plan.cleanup || []) fs.unlink(f, () => {});
+          }
+          onProgress?.(1);
+          return {
+            output,
+            animSpriteSummary: { mode: 'fromSprite', cols, rows, frames: frameCount, outFormat },
+          };
+        } finally {
+          try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+        }
+      },
+    };
+  },
+
   subtitleTool(p) {
     if (p.mode === 'extract') {
       if (p.hasSubtitles === false) throw new Error('该视频没有内嵌字幕流，无法提取');
@@ -1658,10 +2378,55 @@ const builders = {
     };
   },
 
+  videoCover(p) {
+    const source = p.source === 'frame' ? 'frame' : 'image';
+    if (source === 'image' && !p.coverImage) {
+      throw new Error('请先选择要嵌入的封面图片');
+    }
+    const outExt = path.extname(String(p.input || '')).slice(1).toLowerCase();
+    if (!['mp4', 'm4v'].includes(outExt)) throw new Error('请选择 MP4 或 M4V 视频');
+    const output = defaultOutput(p.input, '封面', outExt);
+    const at = Math.max(0, num(p.at, 0));
+
+    return {
+      output,
+      async run(taskId, onProgress) {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vgt_cover_'));
+        const cover = path.join(tmpDir, 'cover.jpg');
+        const staged = path.join(path.dirname(output), `.vgt-cover-${crypto.randomUUID()}.${outExt}`);
+        try {
+          const coverInput = source === 'image'
+            ? ['-i', p.coverImage]
+            : ['-ss', String(at), '-i', p.input];
+          await runFfmpeg(taskId, [
+            ...coverInput, '-map', '0:V:0',
+            '-vf', "scale='max(2,min(1920,trunc(iw/2)*2))':-2",
+            '-c:v', 'mjpeg', '-pix_fmt', 'yuvj420p', '-q:v', '2', '-frames:v', '1', '-update', '1', cover,
+          ], { totalDuration: 0, from: 0, to: 0.15, onProgress });
+          if (!fs.existsSync(cover)) throw new Error('未提取到封面画面，请检查时间点');
+          await runFfmpeg(taskId, [
+            '-i', p.input, '-i', cover,
+            '-map', '1:v:0', '-map', '0:V', '-map', '0:a?', '-map', '0:s?',
+            '-map_metadata', '0', '-map_chapters', '0', '-c', 'copy',
+            '-disposition:v:0', 'attached_pic',
+            '-movflags', '+faststart', '-f', 'mp4', staged,
+          ], { totalDuration: num(p.totalDuration, 0), from: 0.15, to: 1, onProgress });
+          fs.renameSync(staged, output);
+          return { output };
+        } finally {
+          fs.rmSync(tmpDir, { recursive: true, force: true });
+          await fs.promises.rm(staged, { force: true, maxRetries: 5, retryDelay: 200 }).catch(() => {});
+        }
+      },
+    };
+  },
+
   stripMeta(p) {
     const ext = path.extname(p.input).slice(1).toLowerCase();
-    const isGifOrImg = ext === 'gif' || ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'avif'].includes(ext);
-    const outExt = isGifOrImg ? (ext === 'jpeg' ? 'jpg' : ext) : (['mp3', 'm4a', 'wav', 'flac'].includes(ext) ? ext : videoExt(p.input));
+    const isGifOrImg = ext === 'gif' || IMG_EXTS.includes(ext);
+    const outExt = isGifOrImg
+      ? (ext === 'jpeg' ? 'jpg' : ext)
+      : (AUDIO_EXTS.includes(ext) ? (ext === 'aac' ? 'm4a' : ext) : videoExt(p.input));
     const output = defaultOutput(p.input, '去元数据', outExt);
     const isImage2Single = ['png', 'jpg', 'jpeg', 'bmp'].includes(ext);
     const args = isGifOrImg
