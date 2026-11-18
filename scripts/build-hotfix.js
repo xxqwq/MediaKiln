@@ -49,7 +49,8 @@ function walkFiles(baseDir, relPrefix, list, { excludeRel = new Set() } = {}) {
 function resolveGitNotes(version) {
   try {
     const tagsRaw = execFileSync('git', ['tag', '--sort=-v:refname'], { cwd: ROOT, encoding: 'utf8' }).trim();
-    const tags = tagsRaw ? tagsRaw.split(/\r?\n/).filter((t) => t && t !== `v${version}`) : [];
+    const majorPrefix = `v${version.split('.')[0]}.`;
+    const tags = tagsRaw.split(/\r?\n/).filter((t) => t.startsWith(majorPrefix) && t !== `v${version}`);
     const range = tags.length ? `${tags[0]}..HEAD` : '-n5';
     const args = tags.length
       ? ['log', range, '--pretty=format:- %s']
@@ -118,8 +119,8 @@ function buildHotfix(opts = {}) {
     bundleSize: zipBuf.length,
     bundleSha256,
     fullReleaseUrl: `https://github.com/${repo}/releases/tag/${tag}`,
-    portableAssetUrl: `https://github.com/${repo}/releases/download/${tag}/video-gif-toolbox-${version}-portable.exe`,
-    setupAssetUrl: `https://github.com/${repo}/releases/download/${tag}/video-gif-toolbox-${version}-setup.exe`,
+    portableAssetUrl: `https://github.com/${repo}/releases/download/v${shellVersion}/video-gif-toolbox-${shellVersion}-portable.exe`,
+    setupAssetUrl: `https://github.com/${repo}/releases/download/v${shellVersion}/video-gif-toolbox-${shellVersion}-setup.exe`,
   };
 
   const rawPriv = opts.privateKeyPem || opts.privateKey || process.env.VGT_HOTFIX_PRIVATE_KEY || '';

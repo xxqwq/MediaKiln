@@ -54,7 +54,7 @@ function registerStubIpc() {
     path: p,
     info: p === 'F:\\stub.mp4' ? { duration: 5, width: 640, height: 360, fps: 24, size: 10240, isImage: false, hasAudio: true } : null,
   })));
-  ipcMain.handle('hotfix:status', () => ({ builtinVersion: '2.1.9', shellVersion: '2.1.9', effectiveVersion: '2.1.9', isHotfix: false }));
+  ipcMain.handle('hotfix:status', () => ({ builtinVersion: '0.1.0', shellVersion: '0.1.0', effectiveVersion: '0.1.0', isHotfix: false }));
   ipcMain.handle('hotfix:check', () => ({ ok: true, status: 'up-to-date' }));
   ipcMain.on('set-progress-bar', () => {});
   ipcMain.on('notify-done', () => {});
@@ -227,6 +227,9 @@ app.whenReady().then(async () => {
       await new Promise((r) => setTimeout(r, 80));
       const updModal = document.getElementById('update-modal');
       if (!updModal) throw new Error('热更新弹窗未能打开');
+      if (!updModal.textContent.includes('公开测试版') || !updModal.textContent.includes('v0.1.0')) {
+        throw new Error('应用未显示公开测试版版本号');
+      }
       document.getElementById('upd-x-close')?.click();
       await new Promise((r) => setTimeout(r, 40));
       if (document.getElementById('update-modal')) throw new Error('热更新弹窗未能关闭');

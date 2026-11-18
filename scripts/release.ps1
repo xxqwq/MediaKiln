@@ -103,9 +103,16 @@ try {
   $meta = $metaJson | ConvertFrom-Json
   $ver = $meta.version
   $tag = "v$ver"
+  $isPreview = $ver.StartsWith('0.')
+  if ($isPreview -and $ver -notmatch '^0\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
+    throw 'Use 0.x.y for a test version. GitHub marks the release as a pre-release.'
+  }
+  $releaseTitle = if ($isPreview) { "$tag (Beta)" } else { $tag }
+  $previewArgs = @()
+  if ($isPreview) { $previewArgs = @('--prerelease') }
 
   Write-Host "Repository : $repo (user: $ghUser)"
-  Write-Host "Version    : $ver (tag: $tag)"
+  Write-Host "Version    : $releaseTitle"
 
   # 6. Check if release already exists
   $releaseDraft = gh release view $tag --repo $repo --json isDraft --jq .isDraft 2>$null
@@ -184,7 +191,7 @@ try {
   # Upload all required assets before publishing a new release
   if (-not $releaseExists) {
     Write-Host "Creating draft GitHub Release $tag..."
-    gh release create $tag --repo $repo --target $headSha --title "$tag" --generate-notes --draft
+    gh release create $tag --repo $repo --target $headSha --title "$releaseTitle" --generate-notes --draft @previewArgs
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   } else {
     Write-Host "Release $tag already exists; overwriting assets (-Force)..."
@@ -220,7 +227,7 @@ try {
     }
   }
   if (-not $releaseExists -or $releaseDraft -eq 'true') {
-    gh release edit $tag --repo $repo --draft=false
+    gh release edit $tag --repo $repo --draft=false @previewArgs
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   }
   Complete-Phase 'Upload verification and publication'

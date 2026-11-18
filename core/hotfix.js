@@ -6,7 +6,8 @@ const Module = require('module');
 const path = require('path');
 
 const GITHUB_REPO = 'xxqwq/usefulTools';
-const DEFAULT_MANIFEST_URL = `https://github.com/${GITHUB_REPO}/releases/latest/download/hotfix-manifest.json`;
+const PREVIEW_RELEASE_FEED_URL = `https://github.com/${GITHUB_REPO}/releases.atom`;
+const PREVIEW_VERSION = /^0\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
 
 const DEFAULT_PUBLIC_KEY_PEM = [
   '-----BEGIN PUBLIC KEY-----',
@@ -138,10 +139,13 @@ function validateBundleDir(dir, shellVersion) {
     }
   }
   const meta = readJsonSafe(path.join(dir, 'bundle-meta.json'));
-  if (!meta || !parseSemver(meta.version)) {
+  if (!meta || !PREVIEW_VERSION.test(meta.version)) {
     return { ok: false, error: 'bundle-meta.json 无效' };
   }
   const minShell = meta.minShellVersion || '0.0.0';
+  if (!PREVIEW_VERSION.test(minShell)) {
+    return { ok: false, error: '包内主程序版本号无效' };
+  }
   if (compareSemver(minShell, shellVersion) > 0) {
     return { ok: false, error: `需要主程序壳版本 >= ${minShell}（当前 ${shellVersion}）` };
   }
@@ -188,7 +192,7 @@ function initHotfix({ shellRoot, userDataDir }) {
   process.env.VGT_APP_ROOT = shellRoot;
   ensureShellNodeModulesHook(shellRoot);
 
-  const hotfixDir = path.join(userDataDir, 'hotfix');
+  const hotfixDir = path.join(userDataDir, 'hotfix-v0');
   const releasesDir = path.join(hotfixDir, 'releases');
   const tmpDir = path.join(hotfixDir, 'tmp');
   const stateFile = path.join(hotfixDir, 'state.json');
@@ -354,8 +358,9 @@ function withCacheBuster(u) {
 function normalizeManifest(raw) {
   if (!raw || typeof raw !== 'object') throw new Error('更新清单格式无效');
   const version = String(raw.version || '').trim().replace(/^v/i, '');
-  if (!parseSemver(version)) throw new Error('更新清单缺少有效版本号');
+  if (!PREVIEW_VERSION.test(version)) throw new Error('更新清单必须使用 0.x 测试版版本号');
   const minShellVersion = String(raw.minShellVersion || '0.0.0').trim().replace(/^v/i, '');
+  if (!PREVIEW_VERSION.test(minShellVersion)) throw new Error('更新清单的主程序版本号无效');
   const bundleUrl = String(raw.bundleUrl || '').trim();
   const bundleSha256 = String(raw.bundleSha256 || '').trim().toLowerCase();
   return {
@@ -405,32 +410,55 @@ function verifyManifestSignature(manifest, publicKeyPem) {
   }
 }
 
-async function fetchManifestFrom(candidate, { timeoutMs = 7000, fetchImpl } = {}) {
+async function fetchManifestFrom(candidate, { timeoutMs, fetchImpl, discoverPreview }) {
   const fetchFn = fetchImpl || getDefaultFetch();
-  const res = await fetchFn(withCacheBuster(candidate.url), {
+  const signal = AbortSignal.timeout(timeoutMs);
+  let url = candidate.url;
+  let expectedVersion;
+  if (discoverPreview) {
+    // GitHub 的 latest 路由跳过测试版。Atom 发布列表包含测试版。
+    const feed = await fetchFn(withCacheBuster(url), {
+      headers: { Accept: 'application/atom+xml', 'User-Agent': 'vgt-hotfix-client' },
+      signal,
+    });
+    if (!feed.ok) throw new Error(`读取测试版发布列表失败（HTTP ${feed.status}）`);
+    const xml = await feed.text();
+    const ids = xml.matchAll(/<id>tag:github\.com,2008:Repository\/\d+\/v(0\.\d+\.\d+)<\/id>/g);
+    for (const [, version] of ids) {
+      if (PREVIEW_VERSION.test(version) && (!expectedVersion || compareSemver(version, expectedVersion) > 0)) {
+        expectedVersion = version;
+      }
+    }
+    if (!expectedVersion) throw new Error('发布列表中没有 0.x 测试版');
+    url = applyMirrorPrefix(`https://github.com/${GITHUB_REPO}/releases/download/v${expectedVersion}/hotfix-manifest.json`, candidate.mirror);
+  }
+  const res = await fetchFn(withCacheBuster(url), {
     headers: { Accept: 'application/json', 'User-Agent': 'vgt-hotfix-client' },
-    signal: AbortSignal.timeout(timeoutMs),
+    signal,
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const raw = await res.json();
   const manifest = normalizeManifest(raw);
-  return { manifest, mirror: candidate.mirror, sourceUrl: candidate.url };
+  if (expectedVersion && manifest.version !== expectedVersion) {
+    throw new Error('测试版清单版本与发布标签不一致');
+  }
+  return { manifest, mirror: candidate.mirror };
 }
 
 async function checkForUpdates(opts = {}) {
   if (!_ctx) throw new Error('hotfix 未初始化');
   const mirrorPref = opts.mirror || 'auto';
-  const baseManifestUrl = opts.manifestUrl || process.env.VGT_HOTFIX_MANIFEST_URL || DEFAULT_MANIFEST_URL;
-  const candidates = buildCandidateUrls(baseManifestUrl, mirrorPref);
+  const manifestUrl = opts.manifestUrl || process.env.VGT_HOTFIX_MANIFEST_URL;
+  const candidates = buildCandidateUrls(manifestUrl || PREVIEW_RELEASE_FEED_URL, mirrorPref);
   const fetchImpl = opts.fetchImpl;
   const timeoutMs = Number(opts.timeoutMs) || 7000;
+  const fetchCandidate = (candidate) => fetchManifestFrom(candidate, {
+    timeoutMs, fetchImpl, discoverPreview: !manifestUrl,
+  });
 
-  let hit;
-  if (candidates.length === 1) {
-    hit = await fetchManifestFrom(candidates[0], { timeoutMs, fetchImpl });
-  } else {
-    hit = await Promise.any(candidates.map((c) => fetchManifestFrom(c, { timeoutMs, fetchImpl })));
-  }
+  const hit = candidates.length === 1
+    ? await fetchCandidate(candidates[0])
+    : await Promise.any(candidates.map(fetchCandidate));
 
   _ctx.state.lastCheckedAt = Date.now();
   saveState();
@@ -749,7 +777,7 @@ function clearRequireCacheUnderRoot(rootDir) {
 
 module.exports = {
   GITHUB_REPO,
-  DEFAULT_MANIFEST_URL,
+  PREVIEW_RELEASE_FEED_URL,
   DEFAULT_PUBLIC_KEY_PEM,
   MIRROR_PREFIXES,
   parseSemver,

@@ -23,7 +23,7 @@ import { app } from '../lib/site';
     });
 
     (async () => {
-      const CACHE_KEY = 'vgt-latest-release-v3';
+      const CACHE_KEY = `vgt-preview-release:${repo}`;
       const TTL = 30 * 60 * 1000;
       let rel = null;
       try {
@@ -37,9 +37,11 @@ import { app } from '../lib/site';
           });
           if (!res.ok) return;
           const list = await res.json();
-          const exeRe = /(-setup|安装版|-portable|便携版)\.exe$/i;
-          const stable = (Array.isArray(list) ? list : []).filter((r) => !r.draft && !r.prerelease);
-          const j = stable.find((r) => (r.assets || []).some((a) => exeRe.test(a.name) || /安装版|便携版/i.test(a.label || ''))) || stable[0];
+          const j = (Array.isArray(list) ? list : []).find((r) =>
+            !r.draft && r.prerelease && /^v0\.\d+\.\d+$/.test(r.tag_name)
+              && ['setup', 'portable'].every((kind) => (r.assets || []).some(
+                (a) => a.name === `video-gif-toolbox-${r.tag_name.slice(1)}-${kind}.exe`,
+              )));
           if (!j) return;
           rel = {
             tag: j.tag_name,
@@ -56,7 +58,7 @@ import { app } from '../lib/site';
           return;
         }
       }
-      if (!rel || !rel.tag) return;
+      if (!rel || !/^v0\.\d+\.\d+$/.test(rel.tag)) return;
 
       const ver = rel.tag.replace(/^v/, '');
       document.querySelectorAll('[data-rel-version]').forEach((el) => { el.textContent = rel.tag; });

@@ -57,7 +57,7 @@
       } else if (status?.isHotfix) {
         label.textContent = `${ver} · 热更新`;
       } else {
-        label.textContent = `${ver} · 检查更新`;
+        label.textContent = `${ver} · 测试版`;
       }
 
       if (dot) {
@@ -232,7 +232,7 @@
 
       body.innerHTML = `
         <div class="upd-meta-grid">
-          <div><span class="muted">当前版本</span><strong>${escHtml(curVer)}</strong> ${modeBadge}</div>
+          <div><span class="muted">公开测试版</span><strong>${escHtml(curVer)}</strong> ${modeBadge}</div>
           <div><span class="muted">主程序壳</span><span>${escHtml(shellVer)}</span></div>
         </div>
         <div class="upd-prefs">

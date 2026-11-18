@@ -118,14 +118,27 @@ jobs:
           Copy-Item $portableSrc.FullName $portablePath -Force
           Copy-Item $setupSrc.FullName $setupPath -Force
 
-          gh release view $TAG --repo $env:GITHUB_REPOSITORY 2>$null | Out-Null
+          node scripts/build-hotfix.js --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $previewArgs = @()
+          $releaseTitle = $TAG
+          if ($REL_VER.StartsWith('0.')) {
+            if ($REL_VER -notmatch '^0\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
+              throw 'Use 0.x.y for a test version.'
+            }
+            $previewArgs = @('--prerelease')
+            $releaseTitle = "$TAG (Beta)"
+          }
+          $draft = gh release view $TAG --repo $env:GITHUB_REPOSITORY --json isDraft --jq .isDraft 2>$null
           if ($LASTEXITCODE -ne 0) {
             gh release create $TAG `
               --repo $env:GITHUB_REPOSITORY `
               --target $env:GITHUB_SHA `
-              --title "$TAG" `
-              --generate-notes
+              --title "$releaseTitle" `
+              --generate-notes --draft @previewArgs
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $draft = 'true'
           }
 
           # Sequential upload with ASCII filenames + Chinese display labels to prevent GitHub asset name collisions
@@ -133,3 +146,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           gh release upload $TAG "${setupPath}#视频GIF工具箱-${REL_VER}-安装版.exe" --repo $env:GITHUB_REPOSITORY --clobber
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          gh release upload $TAG "release/hotfix-bundle-$REL_VER.zip" "release/hotfix-manifest.json" --repo $env:GITHUB_REPOSITORY --clobber
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($draft -eq 'true') {
+            gh release edit $TAG --repo $env:GITHUB_REPOSITORY --draft=false @previewArgs
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }

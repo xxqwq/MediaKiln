@@ -1,5 +1,5 @@
 ---
-import { app, data, url, hasAsset, assetUrl, assetSize, fmtBytes, releasesUrl, dlVersion, release } from '../lib/site';
+import { app, data, url, hasAsset, assetUrl, assetSize, fmtBytes, releasesUrl, dlVersion } from '../lib/site';
 import { iconSvg } from '../lib/icons';
 
 const shots = [
@@ -51,7 +51,7 @@ const s = data.stats;
   <div class="container hero-inner">
     <a class="badge fade-up" style="--d:0ms" href={releasesUrl} target="_blank" rel="noopener">
       <span class="badge-dot"></span>
-      <span data-rel-version>v{dlVersion}</span> {release ? '已发布' : '最新版本'}
+      <span data-rel-version>v{dlVersion}</span> 公开测试版
       <span class="badge-sep"></span>
       <span class="muted">查看更新日志 →</span>
     </a>

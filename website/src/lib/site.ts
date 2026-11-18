@@ -26,7 +26,6 @@ export function readPublicJson<T>(p: string, fallback: T): T {
 
 export const repoUrl = `https://github.com/${app.repo}`;
 export const releasesUrl = `${repoUrl}/releases`;
-export const latestReleaseUrl = `${repoUrl}/releases/latest`;
 
 /** 构建时获取到的最新已发布 Release（可能为 null） */
 export const release = (appData as {

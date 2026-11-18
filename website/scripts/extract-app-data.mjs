@@ -91,9 +91,11 @@ async function fetchLatestRelease() {
     const res = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=10`, { headers, signal: AbortSignal.timeout(8000) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const list = await res.json();
-    const exeRe = /(-setup|安装版|-portable|便携版)\.exe$/i;
-    const stable = (Array.isArray(list) ? list : []).filter((r) => !r.draft && !r.prerelease);
-    const j = stable.find((r) => (r.assets || []).some((a) => exeRe.test(a.name) || /安装版|便携版/i.test(a.label || ''))) || stable[0];
+    const j = (Array.isArray(list) ? list : []).find((r) =>
+      !r.draft && r.prerelease && /^v0\.\d+\.\d+$/.test(r.tag_name)
+        && ['setup', 'portable'].every((kind) => (r.assets || []).some(
+          (a) => a.name === `video-gif-toolbox-${r.tag_name.slice(1)}-${kind}.exe`,
+        )));
     if (!j) return null;
     return {
       tag: j.tag_name,

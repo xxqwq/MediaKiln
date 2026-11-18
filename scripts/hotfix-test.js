@@ -23,6 +23,7 @@ function makeMockFetch(routes) {
     if (!hit) {
       return { ok: false, status: 404, async json() { return {}; }, async arrayBuffer() { return new ArrayBuffer(0); } };
     }
+    if (typeof hit.text === 'string') return { ok: true, async text() { return hit.text; } };
     if (hit.json) {
       return {
         ok: true,
@@ -40,7 +41,7 @@ function makeMockFetch(routes) {
   };
 }
 
-function createFakeBundleZip({ version = '2.9.9', minShellVersion = '2.1.9', extraFiles = {} }) {
+function createFakeBundleZip({ version = '0.9.9', minShellVersion = '0.1.0', extraFiles = {} }) {
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   const zip = new AdmZip();
   const filesSha256 = {};
@@ -108,19 +109,24 @@ async function run() {
     console.log(`[1/8] buildHotfix OK (${(built.bundleSize / 1024).toFixed(1)} KB, ${built.fileCount} files)`);
 
     // 2. 初始化测试
+    const legacyDir = path.join(tmpUserData, 'hotfix');
+    fs.mkdirSync(legacyDir);
+    const legacyState = path.join(legacyDir, 'state.json');
+    fs.writeFileSync(legacyState, '{"activeVersion":"2.1.10"}');
     const st0 = hotfix.initHotfix({ shellRoot: ROOT, userDataDir: tmpUserData });
     assert.strictEqual(st0.isHotfix, false);
     assert.strictEqual(st0.activeRoot, ROOT);
+    assert.strictEqual(fs.readFileSync(legacyState, 'utf8'), '{"activeVersion":"2.1.10"}');
     console.log('[2/8] initHotfix baseline OK');
 
     // 3. 检查更新状态分支测试
     const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
     const curVer = pkg.version;
-    const bundle299 = createFakeBundleZip({ version: '2.9.9', minShellVersion: pkg.shellVersion || curVer });
-    const sha299 = hotfix.sha256Buffer(bundle299);
+    const bundle099 = createFakeBundleZip({ version: '0.9.9', minShellVersion: pkg.shellVersion || curVer });
+    const sha099 = hotfix.sha256Buffer(bundle099);
 
     const manifestUrl = 'https://example.test/hotfix-manifest.json';
-    const bundleUrl = 'https://example.test/hotfix-bundle-2.9.9.zip';
+    const bundleUrl = 'https://example.test/hotfix-bundle-0.9.9.zip';
 
     const upToDateRes = await hotfix.checkForUpdates({
       mirror: 'official',
@@ -129,9 +135,9 @@ async function run() {
         [manifestUrl]: {
           json: {
             version: curVer,
-            minShellVersion: '1.0.0',
+            minShellVersion: curVer,
             bundleUrl,
-            bundleSha256: sha299,
+            bundleSha256: sha099,
           },
         },
       }),
@@ -144,10 +150,10 @@ async function run() {
       fetchImpl: makeMockFetch({
         [manifestUrl]: {
           json: {
-            version: '9.0.0',
-            minShellVersion: '9.0.0',
+            version: '0.99.0',
+            minShellVersion: '0.99.0',
             bundleUrl,
-            bundleSha256: sha299,
+            bundleSha256: sha099,
           },
         },
       }),
@@ -160,24 +166,47 @@ async function run() {
       fetchImpl: makeMockFetch({
         [manifestUrl]: {
           json: {
-            version: '2.9.9',
+            version: '0.9.9',
             minShellVersion: pkg.shellVersion || curVer,
             bundleUrl,
-            bundleSize: bundle299.length,
-            bundleSha256: sha299,
+            bundleSize: bundle099.length,
+            bundleSha256: sha099,
             notes: '测试新版本',
           },
         },
       }),
     });
     assert.strictEqual(availRes.status, 'hotfix-available');
+
+    // 真实入口先从发布列表中选 0.x，再读取同一版本的清单。
+    const feedText = `<feed>
+      <entry><id>tag:github.com,2008:Repository/123/v2.1.10</id></entry>
+      <entry><id>tag:github.com,2008:Repository/123/v0.9.8</id></entry>
+      <entry><id>tag:github.com,2008:Repository/123/v0.9.9</id></entry>
+    </feed>`;
+    const feedRoutes = {
+      [hotfix.PREVIEW_RELEASE_FEED_URL]: { text: feedText },
+      [`https://github.com/${hotfix.GITHUB_REPO}/releases/download/v0.9.9/hotfix-manifest.json`]: { json: availRes.manifest },
+    };
+    const feedCheck = await hotfix.checkForUpdates({ mirror: 'official', fetchImpl: makeMockFetch(feedRoutes) });
+    assert.strictEqual(feedCheck.status, 'hotfix-available');
+    assert.strictEqual(feedCheck.manifest.version, '0.9.9');
+    const mismatchedVersion = { ...availRes.manifest, version: '0.9.8' };
+    await assert.rejects(() => hotfix.checkForUpdates({
+      mirror: 'official',
+      fetchImpl: makeMockFetch({
+        ...feedRoutes,
+        [`https://github.com/${hotfix.GITHUB_REPO}/releases/download/v0.9.9/hotfix-manifest.json`]: { json: mismatchedVersion },
+      }),
+    }), /版本与发布标签不一致/);
+    await assert.rejects(() => hotfix.downloadAndInstall({ ...availRes.manifest, version: '2.1.10' }), /0.x 测试版/);
     console.log('[3/8] checkForUpdates branches OK');
 
     // 4. SHA-256 篡改拒绝 + 路径穿越拒绝
     await assert.rejects(
       () => hotfix.downloadAndInstall(
         { ...availRes.manifest, bundleSha256: '0'.repeat(64) },
-        { mirror: 'official', fetchImpl: makeMockFetch({ [bundleUrl]: { buffer: bundle299 } }) },
+        { mirror: 'official', fetchImpl: makeMockFetch({ [bundleUrl]: { buffer: bundle099 } }) },
       ),
       /SHA-256/,
     );
@@ -200,7 +229,7 @@ async function run() {
     let loadedFfmpegFromHotfix = null;
     const applyRes = await hotfix.downloadAndInstall(availRes.manifest, {
       mirror: 'official',
-      fetchImpl: makeMockFetch({ [bundleUrl]: { buffer: bundle299 } }),
+      fetchImpl: makeMockFetch({ [bundleUrl]: { buffer: bundle099 } }),
       validateBundleFn: (stagingDir) => {
         const ff = require(path.join(stagingDir, 'ffmpeg.js'));
         const filters = require(path.join(stagingDir, 'core', 'file-filters.js'));
@@ -212,25 +241,25 @@ async function run() {
       },
     });
     assert.strictEqual(applyRes.ok, true);
-    assert.strictEqual(applyRes.version, '2.9.9');
+    assert.strictEqual(applyRes.version, '0.9.9');
     assert(loadedFfmpegFromHotfix);
 
     // 模拟冷启动 + confirmBoot
-    hotfix.confirmBoot('2.9.9');
+    hotfix.confirmBoot('0.9.9');
     const stAfterBoot = hotfix.initHotfix({ shellRoot: ROOT, userDataDir: tmpUserData });
     assert.strictEqual(stAfterBoot.isHotfix, true);
-    assert.strictEqual(stAfterBoot.effectiveVersion, '2.9.9');
-    hotfix.confirmBoot('2.9.9');
+    assert.strictEqual(stAfterBoot.effectiveVersion, '0.9.9');
+    hotfix.confirmBoot('0.9.9');
     console.log('[5/8] downloadAndInstall + external module/bin resolution + confirmBoot OK');
 
     // 6. 模拟启动未确认即崩溃 -> 自动回滚并标坏
     const stCrashInit = hotfix.initHotfix({ shellRoot: ROOT, userDataDir: tmpUserData });
-    assert.strictEqual(stCrashInit.isHotfix, true); // 设置 pendingVersion = 2.9.9，故意不调用 confirmBoot()
+    assert.strictEqual(stCrashInit.isHotfix, true); // 设置 pendingVersion = 0.9.9，故意不调用 confirmBoot()
 
     const stRecovered = hotfix.initHotfix({ shellRoot: ROOT, userDataDir: tmpUserData });
     assert.strictEqual(stRecovered.isHotfix, false);
-    assert.strictEqual(stRecovered.rolledBackFrom, '2.9.9');
-    assert(stRecovered.badVersions.includes('2.9.9'));
+    assert.strictEqual(stRecovered.rolledBackFrom, '0.9.9');
+    assert(stRecovered.badVersions.includes('0.9.9'));
 
     const skippedRes = await hotfix.checkForUpdates({
       mirror: 'official',
@@ -245,11 +274,11 @@ async function run() {
     // 7. 新版安装包覆盖旧热更新（builtinVersion >= activeVersion）
     fs.writeFileSync(
       path.join(tmpShellUpgrade, 'package.json'),
-      JSON.stringify({ version: '3.0.0', shellVersion: '3.0.0' }),
+      JSON.stringify({ version: '0.10.0', shellVersion: '0.10.0' }),
     );
     const stShellUpgraded = hotfix.initHotfix({ shellRoot: tmpShellUpgrade, userDataDir: tmpUserData });
     assert.strictEqual(stShellUpgraded.isHotfix, false);
-    assert.strictEqual(stShellUpgraded.effectiveVersion, '3.0.0');
+    assert.strictEqual(stShellUpgraded.effectiveVersion, '0.10.0');
     console.log('[7/8] builtin shell upgrade precedence OK');
 
     // 8. Ed25519 清单签名构建与校验测试
@@ -267,13 +296,13 @@ async function run() {
     assert.strictEqual(hotfix.verifyManifestSignature(signedBuild.manifest, publicKeyPem), true);
 
     hotfix.initHotfix({ shellRoot: ROOT, userDataDir: tmpSignedUserData });
-    const bundle298 = createFakeBundleZip({ version: '2.9.8', minShellVersion: pkg.shellVersion || curVer });
+    const bundle098 = createFakeBundleZip({ version: '0.9.8', minShellVersion: pkg.shellVersion || curVer });
     const signedManifest = {
-      version: '2.9.8',
+      version: '0.9.8',
       minShellVersion: pkg.shellVersion || curVer,
-      bundleUrl: 'https://example.test/hotfix-bundle-2.9.8.zip',
-      bundleSize: bundle298.length,
-      bundleSha256: hotfix.sha256Buffer(bundle298),
+      bundleUrl: 'https://example.test/hotfix-bundle-0.9.8.zip',
+      bundleSize: bundle098.length,
+      bundleSha256: hotfix.sha256Buffer(bundle098),
       notes: '签名验证测试',
     };
     signedManifest.signature = hotfix.signManifest(signedManifest, privateKeyPem);
@@ -291,10 +320,10 @@ async function run() {
       mirror: 'official',
       publicKeyPem,
       requireSignature: true,
-      fetchImpl: makeMockFetch({ [signedManifest.bundleUrl]: { buffer: bundle298 } }),
+      fetchImpl: makeMockFetch({ [signedManifest.bundleUrl]: { buffer: bundle098 } }),
     });
     assert.strictEqual(signedApply.ok, true);
-    assert.strictEqual(signedApply.version, '2.9.8');
+    assert.strictEqual(signedApply.version, '0.9.8');
 
     // 篡改 bundleSha256 应触发签名校验失败
     await assert.rejects(
@@ -312,7 +341,7 @@ async function run() {
     await assert.rejects(
       () => hotfix.downloadAndInstall(
         { ...signedManifest, bundleSha256: 'a'.repeat(64) },
-        { mirror: 'official', publicKeyPem, requireSignature: true, fetchImpl: makeMockFetch({ [signedManifest.bundleUrl]: { buffer: bundle298 } }) },
+        { mirror: 'official', publicKeyPem, requireSignature: true, fetchImpl: makeMockFetch({ [signedManifest.bundleUrl]: { buffer: bundle098 } }) },
       ),
       /签名校验失败/,
     );
@@ -347,7 +376,7 @@ async function run() {
     await assert.rejects(
       () => hotfix.downloadAndInstall(
         unsignedManifest,
-        { mirror: 'official', publicKeyPem, requireSignature: true, fetchImpl: makeMockFetch({ [signedManifest.bundleUrl]: { buffer: bundle298 } }) },
+        { mirror: 'official', publicKeyPem, requireSignature: true, fetchImpl: makeMockFetch({ [signedManifest.bundleUrl]: { buffer: bundle098 } }) },
       ),
       /签名校验失败/,
     );
