@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "视频 · GIF 工具箱官网（Astro 静态站点）",
+  "description": "MediaKiln 官网（Astro 静态站点）",
   "scripts": {
     "extract": "node scripts/extract-app-data.mjs",
     "dev": "npm run extract && astro dev",

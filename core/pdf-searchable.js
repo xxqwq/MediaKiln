@@ -24,7 +24,8 @@ const {
   showText,
 } = require('pdf-lib');
 const { parsePageRange, renderPdfPagesToPngs } = require('./pdf-engine');
-const { cleanOcrLineText, hasSearchablePageText, loadPdfSafe, runWinRtOcrOnImages } = require('./pdf-office');
+const { hasSearchablePageText, loadPdfSafe } = require('./pdf-office');
+const { cleanOcrLineText, runWinRtOcrOnImages } = require('./image-ocr');
 const { throwIfTaskCancelled, writeTaskOutput } = require('./runner');
 
 const PAGES_PER_BATCH = 16;

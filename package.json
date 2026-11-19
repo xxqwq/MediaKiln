@@ -2,7 +2,7 @@
   "name": "video-gif-toolbox",
   "version": "0.1.0",
   "shellVersion": "0.1.0",
-  "description": "视频 · 动图 · 图片 · 音频 · 文档工具箱，提供 70 个本地工具",
+  "description": "MediaKiln — Windows 本地离线视频 · 动图 · 图片 · 音频 · 文档工具箱，提供 71 个本地工具",
   "main": "main.js",
   "author": "user",
   "license": "MIT",
@@ -32,7 +32,7 @@
   },
   "build": {
     "appId": "com.local.video-gif-toolbox",
-    "productName": "视频GIF工具箱",
+    "productName": "MediaKiln",
     "directories": {
       "output": "release"
     },
@@ -65,11 +65,11 @@
       "icon": "build/icon.ico"
     },
     "portable": {
-      "artifactName": "视频GIF工具箱-${version}-便携版.exe"
+      "artifactName": "MediaKiln-${version}-便携版.exe"
     },
     "nsis": {
       "oneClick": true,
-      "artifactName": "视频GIF工具箱-${version}-安装版.exe"
+      "artifactName": "MediaKiln-${version}-安装版.exe"
     }
   }
 }

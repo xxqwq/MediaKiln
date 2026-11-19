@@ -62,6 +62,7 @@ function createFakeBundleZip({ version = '0.9.9', minShellVersion = '0.1.0', ext
   addReal('core/doc-replacements.js');
   addReal('core/ffmpeg-bin.js');
   addReal('core/file-filters.js');
+  addReal('core/image-ocr.js');
   addReal('modules/video.js');
   addReal('modules/image.js');
   addReal('modules/svg.js');

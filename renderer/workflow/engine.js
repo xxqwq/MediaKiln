@@ -12,7 +12,7 @@
     'mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'ts', 'm4v',
     'gif', 'apng', 'jpg', 'jpeg', 'png', 'webp', 'bmp', 'avif', 'ico',
     'svg', 'mp3', 'm4a', 'wav', 'flac', 'aac', 'ogg', 'opus', 'srt',
-    'docx', 'pptx', 'md', 'markdown', 'html', 'htm', 'pdf',
+    'docx', 'pptx', 'md', 'markdown', 'txt', 'html', 'htm', 'pdf',
   ]);
 
   function extOf(p) {
@@ -176,14 +176,14 @@
       'mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'ts', 'm4v',
       'gif', 'apng', 'jpg', 'jpeg', 'png', 'webp', 'bmp', 'avif', 'ico',
       'svg', 'mp3', 'm4a', 'wav', 'flac', 'aac', 'ogg', 'opus',
-      'srt', 'ass', 'ssa', 'vtt', 'docx', 'pptx', 'md', 'markdown', 'html', 'htm', 'pdf',
+      'srt', 'ass', 'ssa', 'vtt', 'docx', 'pptx', 'md', 'markdown', 'txt', 'html', 'htm', 'pdf',
     ],
     videoAnim: ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'ts', 'm4v', 'gif', 'apng'],
     image: ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'avif', 'ico'],
     gif: ['gif'],
     svg: ['svg'],
     audio: ['mp3', 'm4a', 'wav', 'flac', 'aac', 'ogg', 'opus'],
-    doc: ['docx', 'pptx', 'md', 'markdown', 'html', 'htm'],
+    doc: ['docx', 'pptx', 'md', 'markdown', 'txt', 'html', 'htm'],
     pdf: ['pdf'],
   };
 

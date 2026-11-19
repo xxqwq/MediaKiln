@@ -51,7 +51,7 @@ export const assetUrl = (kind: 'setup' | 'portable') =>
   findAsset(kind)?.url || `https://github.com/${app.repo}/releases/download/v${dlVersion}/video-gif-toolbox-${dlVersion}-${kind}.exe`;
 
 export const assetName = (kind: 'setup' | 'portable') =>
-  findAsset(kind)?.label || findAsset(kind)?.name || `视频GIF工具箱-${dlVersion}-${kind === 'setup' ? '安装版' : '便携版'}.exe`;
+  findAsset(kind)?.label || findAsset(kind)?.name || `MediaKiln-${dlVersion}-${kind === 'setup' ? '安装版' : '便携版'}.exe`;
 
 export const assetSize = (kind: 'setup' | 'portable') =>
   findAsset(kind)?.size || 0;

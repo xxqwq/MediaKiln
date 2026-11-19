@@ -1,6 +1,6 @@
-# 视频 · GIF 工具箱
+# MediaKiln
 
-Windows 本地离线多媒体与文档处理桌面应用，基于 Electron + FFmpeg 9.0.2。全部处理均在本机完成，无需联网、不上传任何文件；成品安装包与源码仓库均已内置 FFmpeg，开箱即用。
+MediaKiln 是一款 Windows 本地离线多媒体与文档处理桌面应用，基于 Electron + FFmpeg 9.0.2。全部处理均在本机完成，无需联网、不上传任何文件；成品安装包与源码仓库均已内置 FFmpeg，开箱即用。
 
 ## 下载与使用
 
@@ -21,16 +21,16 @@ Windows 本地离线多媒体与文档处理桌面应用，基于 Electron + FFm
 
 - **🛠️ 单工具模式 & 🕸️ 节点画布模式**：顶部/侧栏一键切换「单工具」快速处理与「节点画布」可视化工作流编排，支持参数面板一键「🕸️ 带参数入画布」、命名参数预设保存以及全局 `Ctrl+V` 粘贴剪贴板截图/文件。
 - **🕸️ 节点画布工作流**：
-  - 提供 **79 个节点**（9 个输入、输出与分流节点，加上 70 个功能节点）和 **7 套模板**。
+  - 提供 **80 个节点**（9 个输入、输出与分流节点，加上 71 个功能节点）和 **7 套模板**。
   - 支持连接类型校验、**多分支 DAG 并行调度与并发 List-Map**、**文件夹递归扫描**、**按格式/条件多路分流**（含 PDF 专属路由、空分支自动跳过、多分支汇总导出）、**画布分组注释便签**、节点 Bypass 旁路跳过、**增量智能缓存**（自动容量与过期清理、支持自定义缓存目录）以及工作流 JSON 导入导出。
-- **📦 批量队列处理**：**60 个功能**支持一次选择或拖入多个文件批量处理（图片/SVG 队列自动 3 路并发加速，支持随时 `+ 添加文件`、移除队列项、独立定位输出文件与中途取消）。
+- **📦 批量队列处理**：**61 个功能**支持一次选择或拖入多个文件批量处理（图片/SVG 队列自动 3 路并发加速，支持随时 `+ 添加文件`、移除队列项、独立定位输出文件与中途取消）。
 - **🔍 放大预览与对比**：处理完成后点击预览图或「⛶ 放大对比」，支持**并排同步缩放/平移**与**卷帘对比**（支持视频、GIF、位图与 SVG 矢量 vs 位图）。
 - **⚡ 轻量级业务热更新**要求 Ed25519 发布签名，并用 SHA-256 校验下载与本地缓存。启动异常时回滚。客户端壳升级需要下载完整程序。
 - **⚙️ 全局输出与硬件加速**：支持设置输出位置（源文件同目录 / `output` 子目录 / 自定义文件夹）、防覆盖自动编号，以及视频硬件编码加速（支持 **H.264 / H.265(HEVC) / AV1**，自动检测 NVIDIA NVENC / Intel QSV / AMD AMF 与 CPU 回退）。
 
 ---
 
-## 功能清单（70 个，8 大类）
+## 功能清单（71 个，8 大类）
 
 ### 转换
 | 功能 | 说明 |
@@ -55,6 +55,7 @@ Windows 本地离线多媒体与文档处理桌面应用，基于 Electron + FFm
 | 功能 | 说明 |
 |---|---|
 | 🖼️ 格式转换与压缩 | JPG / PNG / WebP / AVIF / BMP / ICO 互转，支持缩放、PNG 8-bit 调色板量化瘦身、透明转 JPG 自动垫底色、清除 EXIF |
+| 🔍 图片 OCR 识字 | 离线识别截图和照片中的中英文，支持预览、复制和批量导出 UTF-8 TXT，使用 Windows 已安装的识别语言包 |
 | 🎯 压缩到指定体积 (KB) | 二分搜索最佳画质并自适应缩图，精确压到 100KB / 200KB / 500KB / 1MB 等限制以内 |
 | 🧩 长图拼接 / 拼图 | 多张图片纵向长图拼接、横向拼接或 2~4 列网格拼图（支持调序、间距与底色） |
 | ✂️ 九宫格切图 / 长图切片 | 一键切为 `3×3` 九宫格 / `2×2` / `3×1` / `1×3`，或将超长图按段/高度切分导出 |
@@ -141,13 +142,14 @@ Windows 本地离线多媒体与文档处理桌面应用，基于 Electron + FFm
 ```bash
 npm install                              # 安装依赖并自动从 bin/*.exe.br 解压 FFmpeg
 npm start                                # 启动 Electron 应用
-node scripts/smoke-test.js               # 冒烟测试（自动生成素材，覆盖全部功能）
+node scripts/smoke-test.js               # 冒烟测试（自动生成素材，覆盖主要媒体与文档功能）
 node scripts/workflow-test.js            # 工作流引擎与真实媒体/PDF 流水线端到端测试（14 项）
 node scripts/hotfix-test.js              # 热更新打包、SHA-256 + Ed25519 签名校验与崩溃回滚测试（8 项）
 node scripts/architecture-safety-test.js # 缓存隔离、路径安全与并发执行器校验
 node scripts/pdf-crop-test.js            # PDF 裁白边（旋转页/已有裁剪框/空白页/取消）测试
 node scripts/pdf-target-size-test.js     # PDF 目标大小压缩测试
 node scripts/pdf-searchable-test.js      # PDF 扫描件离线 OCR 可搜索文字层测试
+node scripts/image-ocr-test.js           # 图片中英文识别、批量导出、空白图和取消测试
 npm run build --prefix website           # 提取最新功能/节点/模板数据并构建官网静态站点
 npm run hotfix:build                     # 仅生成几百 KB 的热更新包与清单到 release/
 npm run dist                             # 打包便携版 + 安装版到 release/
@@ -174,6 +176,7 @@ core/
   ├── pdf-office.js     离线 Word ↔ PDF 互转（DOCX/PDF 解析 + WinRT OCR）与 PDF 压缩/旋转/水印页码引擎
   ├── pdf-crop.js       PDF 留白检测、裁剪框预览与批量裁白边引擎
   ├── pdf-searchable.js PDF 扫描件离线 OCR 可搜索文字层合成引擎
+  ├── image-ocr.js      图片和 PDF 共用的 Windows 离线文字识别
   ├── svg-worker.js     SVG 渲染 / 压缩 / 位图矢量化 Worker 子线程（不阻塞主进程且支持立即取消）
   ├── doc-parser.js     DOCX / PPTX / MD 媒体解析、冗余关系扫描与提取
   ├── doc-replacements.js DOCX / PPTX 图片替换回填规则、Manifest 匹配与指纹校验
@@ -183,11 +186,11 @@ modules/                功能实现：video.js、image.js、svg.js、document.j
 preload.js              contextBridge 安全桥接（含安全 toFileUrl 编码与 webUtils.getPathForFile 拖拽路径获取）
 renderer/
   ├── app.js            单工具主界面、并发批量队列、全局 Ctrl+V 粘贴与工作流桥接
-  ├── features/         70 个功能注册表（video-gif.js、image.js、svg.js、document.js）
+  ├── features/         71 个功能注册表（video-gif.js、image.js、svg.js、document.js）
   ├── ui/               参数面板（含命名预设与带参数入画布）、裁剪画布、放大对比弹窗、PDF 工具面板、热更新弹窗
-  └── workflow/         节点画布、并行 DAG 执行引擎、79 个节点与 7 套模板
+  └── workflow/         节点画布、并行 DAG 执行引擎、80 个节点与 7 套模板
 bin/                    内置 FFmpeg 9.0.2（gyan.dev）：仓库内置 .br 压缩包（每件 ~28MB）与 binaries.json；安装/启动自动解压，打包时经 extraResources 释放
-scripts/                ensure-ffmpeg.js、build-hotfix.js、hotfix-test.js、architecture-safety-test.js、pdf-crop-test.js、pdf-target-size-test.js、pdf-searchable-test.js、smoke-test.js、workflow-test.js、workflow-ui-check.js、webp-check.js、release.ps1
+scripts/                ensure-ffmpeg.js、build-hotfix.js、hotfix-test.js、architecture-safety-test.js、pdf-crop-test.js、pdf-target-size-test.js、pdf-searchable-test.js、image-ocr-test.js、smoke-test.js、workflow-test.js、workflow-ui-check.js、webp-check.js、release.ps1
 website/                产品官网（Astro 静态站点，构建时自动读取功能/节点/模板注册表；见 website/README.md）
 ```
 

@@ -143,9 +143,9 @@ jobs:
           }
 
           # Sequential upload with ASCII filenames + Chinese display labels to prevent GitHub asset name collisions
-          gh release upload $TAG "${portablePath}#视频GIF工具箱-${REL_VER}-便携版.exe" --repo $env:GITHUB_REPOSITORY --clobber
+          gh release upload $TAG "${portablePath}#MediaKiln-${REL_VER}-便携版.exe" --repo $env:GITHUB_REPOSITORY --clobber
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          gh release upload $TAG "${setupPath}#视频GIF工具箱-${REL_VER}-安装版.exe" --repo $env:GITHUB_REPOSITORY --clobber
+          gh release upload $TAG "${setupPath}#MediaKiln-${REL_VER}-安装版.exe" --repo $env:GITHUB_REPOSITORY --clobber
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           gh release upload $TAG "release/hotfix-bundle-$REL_VER.zip" "release/hotfix-manifest.json" --repo $env:GITHUB_REPOSITORY --clobber
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

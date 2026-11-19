@@ -40,7 +40,8 @@ import { app } from '../lib/site';
           const j = (Array.isArray(list) ? list : []).find((r) =>
             !r.draft && r.prerelease && /^v0\.\d+\.\d+$/.test(r.tag_name)
               && ['setup', 'portable'].every((kind) => (r.assets || []).some(
-                (a) => a.name === `video-gif-toolbox-${r.tag_name.slice(1)}-${kind}.exe`,
+                (a) => a.name === `mediakiln-${r.tag_name.slice(1)}-${kind}.exe`
+                  || a.name === `video-gif-toolbox-${r.tag_name.slice(1)}-${kind}.exe`,
               )));
           if (!j) return;
           rel = {

@@ -197,10 +197,10 @@ async function step(name, fn) {
   const reg = regFactory.createRegistry(features);
   const runtime = createNodeRuntime();
 
-  await step('1. 节点注册表完整性（9 个 I/O + 70 个子功能 = 79 个节点）', () => {
+  await step('1. 节点注册表完整性（9 个 I/O + 71 个子功能 = 80 个节点）', () => {
     const all = reg.getAllDefs();
-    assert.strictEqual(features.length, 70);
-    assert.strictEqual(all.length, 79);
+    assert.strictEqual(features.length, 71);
+    assert.strictEqual(all.length, 80);
     assert.deepStrictEqual(
       all.filter((def) => !def.isIo).map((def) => def.type).sort(),
       features.map((feature) => `feat.${feature.id}`).sort(),
@@ -225,6 +225,8 @@ async function step(name, fn) {
     assert.deepStrictEqual(build('audioMerge', {}, null, {}, [audio, audio]).files, ['voice.wav', 'voice.wav']);
     assert.equal(build('animSprite', { mode: 'fromSprite' }, image).srcW, 128);
     assert.equal(build('imageCanvas', { bgMode: 'black' }, image).bgColor, '#000000');
+    assert.deepStrictEqual(build('imageOcr', { ocrLang: 'en' }, image), { input: image.path, ocrLang: 'en' });
+    assert.deepStrictEqual(reg.getDynamicOutputSpec({ type: 'feat.imageOcr' }, ['png'], true), { exts: ['txt'], typeId: 'doc', isList: true });
     assert.equal(build('videoCover', {}, video, { coverImage: { paths: ['image.png'] } }).coverImage, 'image.png');
     assert.equal(build('docToPdf', {}, { path: 'readme.md' }).input, 'readme.md');
     assert.equal(build('wordToPdf', { pageSize: 'a4l' }, { path: 'report.docx' }).pageSize, 'a4l');

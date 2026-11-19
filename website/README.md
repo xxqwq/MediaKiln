@@ -1,6 +1,6 @@
 # 官网（website/）
 
-「视频 · GIF 工具箱」的产品官网，基于 [Astro](https://astro.build) 构建的纯静态站点，主要托管于 **腾讯云 EdgeOne Pages**（兼容 Cloudflare Pages / Vercel / GitHub Pages）。
+「MediaKiln」的产品官网，基于 [Astro](https://astro.build) 构建的纯静态站点，主要托管于 **腾讯云 EdgeOne Pages**（兼容 Cloudflare Pages / Vercel / GitHub Pages）。
 
 ## 本地开发
 

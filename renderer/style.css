@@ -739,6 +739,21 @@ input[type="range"]:active::-webkit-slider-thumb {
   user-select: text;
 }
 .result-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.result-ocr-text {
+  margin-top: 12px;
+  max-height: 16rem;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  color: var(--text);
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.result-ocr-text:focus-visible { outline: 2px solid var(--accent-hi); }
 
 /* toast */
 .toast {

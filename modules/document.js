@@ -116,7 +116,7 @@ function decodeDataUri(item) {
 async function downloadRemoteImage(url) {
   const res = await fetch(url, {
     signal: AbortSignal.timeout(12000),
-    headers: { 'User-Agent': 'VideoGifToolbox/2.1' },
+    headers: { 'User-Agent': 'MediaKiln/0.1' },
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const ct = String(res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();

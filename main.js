@@ -382,7 +382,7 @@ ipcMain.on('set-progress-bar', (_e, ratio) => {
 
 ipcMain.on('notify-done', (_e, title, body) => {
   if (win && !win.isDestroyed() && !win.isFocused() && Notification.isSupported()) {
-    new Notification({ title: title || '视频 · GIF 工具箱', body: body || '处理已完成' }).show();
+    new Notification({ title: title || 'MediaKiln', body: body || '处理已完成' }).show();
   }
 });
 

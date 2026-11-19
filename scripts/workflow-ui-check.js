@@ -20,6 +20,41 @@ app.setPath('userData', PROFILE);
 app.disableHardwareAcceleration();
 const exportedPdfs = new Map();
 
+async function checkImageOcr(win) {
+  const { Resvg } = require('@resvg/resvg-js');
+  const files = ['OCR 样本一.png', 'OCR 样本二.png'].map((name) => path.join(PROFILE, name));
+  for (const [index, file] of files.entries()) {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="900" height="300"><rect width="900" height="300" fill="#fff"/><text x="60" y="100" font-family="Microsoft YaHei" font-size="46">本地离线文档</text><text x="60" y="210" font-family="Segoe UI" font-size="42">OCR TEXT ${2026 + index}</text></svg>`;
+    await fs.promises.writeFile(file, new Resvg(svg, { font: { loadSystemFonts: true } }).render().asPng());
+  }
+
+  await win.webContents.executeJavaScript(`(async (inputs) => {
+    document.querySelector('#nav [data-id="imageOcr"]').click();
+    await useFiles([inputs[0]]);
+    await runTask();
+    const expected = '本地离线文档\\nOCR TEXT 2026';
+    const preview = document.querySelector('.result-ocr-text');
+    if (preview?.textContent !== expected) throw new Error('图片 OCR 结果预览异常');
+    let copied;
+    Object.defineProperty(navigator.clipboard, 'writeText', { configurable: true, value: async (text) => { copied = text; } });
+    try {
+      await document.getElementById('btn-copy-ocr').onclick();
+      if (copied !== expected) throw new Error('复制文字使用了错误内容');
+    } finally {
+      delete navigator.clipboard.writeText;
+    }
+    await useFiles(inputs);
+    await runTask();
+    if (document.querySelectorAll('#batch-list .batch-status.ok').length !== inputs.length) throw new Error('批量识字未全部导出');
+  })(${JSON.stringify(files)})`);
+
+  for (const file of files) {
+    const stem = path.basename(file, '.png');
+    const txt = await fs.promises.readFile(path.join(PROFILE, `${stem}_识别文字.txt`), 'utf8');
+    assert.match(txt, /本地离线文档/);
+  }
+}
+
 async function checkPdfTools(win) {
   const first = path.join(PROFILE, '原 PDF.pdf');
   const second = path.join(PROFILE, '附录.pdf');
@@ -202,13 +237,13 @@ function registerStubIpc() {
   ipcMain.handle('wf:alloc-node-dir', (_e, o) => ({ ok: true, dir: path.join(ROOT, '.workflow_cache', o?.subKey || 'test') }));
   ipcMain.handle('wf:stat-multi', () => []);
   ipcMain.handle('wf:scan-dir', () => ({ ok: true, files: [] }));
-  const pdfFixture = (file) => path.dirname(file) === PROFILE && file.endsWith('.pdf');
+  const isFixture = (file) => path.dirname(file) === PROFILE && /\.(pdf|png|txt)$/.test(file);
   ipcMain.handle('probe', async (_e, p) => (p === 'F:\\stub.mp4'
     ? { ok: true, info: { duration: 5, width: 640, height: 360, fps: 24, size: 10240, isImage: false, hasAudio: true } }
-    : (pdfFixture(p) ? { ok: true, info: await probe(p) } : { ok: false, error: 'stub' })));
+    : (isFixture(p) ? { ok: true, info: await probe(p) } : { ok: false, error: 'stub' })));
   ipcMain.handle('probe-multi', (_e, ps) => Promise.all((ps || []).map(async (p) => ({
     path: p,
-    info: p === 'F:\\stub.mp4' ? { duration: 5, width: 640, height: 360, fps: 24, size: 10240, isImage: false, hasAudio: true } : (pdfFixture(p) ? await probe(p) : null),
+    info: p === 'F:\\stub.mp4' ? { duration: 5, width: 640, height: 360, fps: 24, size: 10240, isImage: false, hasAudio: true } : (isFixture(p) ? await probe(p) : null),
   }))));
   ipcMain.handle('task:start', async (_e, { feature, params }) => {
     try {
@@ -267,7 +302,7 @@ app.whenReady().then(async () => {
       modeBtnWf.click();
       await new Promise((r) => setTimeout(r, 120));
       const paletteCount = document.querySelectorAll('#nav .wf-node-tpl').length;
-      if (paletteCount !== 79) throw new Error('侧栏工作流节点数异常: ' + paletteCount);
+      if (paletteCount !== 80) throw new Error('侧栏工作流节点数异常: ' + paletteCount);
 
       // 2. 依次载入 7 套模板并校验节点、连线、可视区域与 HUD 避让
       const tplCount = window.VGT.wfTemplates.WORKFLOW_TEMPLATES.length;
@@ -355,7 +390,7 @@ app.whenReady().then(async () => {
       await window.VGT.appBridge.sendToSingle(['F:\\\\stub.mp4']);
       await new Promise((r) => setTimeout(r, 80));
       const singleItems = document.querySelectorAll('#nav .nav-item:not(.wf-node-tpl)').length;
-      if (singleItems !== 70) throw new Error('单工具模式导航恢复异常: ' + singleItems);
+      if (singleItems !== 71) throw new Error('单工具模式导航恢复异常: ' + singleItems);
 
       const setFps = (value) => {
         const input = document.querySelector('#params select[data-key="fps"]');
@@ -405,13 +440,14 @@ app.whenReady().then(async () => {
     })()`);
 
     await checkPdfTools(win);
+    await checkImageOcr(win);
     if (errors.length) {
       console.error('渲染进程出现错误:\n' + errors.join('\n'));
       app.exit(1);
       return;
     }
     await checkDocumentExport();
-    console.log('WORKFLOW_UI_OK', JSON.stringify({ ...result, documentExportChecked: true, pdfToolsChecked: true }));
+    console.log('WORKFLOW_UI_OK', JSON.stringify({ ...result, documentExportChecked: true, pdfToolsChecked: true, imageOcrChecked: true }));
     try { fs.rmSync(PROFILE, { recursive: true, force: true }); } catch {}
     app.exit(0);
   } catch (err) {

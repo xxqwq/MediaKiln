@@ -94,7 +94,8 @@ async function fetchLatestRelease() {
     const j = (Array.isArray(list) ? list : []).find((r) =>
       !r.draft && r.prerelease && /^v0\.\d+\.\d+$/.test(r.tag_name)
         && ['setup', 'portable'].every((kind) => (r.assets || []).some(
-          (a) => a.name === `video-gif-toolbox-${r.tag_name.slice(1)}-${kind}.exe`,
+          (a) => a.name === `mediakiln-${r.tag_name.slice(1)}-${kind}.exe`
+            || a.name === `video-gif-toolbox-${r.tag_name.slice(1)}-${kind}.exe`,
         )));
     if (!j) return null;
     return {
@@ -113,8 +114,8 @@ const latestRelease = await fetchLatestRelease();
 const data = {
   generatedAt: new Date().toISOString(),
   app: {
-    name: '视频 · GIF 工具箱',
-    productName: pkg.build?.productName || '视频GIF工具箱',
+    name: 'MediaKiln',
+    productName: pkg.build?.productName || 'MediaKiln',
     version: pkg.version,
     shellVersion: pkg.shellVersion || pkg.version,
     description: pkg.description,

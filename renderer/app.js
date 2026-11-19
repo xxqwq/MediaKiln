@@ -1169,7 +1169,9 @@ async function showSuccess(res) {
   } else {
     outSize = await window.api.statFile(res.output);
     line = `✅ 完成：${escHtml(name)}（${fmtSize(outSize)}）`;
-    if (res.silenceSummary) {
+    if (res.imageOcrSummary) {
+      line = `✅ 已识别 ${res.imageOcrSummary.lineCount} 行文字 · TXT 已导出`;
+    } else if (res.silenceSummary) {
       const ss = res.silenceSummary;
       line = `✅ 去静音完成：共剪除 ${ss.removedCount} 处停顿，时长 ${fmtDur(ss.origDuration)} → ${fmtDur(ss.newDuration)}（缩短 ${Number(ss.savedSec || 0).toFixed(1)}s）`;
     } else if (res.docToPdfSummary) {
@@ -1426,6 +1428,9 @@ async function showSuccess(res) {
     && currentFeature.id !== 'docRepackImages'
     && ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'avif', 'gif'].includes(outExt);
 
+  const ocrText = res.imageOcrSummary?.text;
+  if (ocrText) previewHtml = '<pre class="result-ocr-text" aria-label="识别文字" tabindex="0"></pre>';
+
   const handoffHtml = handoffFeatures.length
     ? `<div class="result-handoff" id="result-handoff">
          <span class="muted" id="handoff-label" style="font-size:12px">${res.outputType === 'dir' ? `➡️ 发送所选 ${thumbPaths.length} 张图片到：` : '➡️ 继续处理此结果：'}</span>
@@ -1449,11 +1454,24 @@ async function showSuccess(res) {
       : '');
 
   showResult('ok', `${line}<div class="result-path">${escHtml(res.output)}</div>${previewHtml}<div class="result-actions">
+    ${ocrText ? '<button class="btn btn-ghost btn-sm" id="btn-copy-ocr">复制文字</button>' : ''}
     <button class="btn btn-ghost btn-sm" id="btn-open">${res.outputType === 'dir' ? '打开文件夹' : '打开所在文件夹'}</button>
     ${compareBtnHtml}
     ${repackSingleBtn}
     <button class="btn btn-ghost btn-sm" id="btn-result-send-wf">🕸️ 结果发往画布</button>
     <button class="btn btn-ghost btn-sm" id="btn-again">再来一次</button></div>${handoffHtml}`);
+
+  if (ocrText) {
+    $('result-card').querySelector('.result-ocr-text').textContent = ocrText;
+    $('btn-copy-ocr').onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(ocrText);
+        toast('已复制文字');
+      } catch {
+        toast('无法写入剪贴板，可选中文字后复制', true);
+      }
+    };
+  }
 
   $('btn-open').onclick = () =>
     res.outputType === 'dir' ? window.api.openFolder(res.output) : window.api.showInFolder(res.output);

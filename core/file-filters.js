@@ -26,6 +26,7 @@ const FILE_FILTERS = {
   decorateMedia: { exts: ALL_MEDIA_EXT },
   // 图片专属模块
   imageConvert: { exts: IMG_EXT },
+  imageOcr: { exts: IMG_EXT },
   imageCompressTarget: { exts: IMG_EXT },
   imageStitch: { exts: IMG_EXT, multi: true },
   imageSplit: { exts: IMG_EXT },
@@ -93,8 +94,8 @@ const FILE_FILTERS = {
   replaceImageFiles: { exts: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'avif', 'gif', 'tif', 'tiff'], multi: true },
   videoGifFile: { exts: ALL_MEDIA_EXT },
   subFile: { exts: ['srt', 'ass', 'ssa', 'vtt'] },
-  anyMedia: { exts: [...VIDEO_EXT, 'gif', 'apng', ...IMG_EXT, ...SVG_EXT, ...AUDIO_EXT, 'srt', 'ass', 'ssa', 'vtt', ...DOC_EXT, 'doc', ...HTML_EXT, ...PDF_EXT], multi: true },
-  anyMediaSingle: { exts: [...VIDEO_EXT, 'gif', 'apng', ...IMG_EXT, ...SVG_EXT, ...AUDIO_EXT, 'srt', 'ass', 'ssa', 'vtt', ...DOC_EXT, 'doc', ...HTML_EXT, ...PDF_EXT] },
+  anyMedia: { exts: [...VIDEO_EXT, 'gif', 'apng', ...IMG_EXT, ...SVG_EXT, ...AUDIO_EXT, 'srt', 'ass', 'ssa', 'vtt', ...DOC_EXT, 'doc', 'txt', ...HTML_EXT, ...PDF_EXT], multi: true },
+  anyMediaSingle: { exts: [...VIDEO_EXT, 'gif', 'apng', ...IMG_EXT, ...SVG_EXT, ...AUDIO_EXT, 'srt', 'ass', 'ssa', 'vtt', ...DOC_EXT, 'doc', 'txt', ...HTML_EXT, ...PDF_EXT] },
 };
 
 const SINGLE_ONLY = new Set([

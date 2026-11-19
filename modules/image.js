@@ -15,11 +15,15 @@ const {
   probe,
   runFfmpeg,
   runFfmpegBinary,
+  throwIfTaskCancelled,
+  writeTaskOutput,
   copyTaskOutput,
   defaultOutput,
   defaultDirOutput,
   stampOutput,
 } = require('../core/runner');
+const { IMG_EXT } = require('../core/file-filters');
+const { cleanOcrLineText, runWinRtOcrOnImages } = require('../core/image-ocr');
 
 // 透明图转 JPG / BMP 时铺底色（类似 Sharp .flatten）
 function buildFlattenChain(inLabel, outLabel, bgHex) {
@@ -794,6 +798,48 @@ function imageCanvas(p) {
   };
 }
 
+function imageOcr(p) {
+  if (typeof p.input !== 'string' || !IMG_EXT.includes(path.extname(p.input).slice(1).toLowerCase())) {
+    throw new Error('请选择 JPG、PNG、WebP、BMP 或 AVIF 图片');
+  }
+  const output = p.output || defaultOutput(p.input, '识别文字', 'txt');
+  if (typeof output !== 'string' || path.extname(output).toLowerCase() !== '.txt') {
+    throw new Error('识别结果请保存为 TXT 文件');
+  }
+
+  return {
+    output,
+    outputType: 'file',
+    async run(taskId, onProgress) {
+      const temp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'vgt_image_ocr_'));
+      try {
+        const png = path.join(temp, 'input.png');
+        const filter = `[0:v]scale='min(4096,iw)':'min(4096,ih)':force_original_aspect_ratio=decrease[scaled];${buildFlattenChain('scaled', 'ocr', 'ffffff')}`;
+        onProgress?.(0.05);
+        await runFfmpeg(taskId, [
+          '-protocol_whitelist', 'file', '-i', path.resolve(p.input),
+          '-filter_complex', filter, '-map', '[ocr]', '-frames:v', '1', '-c:v', 'png', '-update', '1', png,
+        ], { totalDuration: 0 });
+        onProgress?.(0.3);
+        const [lines = []] = await runWinRtOcrOnImages([png], {
+          taskId,
+          ocrLang: p.ocrLang,
+          onProgress: (value) => onProgress?.(0.3 + value * 0.65),
+        });
+        throwIfTaskCancelled(taskId);
+        const cleaned = lines.map((line) => cleanOcrLineText(line.text)).filter(Boolean);
+        if (!cleaned.length) throw new Error('未识别到文字');
+        const text = cleaned.join('\n');
+        writeTaskOutput(output, Buffer.from(`${text}\n`, 'utf8'));
+        onProgress?.(1);
+        return { output, outputType: 'file', imageOcrSummary: { text, lineCount: cleaned.length } };
+      } finally {
+        await fs.promises.rm(temp, { recursive: true, force: true, maxRetries: 2, retryDelay: 100 }).catch(() => {});
+      }
+    },
+  };
+}
+
 module.exports = {
   imageConvert,
   imageCompressTarget,
@@ -803,4 +849,5 @@ module.exports = {
   imageReplaceBg,
   imageFrame,
   imageCanvas,
+  imageOcr,
 };

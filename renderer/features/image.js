@@ -95,6 +95,18 @@ window.VGT.IMAGE_FEATURES = [
     },
   },
   {
+    id: 'imageOcr', group: '图片', icon: '🔍', name: '图片 OCR 识字',
+    desc: '离线识别截图和照片中的中英文，可直接复制或批量导出 TXT',
+    accept: imgExts(),
+    fields: [
+      { key: 'ocrLang', label: '识别语言', type: 'chips', def: 'auto',
+        options: [['auto', '中英混排'], ['zh', '简体中文优先'], ['en', '英文优先']] },
+    ],
+    collect(v, ctx) {
+      return { input: ctx.file.path, ocrLang: v.ocrLang || 'auto' };
+    },
+  },
+  {
     id: 'imageStitch', group: '图片', icon: '🧩', name: '长图拼接 / 拼图', desc: '多张图片竖向长图拼接、横向拼接或 2~4 列网格拼图（支持调序）',
     accept: imgExts(), multi: true,
     fields: [

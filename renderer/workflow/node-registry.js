@@ -15,7 +15,7 @@
   const AUDIO_EXTS = ['mp3', 'm4a', 'wav', 'flac', 'aac', 'ogg', 'opus'];
   const SUB_EXTS = ['srt', 'ass', 'ssa', 'vtt'];
   const HTML_EXTS = ['html', 'htm'];
-  const DOC_EXTS = ['docx', 'doc', 'pptx', 'md', 'markdown', ...HTML_EXTS];
+  const DOC_EXTS = ['docx', 'doc', 'pptx', 'md', 'markdown', 'txt', ...HTML_EXTS];
   const OOXML_EXTS = ['docx', 'pptx'];
   const PDF_EXTS = ['pdf'];
   const ALL_SUPPORTED_EXTS = Array.from(new Set([
@@ -205,6 +205,8 @@
         return { exts: ['webp', 'jpg', 'png', 'avif', 'ico', 'bmp'], isList: false };
       case 'imageCompressTarget':
         return { exts: ['jpg', 'webp', 'png'], isList: false };
+      case 'imageOcr':
+        return { exts: ['txt'], isList: false };
       case 'imageStitch':
         return { exts: ['jpg', 'png', 'webp'], isList: false };
       case 'imageSplit':
@@ -427,6 +429,8 @@
         const fmt = p.format && p.format !== 'auto' ? [p.format] : ['jpg', 'webp', 'png'];
         return { exts: fmt, typeId: 'image', isList: upstreamIsList };
       }
+      case 'imageOcr':
+        return { exts: ['txt'], typeId: 'doc', isList: upstreamIsList };
       case 'imageStitch': {
         const fmt = p.format || 'jpg';
         return { exts: [fmt], typeId: 'image', isList: false };
@@ -1721,6 +1725,7 @@
         case 'audioTrim':
         case 'audioMerge':
         case 'imageCanvas':
+        case 'imageOcr':
         case 'videoCover':
         case 'docToPdf':
         case 'wordToPdf':

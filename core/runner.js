@@ -236,7 +236,7 @@ async function probePdf(filePath) {
   }
 }
 
-function probeHtml(filePath) {
+function probeTextFile(filePath, docType) {
   const size = fs.statSync(filePath).size;
   return {
     duration: 0,
@@ -247,7 +247,7 @@ function probeHtml(filePath) {
     isImage: false,
     isSvg: false,
     isDoc: true,
-    docType: 'html',
+    docType,
     imageCount: 0,
     videoCount: 0,
     hasAudio: false,
@@ -261,8 +261,8 @@ function probe(filePath) {
   if (ext === 'pdf') {
     return probePdf(filePath);
   }
-  if (isHtmlPath(filePath)) {
-    return Promise.resolve().then(() => probeHtml(filePath));
+  if (ext === 'txt' || isHtmlPath(filePath)) {
+    return Promise.resolve().then(() => probeTextFile(filePath, ext === 'txt' ? 'txt' : 'html'));
   }
   if (isDocPath(filePath) || ext === 'doc' || ext === 'ppt') {
     return Promise.resolve().then(() => probeDoc(filePath));
