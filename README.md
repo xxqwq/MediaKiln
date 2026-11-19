@@ -139,14 +139,19 @@ Windows 本地离线多媒体与文档处理桌面应用，基于 Electron + FFm
 ## 开发与测试
 
 ```bash
-npm install                    # 安装依赖并自动从 bin/*.exe.br 解压 FFmpeg
-npm start                      # 启动 Electron 应用
-node scripts/smoke-test.js     # 冒烟测试（自动生成素材，覆盖全部功能）
-node scripts/workflow-test.js  # 工作流引擎与真实媒体/PDF 流水线端到端测试（10 项）
-node scripts/hotfix-test.js    # 热更新打包、SHA-256 + Ed25519 签名校验与崩溃回滚测试（8 项）
-npm run hotfix:build           # 仅生成几百 KB 的热更新包与清单到 release/
-npm run dist                   # 打包便携版 + 安装版到 release/
-npm run release                # 一键发布（支持 -Bump patch/minor/major 与 -HotfixOnly）
+npm install                              # 安装依赖并自动从 bin/*.exe.br 解压 FFmpeg
+npm start                                # 启动 Electron 应用
+node scripts/smoke-test.js               # 冒烟测试（自动生成素材，覆盖全部功能）
+node scripts/workflow-test.js            # 工作流引擎与真实媒体/PDF 流水线端到端测试（14 项）
+node scripts/hotfix-test.js              # 热更新打包、SHA-256 + Ed25519 签名校验与崩溃回滚测试（8 项）
+node scripts/architecture-safety-test.js # 缓存隔离、路径安全与并发执行器校验
+node scripts/pdf-crop-test.js            # PDF 裁白边（旋转页/已有裁剪框/空白页/取消）测试
+node scripts/pdf-target-size-test.js     # PDF 目标大小压缩测试
+node scripts/pdf-searchable-test.js      # PDF 扫描件离线 OCR 可搜索文字层测试
+npm run build --prefix website           # 提取最新功能/节点/模板数据并构建官网静态站点
+npm run hotfix:build                     # 仅生成几百 KB 的热更新包与清单到 release/
+npm run dist                             # 打包便携版 + 安装版到 release/
+npm run release                          # 一键发布（支持 -Bump patch/minor/major 与 -HotfixOnly）
 ```
 
 签名构建从 `VGT_HOTFIX_PRIVATE_KEY` 读取私钥文件路径或私钥内容。发布包使用与客户端内置公钥匹配的 Ed25519 私钥。
@@ -164,20 +169,25 @@ core/
   ├── file-filters.js   文件选择过滤器与单/多选规则（支持随热更新同步新增功能）
   ├── ffmpeg-bin.js     内置 FFmpeg 路径解析、Brotli 自动解压与 SHA-256 校验
   ├── runner.js         ffprobe / ffmpeg / SVG / PDF / 文档探测与 AsyncLocalStorage 并发安全执行器
+  ├── md-renderer.js    Markdown / HTML 离线排版引擎（目录、代码高亮、表格与页码导出）
   ├── pdf-engine.js     零依赖离线 PDF 引擎（WinRT 高清渲染 + 纯 Node XRef/ObjStm 无损合并与拆分）
   ├── pdf-office.js     离线 Word ↔ PDF 互转（DOCX/PDF 解析 + WinRT OCR）与 PDF 压缩/旋转/水印页码引擎
+  ├── pdf-crop.js       PDF 留白检测、裁剪框预览与批量裁白边引擎
+  ├── pdf-searchable.js PDF 扫描件离线 OCR 可搜索文字层合成引擎
   ├── svg-worker.js     SVG 渲染 / 压缩 / 位图矢量化 Worker 子线程（不阻塞主进程且支持立即取消）
-  ├── doc-parser.js     DOCX / PPTX / MD 媒体解析、冗余关系扫描与安全替换回填
+  ├── doc-parser.js     DOCX / PPTX / MD 媒体解析、冗余关系扫描与提取
+  ├── doc-replacements.js DOCX / PPTX 图片替换回填规则、Manifest 匹配与指纹校验
+  ├── workflow-cache.js 工作流节点隔离缓存目录分配、所有权标记与安全清理
   └── utils.js          动态系统字体探测、滤镜拼装、并发池 mapConcurrent、GIF 调色板与 PGM 遮罩工具
 modules/                功能实现：video.js、image.js、svg.js、document.js
 preload.js              contextBridge 安全桥接（含安全 toFileUrl 编码与 webUtils.getPathForFile 拖拽路径获取）
 renderer/
   ├── app.js            单工具主界面、并发批量队列、全局 Ctrl+V 粘贴与工作流桥接
   ├── features/         70 个功能注册表（video-gif.js、image.js、svg.js、document.js）
-  ├── ui/               参数面板（含命名预设与带参数入画布）、裁剪画布、放大对比弹窗、热更新弹窗
+  ├── ui/               参数面板（含命名预设与带参数入画布）、裁剪画布、放大对比弹窗、PDF 工具面板、热更新弹窗
   └── workflow/         节点画布、并行 DAG 执行引擎、79 个节点与 7 套模板
 bin/                    内置 FFmpeg 9.0.2（gyan.dev）：仓库内置 .br 压缩包（每件 ~28MB）与 binaries.json；安装/启动自动解压，打包时经 extraResources 释放
-scripts/                ensure-ffmpeg.js、build-hotfix.js、hotfix-test.js、smoke-test.js、workflow-test.js、workflow-ui-check.js、webp-check.js、release.ps1
+scripts/                ensure-ffmpeg.js、build-hotfix.js、hotfix-test.js、architecture-safety-test.js、pdf-crop-test.js、pdf-target-size-test.js、pdf-searchable-test.js、smoke-test.js、workflow-test.js、workflow-ui-check.js、webp-check.js、release.ps1
 website/                产品官网（Astro 静态站点，构建时自动读取功能/节点/模板注册表；见 website/README.md）
 ```
 
