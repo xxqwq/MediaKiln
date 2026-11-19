@@ -5,7 +5,7 @@ const fs = require('fs');
 const Module = require('module');
 const path = require('path');
 
-const GITHUB_REPO = 'xxqwq/usefulTools';
+const GITHUB_REPO = 'xxqwq/MediaKiln';
 const PREVIEW_RELEASE_FEED_URL = `https://github.com/${GITHUB_REPO}/releases.atom`;
 const PREVIEW_VERSION = /^0\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
 

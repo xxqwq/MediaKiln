@@ -5,7 +5,7 @@ MediaKiln 是一款 Windows 本地离线多媒体与文档处理桌面应用，�
 ## 下载与使用
 
 ### 方式一：直接下载安装包（推荐）
-当前提供 **0.x 公开测试版**。在 GitHub Releases 选择最新的 0.x 版本，可下载「安装版」或免安装的「便携版」。旧的 2.x 构建仍可从历史记录查看。 [下载公开测试版](https://github.com/xxqwq/usefulTools/releases)
+当前提供 **0.x 公开测试版**。在 GitHub Releases 选择最新的 0.x 版本，可下载「安装版」或免安装的「便携版」。旧的 2.x 构建仍可从历史记录查看。 [下载公开测试版](https://github.com/xxqwq/MediaKiln/releases)
 
 ### 方式二：源码运行（需 Node.js 18+）
 1. 克隆仓库或下载源码 ZIP 后解压。

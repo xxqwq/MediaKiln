@@ -42,7 +42,7 @@ npm run preview    # 预览构建结果
 
 ### 方式一：关联 GitHub 仓库自动部署（推荐）
 
-1. 登录 [腾讯云 EdgeOne 控制台](https://console.cloud.tencent.com/edgeone/pages)，进入 **Pages** → **创建项目** → **连接 Git 仓库**，授权并选择 `xxqwq/usefulTools`。
+1. 登录 [腾讯云 EdgeOne 控制台](https://console.cloud.tencent.com/edgeone/pages)，进入 **Pages** → **创建项目** → **连接 Git 仓库**，授权并选择 `xxqwq/MediaKiln`。
 2. 构建与基础配置：
 
    | 项目 | 值 |

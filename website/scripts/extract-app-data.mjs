@@ -11,7 +11,7 @@ const RENDERER = path.join(APP_ROOT, 'renderer');
 const OUT_FILE = path.resolve(__dirname, '..', 'src', 'data', 'app-data.json');
 const require = createRequire(import.meta.url);
 
-const GITHUB_REPO = 'xxqwq/usefulTools';
+const GITHUB_REPO = 'xxqwq/MediaKiln';
 
 // 1. 在沙箱中执行浏览器端功能注册脚本（IIFE 挂载到 window.VGT）
 const sandbox = { window: { VGT: {} }, console };

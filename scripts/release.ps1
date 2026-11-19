@@ -58,7 +58,7 @@ try {
   }
   $ghUser = ($ghUserOut | Select-Object -First 1).ToString().Trim()
 
-  # 2. Resolve canonical GitHub repository (handles renamed repos like videoTool -> usefulTools)
+  # 2. Resolve canonical GitHub repository (handles renamed repos like usefulTools -> MediaKiln)
   $originUrl = (git remote get-url origin).Trim()
   if ($LASTEXITCODE -ne 0 -or -not $originUrl) { throw 'Failed to read git origin URL.' }
   if ($originUrl -match 'github\.com[:/]([^/]+/[^/.]+?)(?:\.git)?$') {

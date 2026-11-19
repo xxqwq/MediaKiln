@@ -13,7 +13,7 @@ function parseArgs(argv) {
   const opts = {
     outDir: path.join(ROOT, 'release'),
     notes: '',
-    repo: 'xxqwq/usefulTools',
+    repo: 'xxqwq/MediaKiln',
     privateKey: '',
   };
   for (let i = 0; i < argv.length; i++) {
@@ -68,7 +68,7 @@ function buildHotfix(opts = {}) {
   const version = String(pkg.version || '').replace(/^v/i, '');
   const shellVersion = String(pkg.shellVersion || version).replace(/^v/i, '');
   const outDir = opts.outDir || path.join(ROOT, 'release');
-  const repo = opts.repo || 'xxqwq/usefulTools';
+  const repo = opts.repo || 'xxqwq/MediaKiln';
 
   const raw = String(opts.privateKeyPem || opts.privateKey || process.env.VGT_HOTFIX_PRIVATE_KEY || '').trim();
   if (!raw) throw new Error('请通过 VGT_HOTFIX_PRIVATE_KEY 指定热更新签名私钥');
