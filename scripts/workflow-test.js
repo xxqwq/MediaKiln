@@ -197,10 +197,10 @@ async function step(name, fn) {
   const reg = regFactory.createRegistry(features);
   const runtime = createNodeRuntime();
 
-  await step('1. 节点注册表完整性（9 个 I/O + 71 个子功能 = 80 个节点）', () => {
+  await step('1. 节点注册表完整性（9 个 I/O + 73 个子功能 = 82 个节点）', () => {
     const all = reg.getAllDefs();
-    assert.strictEqual(features.length, 71);
-    assert.strictEqual(all.length, 80);
+    assert.strictEqual(features.length, 73);
+    assert.strictEqual(all.length, 82);
     assert.deepStrictEqual(
       all.filter((def) => !def.isIo).map((def) => def.type).sort(),
       features.map((feature) => `feat.${feature.id}`).sort(),
@@ -238,6 +238,15 @@ async function step(name, fn) {
       input: 'doc.pdf', padding: 0, pageRange: '2-3',
     });
     assert.equal(build('pdfRotate', { direction: 'ccw90' }, { path: 'doc.pdf' }).direction, 'ccw90');
+    assert.deepStrictEqual(build('pdfNup', { layout: '6', orientation: 'a4l', margin: '12', border: 'no', order: 'col', pageRange: '1-6' }, { path: 'doc.pdf' }), {
+      input: 'doc.pdf', layout: '6', orientation: 'a4l', margin: '12', border: 'no', order: 'col', pageRange: '1-6',
+    });
+    assert.deepStrictEqual(reg.getDynamicOutputSpec({ type: 'feat.pdfNup' }, ['pdf'], true), { exts: ['pdf'], typeId: 'pdf', isList: true });
+    assert.deepStrictEqual(build('subtitleConvert', { format: 'vtt', shiftSec: '1.5', stripTags: 'no', txtTimestamps: 'yes' }, { path: 'sub.srt' }), {
+      input: 'sub.srt', format: 'vtt', shiftSec: '1.5', stripTags: 'no', txtTimestamps: 'yes',
+    });
+    assert.deepStrictEqual(reg.getDynamicOutputSpec({ type: 'feat.subtitleConvert', params: { format: 'vtt' } }, ['srt'], false), { exts: ['vtt'], typeId: 'subtitle', isList: false });
+    assert.deepStrictEqual(reg.getDynamicOutputSpec({ type: 'feat.subtitleConvert', params: { format: 'txt' } }, ['ass'], true), { exts: ['txt'], typeId: 'doc', isList: true });
     assert.equal(build('pdfWatermark', { contentMode: 'both' }, { path: 'doc.pdf' }).wmText, '内部资料 · 严禁外传');
     assert.equal(build('addMusic', { ducking: 'yes' }, video, { music: { paths: ['voice.wav'] } }).ducking, 'yes');
     assert.equal(build('watermark', { pos: 'tiled', tileAngle: '0' }, video).tileAngle, '0');
@@ -652,6 +661,52 @@ async function step(name, fn) {
     const z = new AdmZip(outDocx);
     const docXml = z.getEntry('word/document.xml').getData().toString('utf8');
     assert(docXml.includes('Workflow Office Pipeline 2026'), '导出的 Word 应保留原文标题');
+  });
+
+  await step('12. PDF 多页拼版与字幕转换节点流水线端到端执行', async () => {
+    const newNodesOutDir = path.join(TMP, 'new_nodes_wf_out');
+    fs.mkdirSync(newNodesOutDir, { recursive: true });
+    const { PDFDocument, StandardFonts } = require('pdf-lib');
+    const srcPdf = path.join(TMP, 'nup_wf_src.pdf');
+    const doc = await PDFDocument.create();
+    const font = await doc.embedFont(StandardFonts.HelveticaBold);
+    for (let i = 1; i <= 4; i++) {
+      const p = doc.addPage([595, 842]);
+      p.drawText(`Slide ${i}`, { x: 80, y: 740, size: 24, font });
+    }
+    fs.writeFileSync(srcPdf, await doc.save());
+
+    const srcSub = path.join(TMP, 'sub_wf_src.srt');
+    fs.writeFileSync(srcSub, '1\n00:00:01,000 --> 00:00:03,000\n<i>Hello</i> {\\an8}World\n', 'utf8');
+
+    const flowNew = tplMod.normalizeGraphData({
+      name: '拼版与字幕工作流',
+      nodes: [
+        { id: 'n1', type: 'io.loadFile', x: 0, y: 0, params: { filePath: srcPdf } },
+        { id: 'n2', type: 'feat.pdfNup', x: 300, y: 0, params: { layout: '4', orientation: 'auto', margin: '24', border: 'yes', order: 'row', pageRange: '' } },
+        { id: 'n3', type: 'io.loadFile', x: 0, y: 200, params: { filePath: srcSub } },
+        { id: 'n4', type: 'feat.subtitleConvert', x: 300, y: 200, params: { format: 'vtt', shiftSec: '1', stripTags: 'yes', txtTimestamps: 'no' } },
+        { id: 'n5', type: 'io.save', x: 600, y: 100, params: { outMode: 'custom', customDir: newNodesOutDir, suffix: '', exportAsFolder: 'flat', noOverwrite: 'no' } },
+      ],
+      edges: [
+        { id: 'e1', fromNode: 'n1', fromPort: 'media', toNode: 'n2', toPort: 'input' },
+        { id: 'e2', fromNode: 'n2', fromPort: 'out', toNode: 'n5', toPort: 'media' },
+        { id: 'e3', fromNode: 'n3', fromPort: 'media', toNode: 'n4', toPort: 'input' },
+        { id: 'e4', fromNode: 'n4', fromPort: 'out', toNode: 'n5', toPort: 'media' },
+      ],
+    }, reg);
+
+    const { promise } = runner.execute(flowNew, runtime, { hwAccel: 'cpu' });
+    const res = await promise;
+    assert.strictEqual(res.summary.exportedFiles.length, 2);
+    const outPdf = res.summary.exportedFiles.find((f) => f.endsWith('.pdf'));
+    const outVtt = res.summary.exportedFiles.find((f) => f.endsWith('.vtt'));
+    assert(outPdf && fs.existsSync(outPdf), '工作流应导出拼版 PDF');
+    assert(outVtt && fs.existsSync(outVtt), '工作流应导出 VTT 字幕');
+    const nupDoc = await PDFDocument.load(fs.readFileSync(outPdf));
+    assert.strictEqual(nupDoc.getPageCount(), 1, '4 页拼 4 合 1 应输出 1 页 PDF');
+    const vttBody = fs.readFileSync(outVtt, 'utf8');
+    assert(vttBody.includes('00:00:02.000 --> 00:00:04.000') && vttBody.includes('Hello World'));
   });
 
   // 清理测试素材与中间缓存

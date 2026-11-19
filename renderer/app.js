@@ -488,11 +488,15 @@ function renderFileCard(ext) {
             ? 'PPT 演示文稿 (.pptx)'
             : (info.docType === 'pdf'
               ? 'PDF 文档 (.pdf)'
-              : (info.docType === 'html' ? 'HTML 网页 (.html)' : 'Markdown 文档')))),
+              : (info.docType === 'subtitle'
+                ? `字幕文件 (.${String(info.subFormat || ext).toUpperCase()})`
+                : (info.docType === 'html' ? 'HTML 网页 (.html)' : 'Markdown 文档'))))),
     );
     const st = info.docStats || {};
     if (info.docType === 'pdf') {
       parts.push(`共 ${info.pageCount || 0} 页`);
+    } else if (info.docType === 'subtitle') {
+      parts.push(`共 ${info.cueCount || 0} 条字幕`);
     } else if (info.docType === 'doc') {
       parts.push('由本机 Office / WPS / LibreOffice 原生转换');
     } else if (info.docType === 'html') {
@@ -532,7 +536,7 @@ function renderFileCard(ext) {
   const url = toFileUrl(file.path);
   const zoomBtn = $('btn-zoom-preview');
   if (isDoc) {
-    const icon = (info.docType === 'docx' || info.docType === 'doc') ? '📘' : (info.docType === 'pptx' ? '📊' : (info.docType === 'pdf' ? '📄' : (info.docType === 'html' ? '🌐' : '📝')));
+    const icon = (info.docType === 'docx' || info.docType === 'doc') ? '📘' : (info.docType === 'pptx' ? '📊' : (info.docType === 'pdf' ? '📄' : (info.docType === 'subtitle' ? '💬' : (info.docType === 'html' ? '🌐' : '📝'))));
     box.innerHTML = `<div class="no-preview">${icon}</div>`;
     zoomBtn.classList.add('hidden');
   } else if (ext === 'gif' || ext === 'apng' || ext === 'webp' || ext === 'svg' || IMG_EXTS.includes(ext)) {
@@ -1217,6 +1221,10 @@ async function showSuccess(res) {
     } else if (res.pdfCropSummary) {
       const ps = res.pdfCropSummary;
       line = `✅ PDF 已导出 · 裁去 ${ps.croppedPages} / ${ps.processedPages} 页白边`;
+    } else if (res.subtitleConvertSummary) {
+      const sc = res.subtitleConvertSummary;
+      const shiftText = sc.shiftSec ? `（偏移 ${sc.shiftSec > 0 ? '+' : ''}${sc.shiftSec}s）` : '';
+      line = `✅ 字幕处理完成：${sc.cueCount} 条字幕已转为 ${String(sc.targetFormat || outExt).toUpperCase()}${shiftText}（${fmtSize(outSize)}）`;
     } else if (res.animSpriteSummary) {
       const as = res.animSpriteSummary;
       line = as.mode === 'toSprite'
@@ -1308,6 +1316,8 @@ async function showSuccess(res) {
         line = `✅ PDF 拆分完成：共拆分为 ${ps.fileCount} 份独立 PDF 文件`;
       } else if (ps.action === 'rotate') {
         line = `✅ PDF 页面旋转完成：已将 ${ps.rotatedCount} / ${ps.totalPages} 页旋转 ${ps.angle}°（${fmtSize(outSize)}）`;
+      } else if (ps.action === 'nup') {
+        line = `✅ PDF 多页拼版完成：${ps.selectedPages} 页已按 ${ps.perSheet} 合 1 拼为 ${ps.pageCount} 页（${fmtSize(outSize)}）`;
       } else if (ps.action === 'watermark') {
         const what = ps.contentMode === 'pageNum' ? '页码' : (ps.contentMode === 'both' ? '水印与页码' : '水印');
         line = `✅ PDF 添加${what}完成：共处理 ${ps.affectedCount} / ${ps.totalPages} 页（${fmtSize(outSize)}）`;

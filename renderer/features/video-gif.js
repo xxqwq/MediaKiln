@@ -16,12 +16,12 @@ const rt = (f) => window.VGT.params.readTimes(f);
 window.VGT.VIDEO_FEATURES = [
   // ================= 转换 =================
   {
-    id: 'videoToGif', group: '转换', icon: '🎞️', name: '视频转 GIF', desc: '选段转高质量动图（调色板两遍编码）',
+    id: 'videoToGif', group: '转换', icon: '🎞️', name: '视频转 GIF', desc: '选段转高质量动图（调色板两遍编码，最高支持 50 fps）',
     accept: VIDEO_EXTS,
     fields: [
       { type: 'times' },
       { key: 'fps', label: '帧率', type: 'select', def: '15',
-        options: [['10', '10 fps（体积小）'], ['12', '12 fps'], ['15', '15 fps（推荐）'], ['20', '20 fps'], ['24', '24 fps（流畅）']] },
+        options: [['10', '10 fps（体积小）'], ['12', '12 fps'], ['15', '15 fps（推荐）'], ['20', '20 fps'], ['24', '24 fps'], ['25', '25 fps'], ['30', '30 fps（流畅）'], ['33', '33 fps（高流畅）'], ['50', '50 fps（最高·浏览器上限）']] },
       { key: 'width', label: '宽度', type: 'select', def: '480',
         options: [['320', '320 px'], ['480', '480 px（推荐）'], ['640', '640 px'], ['800', '800 px'], ['0', '保持原宽']] },
       { key: 'colors', label: '颜色数', type: 'select', def: '128',
@@ -46,12 +46,12 @@ window.VGT.VIDEO_FEATURES = [
     },
   },
   {
-    id: 'toWebp', group: '转换', icon: '🖼️', name: 'WebP 动图', desc: '视频/GIF 转动画 WebP，比 GIF 小 30~50%',
+    id: 'toWebp', group: '转换', icon: '🖼️', name: 'WebP 动图', desc: '视频/GIF 转动画 WebP，比 GIF 小 30~50%，最高支持 60 fps',
     accept: [...VIDEO_EXTS, 'gif'],
     fields: [
       { type: 'times' },
       { key: 'fps', label: '帧率', type: 'select', def: '15',
-        options: [['10', '10 fps'], ['15', '15 fps（推荐）'], ['20', '20 fps'], ['24', '24 fps']] },
+        options: [['10', '10 fps'], ['15', '15 fps（推荐）'], ['20', '20 fps'], ['24', '24 fps'], ['30', '30 fps（流畅）'], ['50', '50 fps'], ['60', '60 fps（丝滑）']] },
       { key: 'width', label: '宽度', type: 'select', def: '480',
         options: [['320', '320 px'], ['480', '480 px（推荐）'], ['640', '640 px'], ['0', '保持原宽']] },
       { key: 'quality', label: '画质', type: 'chips', def: '75', options: [['60', '体积优先'], ['75', '均衡（推荐）'], ['90', '画质优先']] },
@@ -134,6 +134,10 @@ window.VGT.VIDEO_FEATURES = [
         options: [
           ['0', '保持原帧率'],
           ['p50', '帧率减半（50% 抽帧）'],
+          ['50', '50 fps（最高·浏览器上限）'],
+          ['33', '33 fps'],
+          ['30', '30 fps（高帧率）'],
+          ['25', '25 fps'],
           ['24', '24 fps（流畅）'],
           ['20', '20 fps'],
           ['15', '15 fps'],
@@ -145,7 +149,7 @@ window.VGT.VIDEO_FEATURES = [
           ['3', '3 fps（幻灯片）'],
           ['custom', '自定义帧率…'],
         ] },
-      { key: 'customFps', label: '自定义帧率 (1~30)', type: 'number', def: '10', min: 1, max: 30, step: 1,
+      { key: 'customFps', label: '自定义帧率 (1~50)', type: 'number', def: '10', min: 1, max: 50, step: 1,
         showIf: (v) => v.fps === 'custom' },
       { key: 'colors', label: '调色板颜色数', type: 'select', def: '128',
         options: [
@@ -221,7 +225,7 @@ window.VGT.VIDEO_FEATURES = [
       { key: 'endFrame', label: '结束帧（含该帧）', type: 'number', def: '15', min: 1, step: 1,
         showIf: (v) => v.mode === 'frames' },
       { key: 'fps', label: '帧率', type: 'select', def: '0',
-        options: [['0', '保持原帧率（推荐）'], ['24', '24 fps'], ['20', '20 fps'], ['15', '15 fps'], ['12', '12 fps'], ['10', '10 fps'], ['8', '8 fps']] },
+        options: [['0', '保持原帧率（推荐）'], ['50', '50 fps（最高）'], ['30', '30 fps'], ['25', '25 fps'], ['24', '24 fps'], ['20', '20 fps'], ['15', '15 fps'], ['12', '12 fps'], ['10', '10 fps'], ['8', '8 fps']] },
       { key: 'colors', label: '调色板颜色数', type: 'select', def: '256',
         options: [['256', '256 色（原画质，推荐）'], ['128', '128 色（均衡）'], ['64', '64 色（体积更小）']] },
       { key: 'loop', label: '循环方式', type: 'chips', def: '0',
@@ -304,7 +308,7 @@ window.VGT.VIDEO_FEATURES = [
       { key: 'width', label: '输出宽度', type: 'select', def: '480',
         options: [['240', '240 px（表情包）'], ['320', '320 px'], ['480', '480 px（推荐）'], ['640', '640 px']] },
       { key: 'fps', label: '帧率', type: 'select', def: '12',
-        options: [['8', '8 fps'], ['12', '12 fps（推荐）'], ['15', '15 fps'], ['20', '20 fps']] },
+        options: [['8', '8 fps'], ['12', '12 fps（推荐）'], ['15', '15 fps'], ['20', '20 fps'], ['25', '25 fps'], ['30', '30 fps'], ['50', '50 fps（最高）']] },
     ],
     collect(v, ctx) {
       return {
@@ -353,7 +357,7 @@ window.VGT.VIDEO_FEATURES = [
           ['fromSprite', '🔁 雪碧图 PNG → GIF / APNG'],
         ] },
       { key: 'fps', label: '帧率 (FPS)', type: 'select', def: '12',
-        options: [['8', '8 fps'], ['10', '10 fps'], ['12', '12 fps（推荐）'], ['15', '15 fps'], ['20', '20 fps'], ['24', '24 fps']] },
+        options: [['8', '8 fps'], ['10', '10 fps'], ['12', '12 fps（推荐）'], ['15', '15 fps'], ['20', '20 fps'], ['24', '24 fps'], ['25', '25 fps'], ['30', '30 fps'], ['50', '50 fps（GIF 上限）'], ['60', '60 fps（APNG，GIF 限 50）']] },
       { key: 'width', label: '输出宽度', type: 'select', def: '480',
         options: [['0', '保持原宽'], ['320', '320 px'], ['480', '480 px（推荐）'], ['640', '640 px'], ['800', '800 px']],
         showIf: (v) => v.mode === 'toApng' || v.mode === 'apngToGif' },
@@ -521,12 +525,13 @@ window.VGT.VIDEO_FEATURES = [
     },
   },
   {
-    id: 'videoBlur', group: '剪辑', icon: '🫥', name: '局部打码 / 模糊', desc: '在画面上拉框遮挡水印、人脸或隐私区域（视频 / GIF / 图片通用）',
+    id: 'videoBlur', group: '剪辑', icon: '🫥', name: '局部打码 / 去台标', desc: '在画面上拉框遮挡水印、人脸或隐私，支持高斯模糊、马赛克与去台标（视频 / GIF / 图片通用）',
     accept: [...VIDEO_EXTS, 'gif', ...IMG_EXTS], noBatch: true,
     fields: [
-      { type: 'cropCanvas', label: '拖动鼠标框出要打码的区域' },
-      { key: 'mode', label: '打码方式', type: 'chips', def: 'blur', options: [['blur', '高斯模糊'], ['mosaic', '像素马赛克']] },
-      { key: 'strength', label: '强度', type: 'chips', def: 'medium', options: [['medium', '适中'], ['strong', '强力']] },
+      { type: 'cropCanvas', label: '拖动鼠标框出要打码或去台标的区域' },
+      { key: 'mode', label: '处理方式', type: 'chips', def: 'blur', options: [['blur', '高斯模糊'], ['mosaic', '像素马赛克'], ['delogo', '去固定台标']] },
+      { key: 'strength', label: '强度', type: 'chips', def: 'medium', options: [['medium', '适中'], ['strong', '强力']],
+        showIf: (v) => v.mode !== 'delogo' },
     ],
     collect(v, ctx) {
       const c = window.__crop;
@@ -946,6 +951,31 @@ window.VGT.VIDEO_FEATURES = [
     },
   },
   {
+    id: 'subtitleConvert', group: '工具', icon: '🔄', name: '字幕转换与同步',
+    desc: 'SRT / VTT / ASS 互转与导出纯文本台词，支持时间轴整体偏移校正、清理样式标签与 GBK 自动转 UTF-8',
+    accept: ['srt', 'vtt', 'ass', 'ssa'],
+    fields: [
+      { key: 'format', label: '目标格式', type: 'chips', def: 'srt',
+        options: [['srt', 'SRT（通用推荐）'], ['vtt', 'WebVTT (.vtt)'], ['txt', '纯文本台词 (.txt)']] },
+      { key: 'shiftSec', label: '时间轴偏移（秒，正延后 / 负提前）', type: 'number', def: '0', min: -3600, max: 3600, step: 0.1,
+        presets: [['-2', '-2s'], ['-0.5', '-0.5s'], ['0', '不偏移'], ['0.5', '+0.5s'], ['2', '+2s']] },
+      { key: 'stripTags', label: '样式标签清理', type: 'chips', def: 'yes',
+        options: [['yes', '清理花字/HTML 标签（推荐）'], ['no', '保留原始文本']] },
+      { key: 'txtTimestamps', label: 'TXT 时间戳', type: 'chips', def: 'no',
+        options: [['no', '仅台词文字'], ['yes', '带 [时:分:秒] 时间戳']],
+        showIf: (v) => v.format === 'txt' },
+    ],
+    collect(v, ctx) {
+      return {
+        input: ctx.file.path,
+        format: v.format || 'srt',
+        shiftSec: v.shiftSec ?? '0',
+        stripTags: v.stripTags || 'yes',
+        txtTimestamps: v.txtTimestamps || 'no',
+      };
+    },
+  },
+  {
     id: 'videoCover', group: '工具', icon: '📷', name: '设置视频封面', desc: '为 MP4 / M4V 写入指定画面或图片作为封面，保留原音视频流',
     accept: ['mp4', 'm4v'],
     fields: [
@@ -1033,8 +1063,18 @@ window.VGT.VIDEO_FEATURES = [
     accept: IMG_EXTS, multi: true,
     fields: [
       { key: 'format', label: '输出', type: 'chips', def: 'gif', options: [['gif', 'GIF 动图'], ['mp4', 'MP4 视频']] },
-      { key: 'fps', label: '每张停留', type: 'select', def: '8',
-        options: [['4', '0.25 秒'], ['8', '0.125 秒'], ['2', '0.5 秒'], ['1', '1 秒']] },
+      { key: 'fps', label: '帧率 / 速度', type: 'select', def: '8',
+        options: [
+          ['1', '1 fps（每张 1 秒）'],
+          ['2', '2 fps（每张 0.5 秒）'],
+          ['4', '4 fps（每张 0.25 秒）'],
+          ['8', '8 fps（每张 0.125 秒）'],
+          ['12', '12 fps'],
+          ['15', '15 fps（流畅）'],
+          ['24', '24 fps'],
+          ['30', '30 fps（高流畅）'],
+          ['50', '50 fps（GIF 上限）'],
+        ] },
     ],
     collect(v, ctx) {
       const sizes = {};

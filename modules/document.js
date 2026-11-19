@@ -2284,6 +2284,50 @@ function pdfRotate(p) {
   };
 }
 
+function pdfNup(p) {
+  const ext = path.extname(String(p.input || '')).slice(1).toLowerCase();
+  if (ext !== 'pdf') {
+    throw new Error('请选择 PDF (.pdf) 文件');
+  }
+  const n = Number(p.layout);
+  const layout = [2, 4, 6, 9].includes(n) ? n : 4;
+  const orientation = ['auto', 'a4p', 'a4l'].includes(p.orientation) ? p.orientation : 'auto';
+  const order = p.order === 'col' ? 'col' : 'row';
+  const border = p.border !== 'no' && p.border !== false;
+  const pageRange = String(p.pageRange || '').trim();
+  const output = p.output || defaultOutput(p.input, `${layout}合1`, 'pdf');
+
+  return {
+    output,
+    outputType: 'file',
+    async run(taskId, onProgress) {
+      const { nupPdfPages } = require('../core/pdf-nup');
+      const res = await nupPdfPages(p.input, output, {
+        layout,
+        orientation,
+        margin: p.margin,
+        border,
+        order,
+        pageRange,
+        taskId,
+        onProgress,
+      });
+      return {
+        output,
+        outputType: 'file',
+        pdfSummary: {
+          action: 'nup',
+          totalPages: res.totalPages,
+          selectedPages: res.selectedPages,
+          pageCount: res.outputPages,
+          perSheet: res.perSheet,
+          outputSize: res.outputSize,
+        },
+      };
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // 16. PDF 水印与页码
 // ---------------------------------------------------------------------------
@@ -2346,6 +2390,7 @@ module.exports = {
   pdfSearchable,
   pdfCrop,
   pdfRotate,
+  pdfNup,
   pdfWatermark,
   imagesToPdf,
   pdfToImages,

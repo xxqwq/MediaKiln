@@ -256,10 +256,42 @@ function probeTextFile(filePath, docType) {
   };
 }
 
+async function probeSubtitle(filePath) {
+  const { inspectSubtitle } = require('./subtitle');
+  const st = await fs.promises.stat(filePath);
+  const ext = path.extname(String(filePath || '')).slice(1).toLowerCase();
+  let info = { cueCount: 0, subFormat: ext, encoding: 'utf-8' };
+  try {
+    info = await inspectSubtitle(filePath);
+  } catch {}
+  return {
+    duration: 0,
+    size: st.size,
+    width: 0,
+    height: 0,
+    fps: 0,
+    isImage: false,
+    isSvg: false,
+    isDoc: true,
+    docType: 'subtitle',
+    subFormat: info.subFormat || ext,
+    cueCount: info.cueCount || 0,
+    encoding: info.encoding || 'utf-8',
+    imageCount: 0,
+    videoCount: 0,
+    hasAudio: false,
+    hasSubtitles: true,
+    subCount: 1,
+  };
+}
+
 function probe(filePath) {
   const ext = path.extname(String(filePath || '')).slice(1).toLowerCase();
   if (ext === 'pdf') {
     return probePdf(filePath);
+  }
+  if (['srt', 'vtt', 'ass', 'ssa'].includes(ext)) {
+    return probeSubtitle(filePath);
   }
   if (ext === 'txt' || isHtmlPath(filePath)) {
     return Promise.resolve().then(() => probeTextFile(filePath, ext === 'txt' ? 'txt' : 'html'));

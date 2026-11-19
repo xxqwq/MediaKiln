@@ -302,7 +302,7 @@ app.whenReady().then(async () => {
       modeBtnWf.click();
       await new Promise((r) => setTimeout(r, 120));
       const paletteCount = document.querySelectorAll('#nav .wf-node-tpl').length;
-      if (paletteCount !== 80) throw new Error('侧栏工作流节点数异常: ' + paletteCount);
+      if (paletteCount !== 82) throw new Error('侧栏工作流节点数异常: ' + paletteCount);
 
       // 2. 依次载入 7 套模板并校验节点、连线、可视区域与 HUD 避让
       const tplCount = window.VGT.wfTemplates.WORKFLOW_TEMPLATES.length;
@@ -390,7 +390,7 @@ app.whenReady().then(async () => {
       await window.VGT.appBridge.sendToSingle(['F:\\\\stub.mp4']);
       await new Promise((r) => setTimeout(r, 80));
       const singleItems = document.querySelectorAll('#nav .nav-item:not(.wf-node-tpl)').length;
-      if (singleItems !== 71) throw new Error('单工具模式导航恢复异常: ' + singleItems);
+      if (singleItems !== 73) throw new Error('单工具模式导航恢复异常: ' + singleItems);
 
       const setFps = (value) => {
         const input = document.querySelector('#params select[data-key="fps"]');

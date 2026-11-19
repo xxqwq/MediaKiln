@@ -7,6 +7,7 @@ const ALL_VISUAL_EXT = [...ALL_MEDIA_EXT, 'jpg', 'jpeg', 'png', 'webp', 'bmp', '
 const AUDIO_EXT = ['mp3', 'm4a', 'wav', 'flac', 'aac', 'ogg', 'opus'];
 const IMG_EXT = ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'avif'];
 const SVG_EXT = ['svg'];
+const SUB_EXT = ['srt', 'ass', 'ssa', 'vtt'];
 const DOC_EXT = ['docx', 'pptx', 'md', 'markdown'];
 const HTML_EXT = ['html', 'htm'];
 const PDF_EXT = ['pdf'];
@@ -52,6 +53,7 @@ const FILE_FILTERS = {
   pdfSearchable: { exts: PDF_EXT },
   pdfCrop: { exts: PDF_EXT },
   pdfRotate: { exts: PDF_EXT },
+  pdfNup: { exts: PDF_EXT },
   pdfWatermark: { exts: PDF_EXT },
   imagesToPdf: { exts: IMG_EXT, multi: true },
   pdfToImages: { exts: PDF_EXT },
@@ -73,6 +75,7 @@ const FILE_FILTERS = {
   videoText: { exts: ALL_VISUAL_EXT },
   watermark: { exts: ALL_VISUAL_EXT },
   subtitleTool: { exts: VIDEO_EXT },
+  subtitleConvert: { exts: SUB_EXT },
   rotateFlip: { exts: ALL_VISUAL_EXT },
   reverse: { exts: ALL_MEDIA_EXT },
   changeSpeed: { exts: ALL_MEDIA_EXT },
@@ -93,9 +96,9 @@ const FILE_FILTERS = {
   imageFile: { exts: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'avif'] },
   replaceImageFiles: { exts: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'avif', 'gif', 'tif', 'tiff'], multi: true },
   videoGifFile: { exts: ALL_MEDIA_EXT },
-  subFile: { exts: ['srt', 'ass', 'ssa', 'vtt'] },
-  anyMedia: { exts: [...VIDEO_EXT, 'gif', 'apng', ...IMG_EXT, ...SVG_EXT, ...AUDIO_EXT, 'srt', 'ass', 'ssa', 'vtt', ...DOC_EXT, 'doc', 'txt', ...HTML_EXT, ...PDF_EXT], multi: true },
-  anyMediaSingle: { exts: [...VIDEO_EXT, 'gif', 'apng', ...IMG_EXT, ...SVG_EXT, ...AUDIO_EXT, 'srt', 'ass', 'ssa', 'vtt', ...DOC_EXT, 'doc', 'txt', ...HTML_EXT, ...PDF_EXT] },
+  subFile: { exts: SUB_EXT },
+  anyMedia: { exts: [...VIDEO_EXT, 'gif', 'apng', ...IMG_EXT, ...SVG_EXT, ...AUDIO_EXT, ...SUB_EXT, ...DOC_EXT, 'doc', 'txt', ...HTML_EXT, ...PDF_EXT], multi: true },
+  anyMediaSingle: { exts: [...VIDEO_EXT, 'gif', 'apng', ...IMG_EXT, ...SVG_EXT, ...AUDIO_EXT, ...SUB_EXT, ...DOC_EXT, 'doc', 'txt', ...HTML_EXT, ...PDF_EXT] },
 };
 
 const SINGLE_ONLY = new Set([
@@ -116,6 +119,7 @@ module.exports = {
   AUDIO_EXT,
   IMG_EXT,
   SVG_EXT,
+  SUB_EXT,
   DOC_EXT,
   HTML_EXT,
   PDF_EXT,

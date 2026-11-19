@@ -494,6 +494,45 @@ window.VGT.DOC_FEATURES = [
     },
   },
   {
+    id: 'pdfNup', group: '文档', icon: '🗂️', name: 'PDF 多页拼版',
+    desc: '将多页 PDF 按 2 合 1 / 4 合 1 / 6 合 1 / 9 合 1 矢量拼版到 A4 纸张，适合打印讲义与课件',
+    accept: ['pdf'],
+    fields: [
+      { key: 'layout', label: '每页排版数', type: 'chips', def: '4', fullWidth: true,
+        options: [
+          ['2', '2 合 1'],
+          ['4', '4 合 1（推荐）'],
+          ['6', '6 合 1'],
+          ['9', '9 合 1'],
+        ] },
+      { key: 'orientation', label: 'A4 纸张方向', type: 'chips', def: 'auto',
+        options: [
+          ['auto', '智能匹配原页方向（推荐）'],
+          ['a4p', '固定 A4 竖向'],
+          ['a4l', '固定 A4 横向'],
+        ] },
+      { key: 'margin', label: '页边距', type: 'chips', def: '24',
+        options: [['12', '窄边距 12pt'], ['24', '标准 24pt（推荐）'], ['36', '宽边距 36pt']] },
+      { key: 'border', label: '页面细框线', type: 'chips', def: 'yes',
+        options: [['yes', '添加淡灰细边框'], ['no', '无边框']] },
+      { key: 'order', label: '排列顺序', type: 'chips', def: 'row',
+        options: [['row', '先横后竖（从左到右）'], ['col', '先竖后横（从上到下）']] },
+      { key: 'pageRange', label: '作用页码范围（留空为全部页）', type: 'text', def: '',
+        placeholder: '例如：1-8, 10（留空为全部页面）' },
+    ],
+    collect(v, ctx) {
+      return {
+        input: ctx.file.path,
+        layout: v.layout || '4',
+        orientation: v.orientation || 'auto',
+        margin: v.margin ?? '24',
+        border: v.border || 'yes',
+        order: v.order || 'row',
+        pageRange: String(v.pageRange || '').trim(),
+      };
+    },
+  },
+  {
     id: 'pdfWatermark', group: '文档', icon: '🏷️', name: 'PDF 水印与页码',
     desc: '离线为 PDF 批量叠加全屏斜向平铺/居中/角落文字水印（支持任意中文），或添加页脚/页眉页码',
     accept: ['pdf'],

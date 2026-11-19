@@ -237,6 +237,7 @@
       case 'pdfSearchable':
       case 'pdfCrop':
       case 'pdfRotate':
+      case 'pdfNup':
       case 'pdfWatermark':
       case 'imagesToPdf':
       case 'pdfMerge':
@@ -256,6 +257,8 @@
       case 'subtitleTool':
       case 'audioAdjust':
         return { exts: [...VIDEO_EXTS, 'srt'], isList: false };
+      case 'subtitleConvert':
+        return { exts: ['srt', 'vtt', 'txt'], isList: false };
       case 'videoText':
         return { exts: VIDEO_EXTS, isList: false };
       case 'splitVideo':
@@ -475,6 +478,7 @@
       case 'pdfSearchable':
       case 'pdfCrop':
       case 'pdfRotate':
+      case 'pdfNup':
       case 'pdfWatermark':
         return { exts: ['pdf'], typeId: 'pdf', isList: upstreamIsList };
       case 'pdfToWord':
@@ -511,6 +515,10 @@
       case 'subtitleTool':
         if (p.mode === 'extract') return { exts: ['srt'], typeId: 'subtitle', isList: upstreamIsList };
         return passthroughFromUpstream(VIDEO_EXTS);
+      case 'subtitleConvert': {
+        const fmt = ['srt', 'vtt', 'txt'].includes(p.format) ? p.format : 'srt';
+        return { exts: [fmt], typeId: fmt === 'txt' ? 'doc' : 'subtitle', isList: upstreamIsList };
+      }
       case 'videoCrop':
       case 'videoBlur':
       case 'aspectPad':
@@ -1721,6 +1729,7 @@
           };
         case 'convertVideo':
         case 'animSprite':
+        case 'subtitleConvert':
         case 'audioConvert':
         case 'audioTrim':
         case 'audioMerge':
@@ -1734,6 +1743,7 @@
         case 'pdfSearchable':
         case 'pdfCrop':
         case 'pdfRotate':
+        case 'pdfNup':
         case 'pdfWatermark':
           return featuresById.get(fid).collect(v, {
             file: { path: inputPath, info: { ...info, duration: dur } },

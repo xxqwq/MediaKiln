@@ -81,7 +81,7 @@ const builders = {
   // 1. 视频 → GIF（palettegen 两遍编码，画质最佳）
   videoToGif(p) {
     const output = defaultOutput(p.input, 'gif', 'gif');
-    const fps = Math.min(Math.max(num(p.fps, 15), 5), 30);
+    const fps = Math.min(Math.max(num(p.fps, 15), 5), 50);
     const width = Math.min(Math.max(num(p.width, 480), 64), 1920);
     const colors = Math.min(Math.max(num(p.colors, 128), 16), 256);
     const start = Math.max(num(p.start, 0), 0);
@@ -117,7 +117,7 @@ const builders = {
   // 视频 → WebP 动图（比 GIF 小 30~50%）
   toWebp(p) {
     const output = defaultOutput(p.input, 'webp', 'webp');
-    const fps = Math.min(Math.max(num(p.fps, 15), 5), 30);
+    const fps = Math.min(Math.max(num(p.fps, 15), 5), 60);
     const width = Math.min(Math.max(num(p.width, 480), 64), 1920);
     const quality = Math.min(Math.max(num(p.quality, 75), 30), 100);
     const start = Math.max(num(p.start, 0), 0);
@@ -189,12 +189,12 @@ const builders = {
 
     let fps;
     if (p.fps === 'p50') {
-      fps = Math.max(1, Math.round(((srcFps > 0 ? srcFps : 12) * 0.5) * 10) / 10);
+      fps = Math.min(50, Math.max(1, Math.round(((srcFps > 0 ? srcFps : 12) * 0.5) * 10) / 10));
     } else if (p.fps === 'custom') {
-      fps = Math.min(Math.max(num(p.customFps, 10), 1), 30);
+      fps = Math.min(Math.max(num(p.customFps, 10), 1), 50);
     } else {
-      fps = Math.min(Math.max(num(p.fps, 12), 1), 30);
-      if (srcFps > 0) fps = Math.min(fps, srcFps);
+      fps = Math.min(Math.max(num(p.fps, 12), 1), 50);
+      if (srcFps > 0) fps = Math.min(fps, Math.min(srcFps, 50));
     }
 
     let width;
@@ -297,7 +297,7 @@ const builders = {
     }
 
     if (fps > 0) {
-      vfParts.push(`fps=${Math.min(Math.max(fps, 1), 30)}`);
+      vfParts.push(`fps=${Math.min(Math.max(fps, 1), 50)}`);
     }
 
     return gifPlan({
@@ -658,14 +658,53 @@ const builders = {
     };
   },
 
-  // 局部打码 / 模糊（支持视频 / GIF / 静态图片）
+  // 局部打码 / 模糊 / 去台标（支持视频 / GIF / 静态图片）
   videoBlur(p) {
     const { w, h, x, y } = p.crop || {};
-    if (!w || !h || w < 16 || h < 16) throw new Error('请先在画面上拖出要打码的区域');
+    if (!w || !h || w < 16 || h < 16) throw new Error('请先在画面上拖出要处理的区域');
     const isImg = isImagePath(p.input);
     const align = isImg ? (n) => Math.max(2, Math.round(n)) : even;
     const srcW = Math.max(num(p.srcW, w), 16);
     const srcH = Math.max(num(p.srcH, h), 16);
+
+    if (p.mode === 'delogo') {
+      const x1 = Math.min(srcW - 1, Math.max(3, Math.round(x + w)));
+      const y1 = Math.min(srcH - 1, Math.max(3, Math.round(y + h)));
+      const dx = Math.max(1, Math.min(Math.round(x), x1 - 2));
+      const dy = Math.max(1, Math.min(Math.round(y), y1 - 2));
+      const dw = x1 - dx;
+      const dh = y1 - dy;
+      const delogo = `delogo=x=${dx}:y=${dy}:w=${dw}:h=${dh}`;
+      if (isImg) {
+        const imgFmt = imageExt(p.input);
+        const output = defaultOutput(p.input, 'delogo', imgFmt);
+        const vf = (imgFmt === 'png' || imgFmt === 'webp' || imgFmt === 'avif') ? `format=rgba,${delogo}` : delogo;
+        return {
+          output,
+          steps: [{
+            args: ['-i', p.input, '-vf', vf, ...imageCodecArgs(imgFmt, { quality: 'high' }), output],
+            totalDuration: 0,
+          }],
+        };
+      }
+      const ext = path.extname(p.input).slice(1).toLowerCase();
+      const total = num(p.totalDuration, 0);
+      if (ext === 'gif') {
+        return gifPlan({
+          input: p.input, output: defaultOutput(p.input, 'delogo', 'gif'),
+          colors: 256, totalDuration: total, vf: `format=rgba,${delogo}`,
+        });
+      }
+      const output = defaultOutput(p.input, 'delogo', videoExt(p.input));
+      return {
+        output,
+        steps: [{
+          args: ['-i', p.input, '-vf', delogo, ...videoCodecArgs(p), '-c:a', 'copy', output],
+          totalDuration: total,
+        }],
+      };
+    }
+
     const cw = align(Math.min(Math.max(16, w), srcW));
     const ch = align(Math.min(Math.max(16, h), srcH));
     const cx = Math.max(0, Math.min(isImg ? Math.round(x) : even(x), srcW - cw));
@@ -1538,8 +1577,8 @@ const builders = {
   imagesTo(p) {
     const files = p.files || [];
     if (files.length < 2) throw new Error('请至少选择 2 张图片');
-    const fps = Math.min(Math.max(num(p.fps, 8), 1), 30);
     const format = p.format === 'mp4' ? 'mp4' : 'gif';
+    const fps = Math.min(Math.max(num(p.fps, 8), 1), format === 'mp4' ? 60 : 50);
 
     const W = even(Math.max(...files.map((f) => num(p.sizes?.[f]?.w, 0) || 0), 2));
     const H = even(Math.max(...files.map((f) => num(p.sizes?.[f]?.h, 0) || 0), 2));
@@ -1822,7 +1861,7 @@ const builders = {
     const color = '0x' + rawColor.replace(/^#|^0x/i, '').slice(0, 6).padStart(6, '0');
     const sim = Math.min(Math.max(num(p.similarity, 0.2), 0.01), 0.6).toFixed(2);
     const blend = Math.min(Math.max(num(p.blend, 0.08), 0), 0.4).toFixed(2);
-    const fps = Math.min(Math.max(num(p.fps, 12), 4), 25);
+    const fps = Math.min(Math.max(num(p.fps, 12), 4), 50);
     const width = even(Math.min(Math.max(num(p.width, 480), 64), 1080));
     const vf = `fps=${fps},${scaleFilter(width)},format=rgba,colorkey=${color}:${sim}:${blend}`;
 
@@ -1913,7 +1952,7 @@ const builders = {
     const D = num(p.totalDuration, 0);
 
     if (mode === 'toApng') {
-      const fps = Math.min(Math.max(num(p.fps, 15), 1), 30);
+      const fps = Math.min(Math.max(num(p.fps, 15), 1), 60);
       const w = num(p.width, 480);
       const output = defaultOutput(p.input, '动图', 'apng');
       const vfParts = [`fps=${fps}`];
@@ -1937,7 +1976,7 @@ const builders = {
       const colors = Math.min(Math.max(Math.round(num(p.colors, 256)), 16), 256);
       const output = defaultOutput(p.input, '动图', 'gif');
       const vfParts = [];
-      if (fps > 0) vfParts.push(`fps=${Math.min(Math.max(fps, 1), 30)}`);
+      if (fps > 0) vfParts.push(`fps=${Math.min(Math.max(fps, 1), 50)}`);
       if (w > 0) vfParts.push(scaleFilter(even(w)));
       vfParts.push('format=rgba');
       return gifPlan({
@@ -1953,7 +1992,7 @@ const builders = {
     }
 
     if (mode === 'toSprite') {
-      const fps = Math.min(Math.max(num(p.fps, 10), 1), 30);
+      const fps = Math.min(Math.max(num(p.fps, 10), 1), 60);
       const maxFrames = Math.min(Math.max(Math.round(num(p.maxFrames, 36)), 2), 120);
       const cellW = num(p.cellWidth, 160);
       const colsReq = Math.round(num(p.cols, 5));
@@ -2011,8 +2050,8 @@ const builders = {
     const frameCount = reqFrames > 0 ? Math.min(reqFrames, totalCells) : totalCells;
     if (frameCount < 2) throw new Error('雪碧图至少需要 2 帧才能合成动图');
     if (frameCount > 400) throw new Error('请输入不超过 400 的有效总帧数');
-    const fps = Math.min(Math.max(num(p.fps, 10), 1), 30);
     const outFormat = p.outFormat === 'apng' ? 'apng' : 'gif';
+    const fps = Math.min(Math.max(num(p.fps, 10), 1), outFormat === 'apng' ? 60 : 50);
     const output = defaultOutput(p.input, '动图', outFormat);
 
     return {
@@ -2136,6 +2175,41 @@ const builders = {
         args: ['-i', p.input, '-vf', vf, ...videoCodecArgs(p), '-c:a', 'copy', output],
         totalDuration: num(p.totalDuration, 0),
       }],
+    };
+  },
+
+  subtitleConvert(p) {
+    const ext = path.extname(String(p.input || '')).slice(1).toLowerCase();
+    if (!['srt', 'vtt', 'ass', 'ssa'].includes(ext)) {
+      throw new Error('请选择字幕文件 (.srt / .vtt / .ass / .ssa)');
+    }
+    const format = ['srt', 'vtt', 'txt'].includes(p.format) ? p.format : 'srt';
+    const shiftSec = p.shiftSec === undefined || p.shiftSec === '' ? 0 : Number(p.shiftSec);
+    if (!Number.isFinite(shiftSec) || shiftSec < -86400 || shiftSec > 86400) {
+      throw new Error('时间轴偏移必须在 -86400 到 86400 秒之间');
+    }
+    const suffix = format === 'txt' ? '台词' : (shiftSec !== 0 ? '同步' : '转换');
+    const output = p.output || defaultOutput(p.input, suffix, format);
+
+    return {
+      output,
+      outputType: 'file',
+      async run(taskId, onProgress) {
+        const { convertSubtitleFile } = require('../core/subtitle');
+        const res = await convertSubtitleFile(p.input, output, {
+          format,
+          shiftSec,
+          stripTags: p.stripTags,
+          txtTimestamps: p.txtTimestamps,
+          taskId,
+          onProgress,
+        });
+        return {
+          output,
+          outputType: 'file',
+          subtitleConvertSummary: res,
+        };
+      },
     };
   },
 

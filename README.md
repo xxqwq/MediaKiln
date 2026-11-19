@@ -21,29 +21,29 @@ MediaKiln 是一款 Windows 本地离线多媒体与文档处理桌面应用，�
 
 - **🛠️ 单工具模式 & 🕸️ 节点画布模式**：顶部/侧栏一键切换「单工具」快速处理与「节点画布」可视化工作流编排，支持参数面板一键「🕸️ 带参数入画布」、命名参数预设保存以及全局 `Ctrl+V` 粘贴剪贴板截图/文件。
 - **🕸️ 节点画布工作流**：
-  - 提供 **80 个节点**（9 个输入、输出与分流节点，加上 71 个功能节点）和 **7 套模板**。
+  - 提供 **82 个节点**（9 个输入、输出与分流节点，加上 73 个功能节点）和 **7 套模板**。
   - 支持连接类型校验、**多分支 DAG 并行调度与并发 List-Map**、**文件夹递归扫描**、**按格式/条件多路分流**（含 PDF 专属路由、空分支自动跳过、多分支汇总导出）、**画布分组注释便签**、节点 Bypass 旁路跳过、**增量智能缓存**（自动容量与过期清理、支持自定义缓存目录）以及工作流 JSON 导入导出。
-- **📦 批量队列处理**：**61 个功能**支持一次选择或拖入多个文件批量处理（图片/SVG 队列自动 3 路并发加速，支持随时 `+ 添加文件`、移除队列项、独立定位输出文件与中途取消）。
+- **📦 批量队列处理**：**63 个功能**支持一次选择或拖入多个文件批量处理（图片/SVG 队列自动 3 路并发加速，支持随时 `+ 添加文件`、移除队列项、独立定位输出文件与中途取消）。
 - **🔍 放大预览与对比**：处理完成后点击预览图或「⛶ 放大对比」，支持**并排同步缩放/平移**与**卷帘对比**（支持视频、GIF、位图与 SVG 矢量 vs 位图）。
 - **⚡ 轻量级业务热更新**要求 Ed25519 发布签名，并用 SHA-256 校验下载与本地缓存。启动异常时回滚。客户端壳升级需要下载完整程序。
 - **⚙️ 全局输出与硬件加速**：支持设置输出位置（源文件同目录 / `output` 子目录 / 自定义文件夹）、防覆盖自动编号，以及视频硬件编码加速（支持 **H.264 / H.265(HEVC) / AV1**，自动检测 NVIDIA NVENC / Intel QSV / AMD AMF 与 CPU 回退）。
 
 ---
 
-## 功能清单（71 个，8 大类）
+## 功能清单（73 个，8 大类）
 
 ### 转换
 | 功能 | 说明 |
 |---|---|
-| 🎞️ 视频转 GIF | 选时间段、帧率、宽度、颜色数；调色板两遍编码，画质好 |
+| 🎞️ 视频转 GIF | 选时间段、帧率（最高 50 fps）、宽度、颜色数；调色板两遍编码，画质好 |
 | 🎬 GIF 转视频 | 转 MP4（`yuv420p`，手机可播）或 WebM |
-| 🖼️ WebP 动图 | 视频/GIF 转动画 WebP，比 GIF 小 30~50% |
+| 🖼️ WebP 动图 | 视频/GIF 转动画 WebP，比 GIF 小 30~50%，最高支持 60 fps |
 | 📦 格式转换 | MP4 / MKV / MOV / WebM 互转，支持无损秒级换容器及 H.264 / H.265(HEVC) / AV1 编码 |
 
 ### GIF 编辑
 | 功能 | 说明 |
 |---|---|
-| 🗜️ GIF 压缩 | 4 套一键预设（轻压/均衡/极限瘦身/微信表情包）、固定/百分比/自定义宽度与帧率、6 种抖动、降噪、去重复帧（mpdecimate）、调色板模式、帧间差分、倍速与循环次数 |
+| 🗜️ GIF 压缩 | 4 套一键预设（轻压/均衡/极限瘦身/微信表情包）、固定/百分比/自定义宽度与帧率（最高 50 fps）、6 种抖动、降噪、去重复帧（mpdecimate）、调色板模式、帧间差分、倍速与循环次数 |
 | ✂️ GIF 截取 | 按时间段（带定格帧预览条）或帧序号精确截取 GIF 片段，自动保留透明背景与原画质 |
 | 💬 GIF 加文字 | 打字幕、配梗文字（微软雅黑，支持任意中文与特殊字符） |
 | 🎯 压缩到目标大小 | 视频（支持 H.264 / H.265 码率法一遍到位）或 GIF（最多 7 轮迭代），支持 1/2/5/10(Discord)/25(微信)/50MB 预设及自定义 0.2~500MB |
@@ -87,6 +87,7 @@ MediaKiln 是一款 Windows 本地离线多媒体与文档处理桌面应用，�
 | 🔍 扫描件转可搜索 PDF | 离线 OCR 为扫描页添加可搜索和复制的文字层，并保留页面画面 |
 | ✂️ PDF 批量裁白边 | 预览自动检测的裁剪框，按指定边距批量裁去页边空白，保留文字和矢量内容 |
 | 🔁 PDF 页面旋转 | 无损旋转 PDF 全部或指定页码范围（顺时针 90° / 逆时针 90° / 180°） |
+| 🗂️ PDF 多页拼版 | 按 2 合 1 / 4 合 1 / 6 合 1 / 9 合 1 矢量拼版到 A4 纸张（智能匹配横竖向与边距框线） |
 | 🏷️ PDF 水印与页码 | 为 PDF 批量叠加全屏斜向平铺/居中/角落中文水印，或添加页脚/页眉页码（支持跳过封面） |
 | 📄 多图合并为 PDF | 将多张图片离线合成为单份 PDF 1.4 文档，支持 A4 竖向 / A4 横向 / 按每张图片原尺寸自适应与三档画质 |
 | 🖼️ PDF 转图片 / 长图 | 基于系统原生渲染离线将 PDF 导出为逐页高清图片（PNG/JPG/WebP），或拼接为单张纵向长图（支持指定页码范围与倍率） |
@@ -102,7 +103,7 @@ MediaKiln 是一款 Windows 本地离线多媒体与文档处理桌面应用，�
 | 🔗 视频合并 | 支持无损极速拼接（同规格）、兼容拼接（自动统一分辨率）与转场拼接（交叉叠化/黑场白场过渡/推拉/擦除等 `xfade` 声画转场） |
 | 🔲 画面裁剪 | 预览图上拖框选区，所见即所得（视频 / GIF / 图片通用） |
 | 🧲 自动去黑边 | 多点采样自动检测视频/GIF 上下左右黑边并一键裁除（支持批量） |
-| 🫥 局部打码 / 模糊 | 预览图拖框遮挡水印、人脸或隐私，支持高斯模糊与像素马赛克（视频 / GIF / 图片通用） |
+| 🫥 局部打码 / 去台标 | 预览图拖框遮挡水印、人脸或隐私，支持高斯模糊、像素马赛克与去固定台标（视频 / GIF / 图片通用） |
 | 📐 横竖屏比例适配 | 一键转 `9:16` / `16:9` / `1:1` / `4:3` / `3:4`，支持高斯模糊背景填充或纯色底（视频 / GIF / 图片通用） |
 | 🪟 分屏对比 / 画中画 | 两个视频/GIF 左右/上下并排对比，或叠加角落画中画小窗，音源可选 |
 | 🎨 调色微调与防抖 | 亮度、对比度、饱和度、锐化（unsharp）与轻量画面防抖（deshake），调色功能视频/GIF/图片通用 |
@@ -130,6 +131,7 @@ MediaKiln 是一款 Windows 本地离线多媒体与文档处理桌面应用，�
 | 🏷️ 添加水印 | 支持单点或全屏平铺文字和图片水印，可调角度、密度和透明度 |
 | 📷 设置视频封面 | 从画面取帧或选择图片，嵌入视频封面，保留原音视频流 |
 | 💬 硬字幕压制 / 提取 | 导入 `.srt`/`.ass`/`.vtt` 烧录进画面，或提取视频内嵌字幕为 `.srt` |
+| 🔄 字幕转换与同步 | SRT / VTT / ASS 互转与导出纯文本台词，支持时间轴整体偏移校正、清理标签与 GBK 自动转 UTF-8 |
 | 📸 视频截图 / 拆帧 | 单帧截图（PNG/JPG，支持取当前播放时间）、按间隔导出，或逐帧无损拆解全部原始帧 |
 | 🗂️ 九宫格预览墙 | 均匀抽帧拼成 `2×2` / `3×3` / `4×4` / `5×4` 缩略图概览墙（可选时间戳角标） |
 | 🛡️ 清除隐私元数据 | 无损剥离视频/音频/图片中的设备型号、GPS 定位等 EXIF/Metadata |
@@ -143,10 +145,13 @@ MediaKiln 是一款 Windows 本地离线多媒体与文档处理桌面应用，�
 npm install                              # 安装依赖并自动从 bin/*.exe.br 解压 FFmpeg
 npm start                                # 启动 Electron 应用
 node scripts/smoke-test.js               # 冒烟测试（自动生成素材，覆盖主要媒体与文档功能）
-node scripts/workflow-test.js            # 工作流引擎与真实媒体/PDF 流水线端到端测试（14 项）
+node scripts/workflow-test.js            # 工作流引擎与真实媒体/PDF 流水线端到端测试（15 项）
 node scripts/hotfix-test.js              # 热更新打包、SHA-256 + Ed25519 签名校验与崩溃回滚测试（8 项）
 node scripts/architecture-safety-test.js # 缓存隔离、路径安全与并发执行器校验
 node scripts/pdf-crop-test.js            # PDF 裁白边（旋转页/已有裁剪框/空白页/取消）测试
+node scripts/pdf-nup-test.js             # PDF 多页拼版（旋转页/智能横竖向/边界/取消）测试
+node scripts/subtitle-test.js            # 字幕互转、时间轴偏移、编码识别与取消测试
+node scripts/media-practical-test.js     # GIF/WebP/APNG 高帧率与去台标（delogo）实测
 node scripts/pdf-target-size-test.js     # PDF 目标大小压缩测试
 node scripts/pdf-searchable-test.js      # PDF 扫描件离线 OCR 可搜索文字层测试
 node scripts/image-ocr-test.js           # 图片中英文识别、批量导出、空白图和取消测试
@@ -175,7 +180,9 @@ core/
   ├── pdf-engine.js     零依赖离线 PDF 引擎（WinRT 高清渲染 + 纯 Node XRef/ObjStm 无损合并与拆分）
   ├── pdf-office.js     离线 Word ↔ PDF 互转（DOCX/PDF 解析 + WinRT OCR）与 PDF 压缩/旋转/水印页码引擎
   ├── pdf-crop.js       PDF 留白检测、裁剪框预览与批量裁白边引擎
+  ├── pdf-nup.js        PDF 矢量多页拼版（2/4/6/9 合 1）与智能横竖版匹配引擎
   ├── pdf-searchable.js PDF 扫描件离线 OCR 可搜索文字层合成引擎
+  ├── subtitle.js       字幕解析（SRT/VTT/ASS/SSA）、GBK/UTF-16 自动转码与时间轴同步引擎
   ├── image-ocr.js      图片和 PDF 共用的 Windows 离线文字识别
   ├── svg-worker.js     SVG 渲染 / 压缩 / 位图矢量化 Worker 子线程（不阻塞主进程且支持立即取消）
   ├── doc-parser.js     DOCX / PPTX / MD 媒体解析、冗余关系扫描与提取
@@ -186,11 +193,11 @@ modules/                功能实现：video.js、image.js、svg.js、document.j
 preload.js              contextBridge 安全桥接（含安全 toFileUrl 编码与 webUtils.getPathForFile 拖拽路径获取）
 renderer/
   ├── app.js            单工具主界面、并发批量队列、全局 Ctrl+V 粘贴与工作流桥接
-  ├── features/         71 个功能注册表（video-gif.js、image.js、svg.js、document.js）
+  ├── features/         73 个功能注册表（video-gif.js、image.js、svg.js、document.js）
   ├── ui/               参数面板（含命名预设与带参数入画布）、裁剪画布、放大对比弹窗、PDF 工具面板、热更新弹窗
-  └── workflow/         节点画布、并行 DAG 执行引擎、80 个节点与 7 套模板
+  └── workflow/         节点画布、并行 DAG 执行引擎、82 个节点与 7 套模板
 bin/                    内置 FFmpeg 9.0.2（gyan.dev）：仓库内置 .br 压缩包（每件 ~28MB）与 binaries.json；安装/启动自动解压，打包时经 extraResources 释放
-scripts/                ensure-ffmpeg.js、build-hotfix.js、hotfix-test.js、architecture-safety-test.js、pdf-crop-test.js、pdf-target-size-test.js、pdf-searchable-test.js、image-ocr-test.js、smoke-test.js、workflow-test.js、workflow-ui-check.js、webp-check.js、release.ps1
+scripts/                ensure-ffmpeg.js、build-hotfix.js、hotfix-test.js、architecture-safety-test.js、pdf-crop-test.js、pdf-nup-test.js、subtitle-test.js、media-practical-test.js、pdf-target-size-test.js、pdf-searchable-test.js、image-ocr-test.js、smoke-test.js、workflow-test.js、workflow-ui-check.js、webp-check.js、release.ps1
 website/                产品官网（Astro 静态站点，构建时自动读取功能/节点/模板注册表；见 website/README.md）
 ```
 
