@@ -5,6 +5,7 @@ const videoBuilders = require('./modules/video');
 const imageBuilders = require('./modules/image');
 const svgBuilders = require('./modules/svg');
 const documentBuilders = require('./modules/document');
+const { fingerprintReplacements } = require('./core/doc-replacements');
 
 const builders = {
   ...videoBuilders,
@@ -23,5 +24,6 @@ module.exports = {
   hasRunningTasks: runner.hasRunningTasks,
   detectHwEncoders: runner.detectHwEncoders,
   ensureBinaries: runner.ensureBinaries,
+  fingerprintReplacements,
   FFMPEG: runner.FFMPEG,
 };

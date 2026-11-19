@@ -45,6 +45,13 @@ const FILE_FILTERS = {
   docStyleImages: { exts: ['docx', 'pptx'] },
   mdOrganizeImages: { exts: ['md', 'markdown'] },
   docToPdf: { exts: ['md', 'markdown', ...HTML_EXT] },
+  wordToPdf: { exts: ['docx', 'doc'] },
+  pdfToWord: { exts: PDF_EXT },
+  pdfCompress: { exts: PDF_EXT },
+  pdfSearchable: { exts: PDF_EXT },
+  pdfCrop: { exts: PDF_EXT },
+  pdfRotate: { exts: PDF_EXT },
+  pdfWatermark: { exts: PDF_EXT },
   imagesToPdf: { exts: IMG_EXT, multi: true },
   pdfToImages: { exts: PDF_EXT },
   pdfMerge: { exts: PDF_EXT, multi: true },
@@ -86,8 +93,8 @@ const FILE_FILTERS = {
   replaceImageFiles: { exts: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'avif', 'gif', 'tif', 'tiff'], multi: true },
   videoGifFile: { exts: ALL_MEDIA_EXT },
   subFile: { exts: ['srt', 'ass', 'ssa', 'vtt'] },
-  anyMedia: { exts: [...VIDEO_EXT, 'gif', 'apng', ...IMG_EXT, ...SVG_EXT, ...AUDIO_EXT, 'srt', 'ass', 'ssa', 'vtt', ...DOC_EXT, ...HTML_EXT, ...PDF_EXT], multi: true },
-  anyMediaSingle: { exts: [...VIDEO_EXT, 'gif', 'apng', ...IMG_EXT, ...SVG_EXT, ...AUDIO_EXT, 'srt', 'ass', 'ssa', 'vtt', ...DOC_EXT, ...HTML_EXT, ...PDF_EXT] },
+  anyMedia: { exts: [...VIDEO_EXT, 'gif', 'apng', ...IMG_EXT, ...SVG_EXT, ...AUDIO_EXT, 'srt', 'ass', 'ssa', 'vtt', ...DOC_EXT, 'doc', ...HTML_EXT, ...PDF_EXT], multi: true },
+  anyMediaSingle: { exts: [...VIDEO_EXT, 'gif', 'apng', ...IMG_EXT, ...SVG_EXT, ...AUDIO_EXT, 'srt', 'ass', 'ssa', 'vtt', ...DOC_EXT, 'doc', ...HTML_EXT, ...PDF_EXT] },
 };
 
 const SINGLE_ONLY = new Set([

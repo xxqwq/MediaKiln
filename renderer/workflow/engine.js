@@ -526,6 +526,14 @@
             }
           }
 
+          if (node.type === 'feat.docRepackImages' && !node.bypass) {
+            const linked = collectEdgesPayload(inEdgesByPort.get('replaceSource') || []);
+            const source = registry.resolveReplacementSource(node.params?.__local_replaceSource, linked);
+            if (source.replaceDir || source.replaceFiles.length) {
+              localStatsSig.replacements = await runtime.fingerprintReplacements(source);
+            }
+          }
+
           const sig = hashString(stableStringify({
             type: node.type,
             bypass: !!node.bypass,

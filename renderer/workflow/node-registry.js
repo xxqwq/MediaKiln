@@ -15,7 +15,7 @@
   const AUDIO_EXTS = ['mp3', 'm4a', 'wav', 'flac', 'aac', 'ogg', 'opus'];
   const SUB_EXTS = ['srt', 'ass', 'ssa', 'vtt'];
   const HTML_EXTS = ['html', 'htm'];
-  const DOC_EXTS = ['docx', 'pptx', 'md', 'markdown', ...HTML_EXTS];
+  const DOC_EXTS = ['docx', 'doc', 'pptx', 'md', 'markdown', ...HTML_EXTS];
   const OOXML_EXTS = ['docx', 'pptx'];
   const PDF_EXTS = ['pdf'];
   const ALL_SUPPORTED_EXTS = Array.from(new Set([
@@ -230,10 +230,18 @@
       case 'mdOrganizeImages':
         return { exts: ['md', 'markdown'], isList: false };
       case 'docToPdf':
+      case 'wordToPdf':
+      case 'pdfCompress':
+      case 'pdfSearchable':
+      case 'pdfCrop':
+      case 'pdfRotate':
+      case 'pdfWatermark':
       case 'imagesToPdf':
       case 'pdfMerge':
       case 'pdfSplit':
         return { exts: ['pdf'], isList: false };
+      case 'pdfToWord':
+        return { exts: ['docx'], isList: false };
       case 'pdfToImages':
         return { exts: ['png', 'jpg', 'webp'], isList: true };
       case 'docExtractImages':
@@ -458,7 +466,15 @@
       case 'mdOrganizeImages':
         return passthroughFromUpstream(['md', 'markdown']);
       case 'docToPdf':
+      case 'wordToPdf':
+      case 'pdfCompress':
+      case 'pdfSearchable':
+      case 'pdfCrop':
+      case 'pdfRotate':
+      case 'pdfWatermark':
         return { exts: ['pdf'], typeId: 'pdf', isList: upstreamIsList };
+      case 'pdfToWord':
+        return { exts: ['docx'], typeId: 'doc', isList: upstreamIsList };
       case 'imagesToPdf':
       case 'pdfMerge':
         return { exts: ['pdf'], typeId: 'pdf', isList: false };
@@ -579,6 +595,9 @@
       if (defaults.pageRange === undefined) defaults.pageRange = '1';
       if (defaults.everyN === undefined) defaults.everyN = '1';
     }
+    if (feature.id === 'pdfWatermark' && !defaults.wmText) {
+      defaults.wmText = '内部资料 · 严禁外传';
+    }
     return defaults;
   }
 
@@ -586,7 +605,9 @@
   function adaptFeatureFields(feature) {
     const fields = [];
     for (const f of feature.fields || []) {
-      if (f.type === 'secondFile') {
+      if (f.type === 'pdfCropPreview') {
+        continue;
+      } else if (f.type === 'secondFile') {
         fields.push({
           ...f,
           label: `${f.label}（未连线时本地回退）`,
@@ -944,8 +965,8 @@
         noBatch: !!f.noBatch,
         group: f.group,
         icon: f.icon,
-        name: f.name,
-        desc: f.desc,
+        name: f.id === 'pdfMerge' ? 'PDF 合并' : f.name,
+        desc: f.id === 'pdfMerge' ? '按输入顺序将多份 PDF 合并为一份' : f.desc,
         accept: f.accept.slice(),
         inputs: buildFeatureInputs(f),
         outputs: buildFeatureOutputs(f),
@@ -1070,6 +1091,16 @@
       return results;
     }
 
+    function resolveReplacementSource(localSrc, linked) {
+      if (linked?.paths?.length) {
+        return { replaceDir: linked.manifestDir || linked.sourceDir || '', replaceFiles: linked.paths };
+      }
+      if (localSrc && typeof localSrc === 'object') {
+        return { replaceDir: localSrc.dir || '', replaceFiles: Array.isArray(localSrc.files) ? localSrc.files : [] };
+      }
+      return { replaceDir: typeof localSrc === 'string' ? localSrc : '', replaceFiles: [] };
+    }
+
     // 纯函数构造传给 executeTask 的后端参数，彻底脱离全局 DOM
     function buildNodeTaskParams(node, primaryItem, secondaryPayloads = {}, multiItems = []) {
       const fid = node.type.startsWith('feat.') ? node.type.slice(5) : node.type;
@@ -1125,16 +1156,6 @@
             quality: v.quality || '75',
           };
         }
-        case 'convertVideo':
-          return {
-            input: inputPath,
-            mode: v.mode || 'encode',
-            format: v.format || 'mp4',
-            height: v.height || '0',
-            quality: v.quality || 'medium',
-            vcodec: v.vcodec || 'h264',
-            totalDuration: dur,
-          };
         case 'compressGif': {
           const params = {
             input: inputPath,
@@ -1624,19 +1645,7 @@
             sectionKeyword: v.sectionKeyword || '',
           };
         case 'docRepackImages': {
-          const linked = secondaryPayloads.replaceSource;
-          const localSrc = v.__local_replaceSource;
-          let replaceDir = '';
-          let replaceFiles = [];
-          if (linked?.paths?.length) {
-            replaceDir = linked.manifestDir || linked.sourceDir || '';
-            replaceFiles = linked.paths;
-          } else if (localSrc && typeof localSrc === 'object') {
-            replaceDir = localSrc.dir || '';
-            replaceFiles = Array.isArray(localSrc.files) ? localSrc.files : [];
-          } else if (typeof localSrc === 'string' && localSrc) {
-            replaceDir = localSrc;
-          }
+          const { replaceDir, replaceFiles } = resolveReplacementSource(v.__local_replaceSource, secondaryPayloads.replaceSource);
           if (!replaceDir && !replaceFiles.length) {
             throw new Error('请连接「替换图片」端口或在节点内选择替换文件夹');
           }
@@ -1706,6 +1715,7 @@
             pageRange: v.pageRange ?? '1',
             everyN: v.everyN ?? '1',
           };
+        case 'convertVideo':
         case 'animSprite':
         case 'audioConvert':
         case 'audioTrim':
@@ -1713,6 +1723,13 @@
         case 'imageCanvas':
         case 'videoCover':
         case 'docToPdf':
+        case 'wordToPdf':
+        case 'pdfToWord':
+        case 'pdfCompress':
+        case 'pdfSearchable':
+        case 'pdfCrop':
+        case 'pdfRotate':
+        case 'pdfWatermark':
           return featuresById.get(fid).collect(v, {
             file: { path: inputPath, info: { ...info, duration: dur } },
             files: multiItems,
@@ -1747,6 +1764,7 @@
       canConnect,
       findCompatibleNodesForOutput,
       buildNodeTaskParams,
+      resolveReplacementSource,
     };
   }
 

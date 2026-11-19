@@ -298,6 +298,9 @@ function createParamsController(appCtx) {
           <div class="crop-wrap"><canvas id="crop-canvas"></canvas></div>
           <div class="chip-row"><button class="chip" id="crop-reset">重置选区</button></div>
           <div class="muted crop-status" id="crop-status">尚未选择区域</div>`;
+      } else if (field.type === 'pdfCropPreview') {
+        wrap.classList.add('pdf-crop-field');
+        wrap.hidden = !file;
       } else if (field.type === 'docSections') {
         const sections = file?.info?.sections || [];
         const actionWord = field.actionWord || '提取';
@@ -343,6 +346,8 @@ function createParamsController(appCtx) {
       grid.appendChild(wrap);
     }
     box.appendChild(grid);
+    const pdfCropPreview = grid.querySelector('.pdf-crop-field');
+    if (pdfCropPreview) window.VGT.pdfTools.mountCropPreview(pdfCropPreview, file);
     if (!currentFeature.fields.length) box.classList.add('hidden');
     else box.classList.remove('hidden');
 

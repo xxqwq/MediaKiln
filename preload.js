@@ -40,6 +40,7 @@ contextBridge.exposeInMainWorld('api', {
   wfPruneCache: (opts) => ipcRenderer.invoke('wf:prune-cache', opts),
   wfAllocNodeDir: (opts) => ipcRenderer.invoke('wf:alloc-node-dir', opts),
   wfStatMulti: (filePaths) => ipcRenderer.invoke('wf:stat-multi', filePaths),
+  wfFingerprintReplacements: (source) => ipcRenderer.invoke('wf:fingerprint-replacements', source),
   wfScanDir: (opts) => ipcRenderer.invoke('wf:scan-dir', opts),
   wfExportFiles: (opts) => ipcRenderer.invoke('wf:export-files', opts),
   wfExportJson: (opts) => ipcRenderer.invoke('wf:export-json', opts),

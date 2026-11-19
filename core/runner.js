@@ -4,11 +4,8 @@ const { spawn } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-let AsyncLocalStorageCls = null;
-try {
-  ({ AsyncLocalStorage: AsyncLocalStorageCls } = require('async_hooks'));
-} catch {}
-const { isImagePath, isSvgPath, isDocPath, isHtmlPath, parseSvgDims, mapConcurrent } = require('./utils');
+const { AsyncLocalStorage } = require('async_hooks');
+const { isImagePath, isSvgPath, isDocPath, isHtmlPath, parseSvgDims, mapConcurrent, writeBufferAtomically } = require('./utils');
 const { inspectDocument } = require('./doc-parser');
 const { resolveBinDir, ensureBinaries: ensureFfmpegBinaries } = require('./ffmpeg-bin');
 
@@ -39,6 +36,30 @@ function assertBinaries() {
 
 function probeDoc(filePath) {
   const size = fs.statSync(filePath).size;
+  const ext = path.extname(String(filePath || '')).slice(1).toLowerCase();
+  if (ext === 'doc') {
+    if (!size) {
+      throw new Error('无效的 Word (.doc) 文档（文件为空）');
+    }
+    return {
+      duration: 0,
+      size,
+      width: 0,
+      height: 0,
+      fps: 0,
+      isImage: false,
+      isSvg: false,
+      isDoc: true,
+      docType: 'doc',
+      imageCount: 0,
+      videoCount: 0,
+      docStats: { total: 0, imageCount: 0, videoCount: 0 },
+      sections: [],
+      hasAudio: false,
+      hasSubtitles: false,
+      subCount: 0,
+    };
+  }
   const parsed = inspectDocument(filePath);
   return {
     duration: 0,
@@ -126,8 +147,9 @@ async function probePdf(filePath) {
     }
 
     let pageCount = 0;
+    let buf = null;
     if (size <= PDF_SMALL_LIMIT) {
-      const buf = await fs.promises.readFile(filePath);
+      buf = await fs.promises.readFile(filePath);
       const text = buf.toString('latin1');
       const pageMatches = text.match(/\/Type\s*\/Page\b(?!s)/g);
       pageCount = pageMatches ? pageMatches.length : 0;
@@ -181,6 +203,15 @@ async function probePdf(filePath) {
         }
         pageCount = countedPages || maxPages;
       }
+    }
+
+    if (!pageCount && size <= 64 * 1024 * 1024) {
+      try {
+        const { PDFDocument } = require('pdf-lib');
+        const rawBuf = buf || await fs.promises.readFile(filePath);
+        const doc = await PDFDocument.load(rawBuf, { updateMetadata: false, ignoreEncryption: true });
+        pageCount = doc.getPageCount();
+      } catch {}
     }
 
     return {
@@ -299,16 +330,52 @@ function probe(filePath) {
 // ffmpeg 执行器：进度解析 + 可取消
 // ---------------------------------------------------------------------------
 
-const runningTasks = new Map(); // taskId -> child process
+const activeTasks = new Map();
+const taskContext = new AsyncLocalStorage();
+const reservedOutputs = new Set();
 
-function runFfmpeg(taskId, argsList, { totalDuration = 0, from = 0, to = 1, onProgress } = {}) {
+function getActiveTask(taskId) {
+  return activeTasks.get(taskId) || taskContext.getStore()?.task;
+}
+
+function throwIfTaskCancelled(taskId) {
+  if (getActiveTask(taskId)?.cancelled) throw new Error('任务已取消');
+}
+
+function trackChild(taskId, child) {
+  let cancelled = false;
+  const release = registerCancelableTask(taskId, () => {
+    cancelled = true;
+    if (!child.pid) return;
+    const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
+    killer.on('error', () => child.kill());
+  });
+  return { release, isCancelled: () => cancelled };
+}
+
+async function runFfmpeg(taskId, argsList, opts = {}) {
+  throwIfTaskCancelled(taskId);
+  const task = getActiveTask(taskId);
+  if (task?.outputType !== 'dir' && task?.output && argsList.at(-1) === task.output) {
+    const temp = temporaryOutput(task.output);
+    try {
+      await runFfmpegStep(taskId, [...argsList.slice(0, -1), temp], opts);
+      commitOutput(temp, task.output);
+    } finally {
+      await removeTemporaryOutput(temp);
+    }
+    return;
+  }
+  return runFfmpegStep(taskId, argsList, opts);
+}
+
+function runFfmpegStep(taskId, argsList, { totalDuration = 0, from = 0, to = 1, onProgress } = {}) {
   return new Promise((resolve, reject) => {
     const args = ['-hide_banner', '-nostats', '-progress', 'pipe:1', '-y', ...argsList];
     const child = spawn(FFMPEG, args, { windowsHide: true });
-    runningTasks.set(taskId, child);
+    const tracked = trackChild(taskId, child);
 
     let stderrTail = '';
-    let cancelled = false;
 
     child.stdout.on('data', (chunk) => {
       const text = chunk.toString();
@@ -324,16 +391,15 @@ function runFfmpeg(taskId, argsList, { totalDuration = 0, from = 0, to = 1, onPr
       stderrTail = (stderrTail + chunk.toString()).slice(-4000);
     });
 
-    runningTasks.get(taskId).__cancel = () => { cancelled = true; };
 
     child.on('error', (err) => {
-      runningTasks.delete(taskId);
+      tracked.release();
       reject(err);
     });
 
     child.on('close', (code) => {
-      runningTasks.delete(taskId);
-      if (cancelled) {
+      tracked.release();
+      if (tracked.isCancelled()) {
         reject(new Error('任务已取消'));
       } else if (code === 0) {
         resolve();
@@ -346,17 +412,16 @@ function runFfmpeg(taskId, argsList, { totalDuration = 0, from = 0, to = 1, onPr
 }
 
 function runFfmpegCapture(taskId, argsList) {
+  throwIfTaskCancelled(taskId);
   return new Promise((resolve, reject) => {
     const child = spawn(FFMPEG, ['-hide_banner', '-y', ...argsList], { windowsHide: true });
-    runningTasks.set(taskId, child);
+    const tracked = trackChild(taskId, child);
     let stderr = '';
-    let cancelled = false;
     child.stderr.on('data', (d) => { stderr = (stderr + d.toString()).slice(-16000); });
-    runningTasks.get(taskId).__cancel = () => { cancelled = true; };
-    child.on('error', (err) => { runningTasks.delete(taskId); reject(err); });
+    child.on('error', (err) => { tracked.release(); reject(err); });
     child.on('close', (code) => {
-      runningTasks.delete(taskId);
-      if (cancelled) return reject(new Error('任务已取消'));
+      tracked.release();
+      if (tracked.isCancelled()) return reject(new Error('任务已取消'));
       if (code === 0) return resolve(stderr);
       const lines = stderr.split('\n').filter((l) => l.trim()).slice(-3).join('\n');
       reject(new Error(`ffmpeg 失败（退出码 ${code}）：\n${lines || '未知错误'}`));
@@ -365,19 +430,18 @@ function runFfmpegCapture(taskId, argsList) {
 }
 
 function runFfmpegBinary(taskId, argsList) {
+  throwIfTaskCancelled(taskId);
   return new Promise((resolve, reject) => {
     const child = spawn(FFMPEG, ['-hide_banner', '-y', ...argsList], { windowsHide: true });
-    runningTasks.set(taskId, child);
+    const tracked = trackChild(taskId, child);
     const chunks = [];
     let stderr = '';
-    let cancelled = false;
     child.stdout.on('data', (d) => chunks.push(d));
     child.stderr.on('data', (d) => { stderr = (stderr + d.toString()).slice(-8000); });
-    runningTasks.get(taskId).__cancel = () => { cancelled = true; };
-    child.on('error', (err) => { runningTasks.delete(taskId); reject(err); });
+    child.on('error', (err) => { tracked.release(); reject(err); });
     child.on('close', (code) => {
-      runningTasks.delete(taskId);
-      if (cancelled) return reject(new Error('任务已取消'));
+      tracked.release();
+      if (tracked.isCancelled()) return reject(new Error('任务已取消'));
       if (code === 0) return resolve(Buffer.concat(chunks));
       const lines = stderr.split('\n').filter((l) => l.trim()).slice(-3).join('\n');
       reject(new Error(`ffmpeg 失败（退出码 ${code}）：\n${lines || '未知错误'}`));
@@ -386,52 +450,42 @@ function runFfmpegBinary(taskId, argsList) {
 }
 
 function registerCancelableTask(taskId, cancelFn) {
-  if (!taskId || typeof cancelFn !== 'function') return;
-  runningTasks.set(taskId, { isCustom: true, cancel: cancelFn });
-}
-
-function unregisterTask(taskId) {
-  const entry = runningTasks.get(taskId);
-  if (entry && entry.isCustom) {
-    runningTasks.delete(taskId);
+  let task = getActiveTask(taskId);
+  if (!task && !taskId) return () => {};
+  if (!task) {
+    task = { hooks: new Set(), cancelled: false, managed: false };
+    activeTasks.set(taskId, task);
   }
+  task.hooks.add(cancelFn);
+  if (task.cancelled) cancelFn();
+  return () => {
+    task.hooks.delete(cancelFn);
+    if (!task.managed && !task.hooks.size) activeTasks.delete(taskId);
+  };
 }
 
 function cancelTask(taskId) {
-  const entry = runningTasks.get(taskId);
-  if (!entry) return false;
-  if (entry.isCustom) {
-    runningTasks.delete(taskId);
-    try {
-      entry.cancel?.();
-    } catch {}
-    return true;
+  const task = activeTasks.get(taskId);
+  if (!task || task.committed) return false;
+  if (!task.cancelled) {
+    task.cancelled = true;
+    for (const cancel of task.hooks) {
+      try { cancel(); } catch {}
+    }
   }
-  entry.__cancel?.();
-  spawn('taskkill', ['/pid', String(entry.pid), '/T', '/F'], { windowsHide: true });
   return true;
 }
 
 function hasRunningTasks() {
-  return runningTasks.size > 0;
+  return activeTasks.size > 0;
 }
 
 function cancelAllTasks() {
-  for (const id of [...runningTasks.keys()]) {
-    cancelTask(id);
-  }
+  for (const id of activeTasks.keys()) cancelTask(id);
 }
 
-// ---------------------------------------------------------------------------
-// 输出路径上下文与防覆盖（AsyncLocalStorage 并发安全）
-// ---------------------------------------------------------------------------
-
-const outCtxStorage = AsyncLocalStorageCls ? new AsyncLocalStorageCls() : null;
-let _fallbackOutCtx = null;
-
 function getCurrentOutCtx(explicitCtx) {
-  if (explicitCtx !== undefined) return explicitCtx;
-  return outCtxStorage ? (outCtxStorage.getStore() || null) : _fallbackOutCtx;
+  return explicitCtx === undefined ? taskContext.getStore() : explicitCtx;
 }
 
 function resolveOutDir(inputPath, explicitCtx) {
@@ -450,14 +504,75 @@ function resolveOutDir(inputPath, explicitCtx) {
   return baseDir;
 }
 
+function outputPathKey(filePath) {
+  const absolute = path.resolve(filePath);
+  let parent = path.dirname(absolute);
+  try { parent = fs.realpathSync(parent); } catch {}
+  const normalized = path.join(parent, path.basename(absolute));
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
+function outputExists(filePath) {
+  try {
+    fs.lstatSync(filePath);
+    return true;
+  } catch (err) {
+    if (err.code === 'ENOENT') return false;
+    throw err;
+  }
+}
+
 function uniquePath(targetPath, explicitCtx) {
   const ctx = getCurrentOutCtx(explicitCtx);
-  if (!ctx?.noOverwrite || !fs.existsSync(targetPath)) return targetPath;
+  if (!ctx?.noOverwrite) return targetPath;
   const ext = path.extname(targetPath);
   const stem = targetPath.slice(0, targetPath.length - ext.length);
-  let i = 1;
-  while (fs.existsSync(`${stem}_${i}${ext}`)) i++;
-  return `${stem}_${i}${ext}`;
+  let candidate = targetPath;
+  let key = outputPathKey(candidate);
+  for (let i = 1; reservedOutputs.has(key) || outputExists(candidate); i++) {
+    candidate = stem + '_' + i + ext;
+    key = outputPathKey(candidate);
+  }
+  if (ctx.task) {
+    reservedOutputs.add(key);
+    ctx.task.reservations.add(key);
+  }
+  return candidate;
+}
+
+function markOutputCommitted(output) {
+  const task = getActiveTask();
+  if (task?.output === output) task.committed = true;
+}
+
+function commitOutput(staged, output) {
+  throwIfTaskCancelled();
+  if (!getCurrentOutCtx()?.noOverwrite) {
+    fs.renameSync(staged, output);
+  } else if (fs.lstatSync(staged).isDirectory()) {
+    if (outputExists(output)) throw new Error('输出目录已存在');
+    fs.renameSync(staged, output);
+  } else {
+    try {
+      fs.linkSync(staged, output);
+    } catch (err) {
+      if (!['EXDEV', 'ENOTSUP', 'EOPNOTSUPP', 'EPERM', 'ENOSYS'].includes(err.code)) throw err;
+      fs.copyFileSync(staged, output, fs.constants.COPYFILE_EXCL);
+    }
+    fs.unlinkSync(staged);
+  }
+  markOutputCommitted(output);
+}
+
+function writeTaskOutput(output, data) {
+  throwIfTaskCancelled();
+  writeBufferAtomically(output, data, commitOutput);
+}
+
+function copyTaskOutput(source, output) {
+  throwIfTaskCancelled();
+  fs.copyFileSync(source, output, getCurrentOutCtx()?.noOverwrite ? fs.constants.COPYFILE_EXCL : 0);
+  markOutputCommitted(output);
 }
 
 function defaultOutput(inputPath, suffix, ext) {
@@ -598,59 +713,76 @@ function swapOutputToTemp(plan) {
   try {
     if (fs.statSync(out).isDirectory()) return null;
   } catch {}
-  const ext = path.extname(out);
-  const tmp = `${out.slice(0, out.length - ext.length)}.tmp-${crypto.randomBytes(4).toString('hex')}${ext}`;
+  const tmp = temporaryOutput(out);
   step.args[i] = tmp;
   return tmp;
 }
 
+function temporaryOutput(output) {
+  const ext = path.extname(output);
+  return output.slice(0, output.length - ext.length) + '.tmp-' + crypto.randomUUID() + ext;
+}
+
+function removeTemporaryOutput(file) {
+  return fs.promises.rm(file, { force: true, maxRetries: 5, retryDelay: 200 }).catch(() => {});
+}
+
 function createExecutor(builders) {
   return async function executeTask(taskId, feature, params, onProgress) {
-    assertBinaries();
-    const builder = builders[feature];
-    if (!builder) throw new Error(`未知功能：${feature}`);
+    if (activeTasks.has(taskId)) throw new Error('任务已在运行');
+    const task = { hooks: new Set(), cancelled: false, managed: true, reservations: new Set() };
+    activeTasks.set(taskId, task);
 
-    if (params?.__hwAccel && params.__hwAccel !== 'cpu' && !_hwCache) {
-      await detectHwEncoders().catch(() => {});
+    try {
+      assertBinaries();
+      const builder = Object.hasOwn(builders, feature) && builders[feature];
+      if (!builder) throw new Error('未知功能：' + feature);
+      if (params?.__hwAccel && params.__hwAccel !== 'cpu' && !_hwCache) {
+        await detectHwEncoders().catch(() => {});
+      }
+      throwIfTaskCancelled(taskId);
+
+      const context = {
+        task,
+        mode: params?.__outputMode || 'same',
+        dir: params?.__outputDir || '',
+        noOverwrite: !!params?.__noOverwrite,
+      };
+      return await taskContext.run(context, async () => {
+        const inputParams = context.noOverwrite && params?.output
+          ? { ...params, output: uniquePath(params.output) }
+          : params;
+        const plan = builder(inputParams);
+        task.output = plan.output;
+        task.outputType = plan.outputType;
+
+        if (plan.run) {
+          const result = await plan.run(taskId, onProgress);
+          throwIfTaskCancelled(taskId);
+          return result || { output: plan.output };
+        }
+
+        const tmpOut = swapOutputToTemp(plan);
+        try {
+          for (const step of plan.steps) {
+            await runFfmpeg(taskId, step.args, { ...step, onProgress });
+          }
+          if (tmpOut) commitOutput(tmpOut, plan.output);
+          throwIfTaskCancelled(taskId);
+        } finally {
+          if (tmpOut) await removeTemporaryOutput(tmpOut);
+          for (const f of plan.cleanup || []) fs.unlink(f, () => {});
+          for (const d of plan.cleanupDirs || []) fs.rmSync(d, { recursive: true, force: true });
+        }
+        return { output: plan.output, outputType: plan.outputType };
+      });
+    } catch (err) {
+      throwIfTaskCancelled(taskId);
+      throw err;
+    } finally {
+      for (const key of task.reservations) reservedOutputs.delete(key);
+      activeTasks.delete(taskId);
     }
-
-    const outCtx = (params?.__outputMode || params?.__noOverwrite)
-      ? { mode: params.__outputMode || 'same', dir: params.__outputDir || '', noOverwrite: !!params.__noOverwrite }
-      : null;
-
-    const runWithOutCtx = (fn) => {
-      if (outCtxStorage) return outCtxStorage.run(outCtx, fn);
-      const prev = _fallbackOutCtx;
-      _fallbackOutCtx = outCtx;
-      return Promise.resolve().then(fn).finally(() => { _fallbackOutCtx = prev; });
-    };
-
-    return runWithOutCtx(async () => {
-      const plan = builder(params);
-
-      if (plan.run) {
-        const result = await plan.run(taskId, onProgress);
-        return result || { output: plan.output };
-      }
-
-      const tmpOut = swapOutputToTemp(plan);
-      try {
-        for (const step of plan.steps) {
-          await runFfmpeg(taskId, step.args, { ...step, onProgress });
-        }
-        if (tmpOut) fs.renameSync(tmpOut, plan.output);
-      } finally {
-        // 失败/取消时删除临时文件；taskkill 后句柄可能稍晚释放，重试几次且不抛错
-        if (tmpOut) await fs.promises.rm(tmpOut, { force: true, maxRetries: 5, retryDelay: 200 }).catch(() => {});
-        for (const f of plan.cleanup || []) {
-          fs.unlink(f, () => {});
-        }
-        for (const d of plan.cleanupDirs || []) {
-          fs.rmSync(d, { recursive: true, force: true });
-        }
-      }
-      return { output: plan.output, outputType: plan.outputType };
-    });
   };
 }
 
@@ -663,7 +795,10 @@ module.exports = {
   runFfmpegCapture,
   runFfmpegBinary,
   registerCancelableTask,
-  unregisterTask,
+  throwIfTaskCancelled,
+  commitOutput,
+  writeTaskOutput,
+  copyTaskOutput,
   cancelTask,
   hasRunningTasks,
   cancelAllTasks,

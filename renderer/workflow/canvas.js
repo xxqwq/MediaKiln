@@ -2175,6 +2175,7 @@
         listDir: (d, lim) => window.api.listDir(d, lim),
         scanDir: (opts) => window.api.wfScanDir(opts),
         statMulti: (ps) => window.api.wfStatMulti(ps),
+        fingerprintReplacements: (source) => window.api.wfFingerprintReplacements(source),
         allocNodeDir: (opts) => window.api.wfAllocNodeDir(opts),
         exportFiles: (opts) => window.api.wfExportFiles(opts),
         cancelTask: (tid) => window.api.cancelTask(tid),

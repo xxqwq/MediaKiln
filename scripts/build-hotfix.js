@@ -70,6 +70,14 @@ function buildHotfix(opts = {}) {
   const outDir = opts.outDir || path.join(ROOT, 'release');
   const repo = opts.repo || 'xxqwq/usefulTools';
 
+  const raw = String(opts.privateKeyPem || opts.privateKey || process.env.VGT_HOTFIX_PRIVATE_KEY || '').trim();
+  if (!raw) throw new Error('请通过 VGT_HOTFIX_PRIVATE_KEY 指定热更新签名私钥');
+  const privateKey = crypto.createPrivateKey(raw.startsWith('-----BEGIN') ? raw : fs.readFileSync(path.resolve(raw)));
+  const publicKey = crypto.createPublicKey(opts.publicKeyPem || hotfix.DEFAULT_PUBLIC_KEY_PEM);
+  if (privateKey.asymmetricKeyType !== 'ed25519' || !crypto.createPublicKey(privateKey).equals(publicKey)) {
+    throw new Error('热更新签名私钥与客户端内置公钥不匹配');
+  }
+
   const items = [];
   const ffmpegEntry = path.join(ROOT, 'ffmpeg.js');
   if (fs.existsSync(ffmpegEntry)) {
@@ -97,7 +105,8 @@ function buildHotfix(opts = {}) {
     fileCount: items.length,
     filesSha256,
   };
-  zip.addFile('bundle-meta.json', Buffer.from(JSON.stringify(bundleMeta, null, 2) + '\n', 'utf8'));
+  const metadata = Buffer.from(JSON.stringify(bundleMeta, null, 2) + '\n', 'utf8');
+  zip.addFile('bundle-meta.json', metadata);
 
   fs.mkdirSync(outDir, { recursive: true });
   const bundleName = `hotfix-bundle-${version}.zip`;
@@ -118,19 +127,13 @@ function buildHotfix(opts = {}) {
     bundleUrl: `https://github.com/${repo}/releases/download/${tag}/${bundleName}`,
     bundleSize: zipBuf.length,
     bundleSha256,
+    bundleMetaSha256: sha256Buffer(metadata),
     fullReleaseUrl: `https://github.com/${repo}/releases/tag/${tag}`,
     portableAssetUrl: `https://github.com/${repo}/releases/download/v${shellVersion}/video-gif-toolbox-${shellVersion}-portable.exe`,
     setupAssetUrl: `https://github.com/${repo}/releases/download/v${shellVersion}/video-gif-toolbox-${shellVersion}-setup.exe`,
   };
 
-  const rawPriv = opts.privateKeyPem || opts.privateKey || process.env.VGT_HOTFIX_PRIVATE_KEY || '';
-  if (rawPriv) {
-    const privStr = String(rawPriv).trim();
-    const privPem = privStr.includes('-----BEGIN')
-      ? privStr
-      : fs.readFileSync(path.resolve(privStr), 'utf8');
-    manifest.signature = hotfix.signManifest(manifest, privPem);
-  }
+  manifest.signature = hotfix.signManifest(manifest, privateKey);
 
   const manifestPath = path.join(outDir, 'hotfix-manifest.json');
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');

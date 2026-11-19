@@ -15,6 +15,7 @@ const {
   probe,
   runFfmpeg,
   runFfmpegBinary,
+  copyTaskOutput,
   defaultOutput,
   defaultDirOutput,
   stampOutput,
@@ -209,7 +210,7 @@ function imageCompressTarget(p) {
 
         const chosen = bestQualFile || bestFile;
         if (!chosen) throw new Error('图片压缩失败');
-        fs.copyFileSync(chosen, output);
+        copyTaskOutput(chosen, output);
         const finalSize = fs.statSync(output).size;
         onProgress?.(1);
         return {

@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const hotfix = require('./core/hotfix');
+const workflowCache = require('./core/workflow-cache');
 const { mapConcurrent } = require('./core/utils');
 
 let win = null;
@@ -38,6 +39,11 @@ function activateRuntimeRoot(newRoot, version) {
   const prevFfmpeg = currentFfmpeg;
   const prevFilters = currentFileFilters;
   try {
+    if (version) {
+      const validation = hotfix.validateBundleDir(newRoot, hotfix.getStatus().shellVersion);
+      if (!validation.ok) throw new Error(validation.error);
+      if (validation.meta.version !== version) throw new Error('热更新版本与签名清单不一致');
+    }
     if (prevRoot && prevRoot !== __dirname) {
       hotfix.clearRequireCacheUnderRoot(prevRoot);
     } else {
@@ -46,6 +52,7 @@ function activateRuntimeRoot(newRoot, version) {
       delete require.cache[require.resolve(path.join(__dirname, 'ffmpeg.js'))];
     }
     const loaded = loadRuntimeFromRoot(newRoot);
+    clearTimeout(bootConfirmTimer);
     activeRoot = newRoot;
     currentFfmpeg = loaded.ffmpeg;
     currentFileFilters = loaded.filters;
@@ -61,8 +68,10 @@ function activateRuntimeRoot(newRoot, version) {
 
 function scheduleBootConfirm() {
   clearTimeout(bootConfirmTimer);
+  const status = hotfix.getStatus();
+  if (!status?.activeVersion || status.activeRoot !== activeRoot) return;
   bootConfirmTimer = setTimeout(() => {
-    try { hotfix.confirmBoot(); } catch {}
+    try { hotfix.confirmBoot(status.activeVersion); } catch {}
   }, 1500);
 }
 
@@ -621,24 +630,19 @@ function isCDrivePath(p) {
   return /^c:/i.test(path.resolve(String(p || '')));
 }
 
-function isWritableDir(dir) {
+function tryOpenWorkflowCache(dir) {
   try {
-    fs.mkdirSync(dir, { recursive: true });
-    const probeFile = path.join(dir, `.probe_${process.pid}`);
-    fs.writeFileSync(probeFile, '1');
-    fs.unlinkSync(probeFile);
-    return true;
+    return workflowCache.openCache(dir);
   } catch {
-    return false;
+    return null;
   }
 }
 
 function getWorkflowCacheDir() {
   const prefs = readMainPrefs();
   const customDir = typeof prefs.customWorkflowCacheDir === 'string' ? prefs.customWorkflowCacheDir.trim() : '';
-  if (customDir && isWritableDir(customDir)) {
-    return customDir;
-  }
+  const customRoot = customDir && tryOpenWorkflowCache(customDir);
+  if (customRoot) return customRoot;
 
   const candidates = [];
   if (app.isPackaged) {
@@ -662,13 +666,13 @@ function getWorkflowCacheDir() {
   }
 
   for (const dir of candidates) {
-    if (isWritableDir(dir)) return dir;
+    const root = tryOpenWorkflowCache(dir);
+    if (root) return root;
   }
   const fallback = app.isPackaged
     ? path.join(app.getPath('temp'), 'vgt-workflow-cache')
     : path.join(__dirname, '.workflow_cache');
-  fs.mkdirSync(fallback, { recursive: true });
-  return fallback;
+  return workflowCache.openCache(fallback);
 }
 
 function statDirRecursive(dir) {
@@ -680,6 +684,7 @@ function statDirRecursive(dir) {
     try { entries = fs.readdirSync(cur, { withFileTypes: true }); } catch { return; }
     for (const ent of entries) {
       const full = path.join(cur, ent.name);
+      if (ent.name === '.vgt-cache-owner') continue;
       if (ent.isDirectory()) {
         try {
           const st = fs.statSync(full);
@@ -710,19 +715,17 @@ function pruneWorkflowCache({ maxAgeMs = 7 * 86400 * 1000, maxBytes = 5 * 1024 *
   }
   const dir = getWorkflowCacheDir();
   const now = Date.now();
-  let entries = [];
+  let entries;
   try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
+    entries = workflowCache.ownedNodeDirs(dir);
   } catch (err) {
     return { ok: false, error: err.message, removedCount: 0, freedBytes: 0 };
   }
 
   const nodeDirs = [];
-  for (const ent of entries) {
-    if (!ent.isDirectory() || !ent.name.startsWith('node_')) continue;
-    const full = path.join(dir, ent.name);
+  for (const full of entries) {
     const { sizeBytes, maxMtimeMs } = statDirRecursive(full);
-    nodeDirs.push({ name: ent.name, full, sizeBytes, mtimeMs: maxMtimeMs || now });
+    nodeDirs.push({ full, sizeBytes, mtimeMs: maxMtimeMs || now });
   }
 
   let removedCount = 0;
@@ -732,7 +735,7 @@ function pruneWorkflowCache({ maxAgeMs = 7 * 86400 * 1000, maxBytes = 5 * 1024 *
   for (const item of nodeDirs) {
     if (now - item.mtimeMs > maxAgeMs) {
       try {
-        fs.rmSync(item.full, { recursive: true, force: true });
+        if (!workflowCache.removeNodeDir(dir, item.full)) continue;
         removedCount++;
         freedBytes += item.sizeBytes;
       } catch {
@@ -749,7 +752,7 @@ function pruneWorkflowCache({ maxAgeMs = 7 * 86400 * 1000, maxBytes = 5 * 1024 *
     for (const item of kept) {
       if (totalBytes <= maxBytes) break;
       try {
-        fs.rmSync(item.full, { recursive: true, force: true });
+        if (!workflowCache.removeNodeDir(dir, item.full)) continue;
         removedCount++;
         freedBytes += item.sizeBytes;
         totalBytes -= item.sizeBytes;
@@ -794,12 +797,11 @@ ipcMain.handle('wf:set-cache-dir', (_e, dirPath) => {
     return { ok: true, dir, sizeBytes, fileCount, customDir: '' };
   }
   const resolved = path.resolve(clean);
-  if (!isWritableDir(resolved)) {
-    return { ok: false, error: '所选目录不可写，请更换其他目录' };
-  }
+  const root = tryOpenWorkflowCache(resolved);
+  if (!root) return { ok: false, error: '无法创建专用缓存目录，请选择其他位置' };
   writeMainPrefs({ customWorkflowCacheDir: resolved });
-  const { sizeBytes, fileCount } = statDirRecursive(resolved);
-  return { ok: true, dir: resolved, sizeBytes, fileCount, customDir: resolved };
+  const { sizeBytes, fileCount } = statDirRecursive(root);
+  return { ok: true, dir: root, sizeBytes, fileCount, customDir: resolved };
 });
 
 ipcMain.handle('wf:prune-cache', (_e, opts = {}) => pruneWorkflowCache(opts));
@@ -810,10 +812,9 @@ ipcMain.handle('wf:clear-cache', () => {
   }
   const dir = getWorkflowCacheDir();
   try {
-    for (const name of fs.readdirSync(dir)) {
-      fs.rmSync(path.join(dir, name), { recursive: true, force: true });
+    for (const nodeDir of workflowCache.ownedNodeDirs(dir)) {
+      workflowCache.removeNodeDir(dir, nodeDir);
     }
-    fs.mkdirSync(dir, { recursive: true });
     return { ok: true, dir };
   } catch (err) {
     return { ok: false, error: err.message };
@@ -822,11 +823,7 @@ ipcMain.handle('wf:clear-cache', () => {
 
 ipcMain.handle('wf:alloc-node-dir', (_e, opts = {}) => {
   const cacheRoot = getWorkflowCacheDir();
-  const rawKey = String(opts.subKey || `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`);
-  const cleanKey = rawKey.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64) || 'node';
-  const dir = path.join(cacheRoot, `node_${cleanKey}`);
-  fs.rmSync(dir, { recursive: true, force: true });
-  fs.mkdirSync(dir, { recursive: true });
+  const dir = workflowCache.allocateNodeDir(cacheRoot, opts.subKey);
 
   if (opts.manifestDir) {
     const srcManifest = path.join(opts.manifestDir, '.vgt-manifest.json');
@@ -850,6 +847,11 @@ ipcMain.handle('wf:stat-multi', (_e, filePaths) => {
     }
   });
 });
+
+ipcMain.handle('wf:fingerprint-replacements', (_e, source = {}) => getFfmpeg().fingerprintReplacements({
+  replaceDir: typeof source.replaceDir === 'string' ? source.replaceDir : '',
+  replaceFiles: Array.isArray(source.replaceFiles) ? source.replaceFiles : [],
+}));
 
 ipcMain.handle('wf:scan-dir', (_e, opts = {}) => {
   const dirPath = String(opts.dirPath || '').trim();
@@ -987,7 +989,7 @@ ipcMain.handle('hotfix:status', () => hotfix.getStatus());
 
 ipcMain.handle('hotfix:check', async (_e, opts = {}) => {
   try {
-    return await hotfix.checkForUpdates(opts);
+    return await hotfix.checkForUpdates({ mirror: opts.mirror });
   } catch (err) {
     return { ok: false, error: err?.message || '检查更新失败' };
   }

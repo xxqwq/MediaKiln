@@ -1285,6 +1285,244 @@ async function test(name, feature, params, check) {
     });
   }
 
+  // 128~132. 类 iLovePDF 办公文档与 PDF 全链路测试
+  const { StandardFonts, rgb } = require('pdf-lib');
+  const { Resvg } = require('@resvg/resvg-js');
+  const { buildDocxHtmlDocument } = require('../core/pdf-office');
+
+  // 128. buildDocxHtmlDocument (Word 转 PDF 核心解析器 + 文本框/公式/页眉/Fallback去重)
+  const testWordDocx = path.join(TMP, 'word2pdf_src.docx');
+  const wZip = new AdmZip();
+  wZip.addFile('[Content_Types].xml', Buffer.from('<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/></Types>', 'utf8'));
+  wZip.addFile('word/_rels/document.xml.rels', Buffer.from('<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdImg" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/sample.png"/><Relationship Id="rIdHdr1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/></Relationships>', 'utf8'));
+  wZip.addFile('word/styles.xml', Buffer.from('<?xml version="1.0" encoding="UTF-8"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:pPr><w:outlineLvl w:val="0"/></w:pPr></w:style></w:styles>', 'utf8'));
+  wZip.addFile('word/header1.xml', Buffer.from('<?xml version="1.0" encoding="UTF-8"?><w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>页眉机密文档标识</w:t></w:r></w:p></w:hdr>', 'utf8'));
+  wZip.addFile('word/document.xml', Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml">
+  <w:body>
+    <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>年度项目总结</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:b/><w:i/></w:rPr><w:t>加粗斜体正文</w:t></w:r></w:p>
+    <w:p><m:oMathPara><m:oMath><m:f><m:num><m:r><m:t>a+b</m:t></m:r></m:num><m:den><m:r><m:t>2</m:t></m:r></m:den></m:f></m:oMath></m:oMathPara></w:p>
+    <w:p><w:r><w:drawing><w:txbxContent><w:p><w:r><w:t>浮动文本框提示内容</w:t></w:r></w:p></w:txbxContent></w:drawing></w:r></w:p>
+    <w:tbl>
+      <w:tr><w:tc><w:tcPr><w:gridSpan w:val="2"/></w:tcPr><w:p><w:r><w:t>合并表头</w:t></w:r></w:p></w:tc></w:tr>
+      <w:tr><w:tc><w:tcPr><w:vMerge w:val="restart"/></w:tcPr><w:p><w:r><w:t>跨行格</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>R1C2</w:t></w:r></w:p></w:tc></w:tr>
+      <w:tr><w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p/></w:tc><w:tc><w:p><w:r><w:t>R2C2</w:t></w:r></w:p></w:tc></w:tr>
+    </w:tbl>
+    <w:p><w:r><mc:AlternateContent><mc:Choice><w:drawing><wp:inline><wp:extent cx="914400" cy="914400"/><a:graphic><a:graphicData><a:blip r:embed="rIdImg"/></a:graphicData></a:graphic></wp:inline></w:drawing></mc:Choice><mc:Fallback><w:pict><v:shape><v:imagedata r:id="rIdImg"/></v:shape></w:pict></mc:Fallback></mc:AlternateContent></w:r></w:p>
+    <w:sectPr><w:headerReference w:type="default" r:id="rIdHdr1"/><w:pgSz w:w="16838" w:h="11906" w:orient="landscape"/></w:sectPr>
+  </w:body>
+</w:document>`, 'utf8'));
+  wZip.addFile('word/media/sample.png', fs.readFileSync(img1));
+  wZip.writeZip(testWordDocx);
+  const parsedDocxHtml = buildDocxHtmlDocument(testWordDocx, path.join(TMP, 'docx_media_tmp'));
+  if (
+    !parsedDocxHtml.html.includes('<h1>年度项目总结</h1>')
+    || !parsedDocxHtml.html.includes('colspan="2"')
+    || !parsedDocxHtml.html.includes('rowspan="2"')
+    || !parsedDocxHtml.html.includes('docx-textbox')
+    || !parsedDocxHtml.html.includes('浮动文本框提示内容')
+    || !parsedDocxHtml.html.includes('(a+b)/(2)')
+    || !parsedDocxHtml.html.includes('页眉机密文档标识')
+    || !parsedDocxHtml.pageConfig.landscape
+    || parsedDocxHtml.imageCount !== 1
+  ) {
+    throw new Error('buildDocxHtmlDocument 解析 Word 标题/文本框/公式/页眉/跨行列表格/横屏/去重图片失败');
+  }
+  const legacyDoc = path.join(TMP, 'legacy_sample.doc');
+  fs.writeFileSync(legacyDoc, Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1, 0x00, 0x00]));
+  const legacyInfo = await probe(legacyDoc);
+  if (!legacyInfo.isDoc || legacyInfo.docType !== 'doc') {
+    throw new Error(`probe 未正确识别 .doc 文档类型: ${JSON.stringify(legacyInfo)}`);
+  }
+  let docBuiltinErr = '';
+  try {
+    await executeTask('test-doc-builtin-reject', 'wordToPdf', {
+      input: legacyDoc, output: path.join(TMP, 'legacy.pdf'), engine: 'builtin',
+    });
+  } catch (err) {
+    docBuiltinErr = err?.message || '';
+  }
+  if (!docBuiltinErr.includes('Office') && !docBuiltinErr.includes('.doc')) {
+    throw new Error(`wordToPdf builtin 模式未按预期拒绝 .doc: ${docBuiltinErr}`);
+  }
+  console.log('  ✅ 128. buildDocxHtmlDocument（文本框/公式/页眉/Fallback去重）与 .doc 探测校验');
+
+  // 129. PDF 页面旋转 (2页 PDF，仅第1页顺时针 90°)
+  const rotSrcPdf = path.join(TMP, 'rot_src.pdf');
+  const rotDoc = await PDFDocument.create();
+  const hFont = await rotDoc.embedFont(StandardFonts.HelveticaBold);
+  const rp1 = rotDoc.addPage([595, 842]);
+  rp1.drawText('Smoke Test Native Editable PDF', { x: 60, y: 760, size: 22, font: hFont });
+  rp1.drawText('This paragraph should stay editable in docx.', { x: 60, y: 710, size: 12, font: hFont });
+  const rp2 = rotDoc.addPage([595, 842]);
+  rp2.drawText('Second Page Content', { x: 60, y: 760, size: 14, font: hFont });
+  fs.writeFileSync(rotSrcPdf, await rotDoc.save());
+
+  const rotatedOutPdf = path.join(TMP, 'rotated_p1.pdf');
+  await test('129. PDF 页面旋转 (仅第1页 cw90)', 'pdfRotate', {
+    input: rotSrcPdf, output: rotatedOutPdf, direction: 'cw90', pageRange: '1',
+  }, async () => {
+    const loaded = await PDFDocument.load(fs.readFileSync(rotatedOutPdf));
+    if (loaded.getPage(0).getRotation().angle !== 90 || loaded.getPage(1).getRotation().angle !== 0) {
+      throw new Error('PDF 旋转角度不符合预期');
+    }
+  });
+
+  // 130. PDF 水印与页码（中文水印 + 中文页码跳过封面）
+  const wmOutPdf = path.join(TMP, 'wm_numbered.pdf');
+  await test('130. PDF 水印与页码 (tiled + 中文页码)', 'pdfWatermark', {
+    input: rotSrcPdf, output: wmOutPdf, contentMode: 'both', wmText: '内部资料 · 严禁外传',
+    wmStyle: 'tiled', wmColor: '#dc2626', wmOpacity: '0.28', wmSize: 'medium',
+    numFormat: 'zh', numPos: 'bc', numStart: '2', pageRange: '',
+  }, (info) => {
+    if (info.docType !== 'pdf' || info.pageCount !== 2) throw new Error('水印 PDF 页数异常');
+  });
+
+  // 131. PDF 压缩瘦身 (balanced 内嵌大图压小 + raster)
+  const bigNoiseJpg = path.join(TMP, 'noise_hi.jpg');
+  run(['-f', 'lavfi', '-i', 'mandelbrot=size=1920x1080:rate=1', '-frames:v', '1', '-q:v', '1', bigNoiseJpg]);
+  const bigImgPdf = path.join(TMP, 'heavy_img.pdf');
+  const heavyDoc = await PDFDocument.create();
+  const jpgEmbed = await heavyDoc.embedJpg(fs.readFileSync(bigNoiseJpg));
+  const hp = heavyDoc.addPage([595, 842]);
+  hp.drawImage(jpgEmbed, { x: 20, y: 200, width: 555, height: 312 });
+  fs.writeFileSync(bigImgPdf, await heavyDoc.save());
+
+  const compressedPdf = path.join(TMP, 'compressed_extreme.pdf');
+  await test('131a. PDF 压缩瘦身 (extreme 重压内嵌图)', 'pdfCompress', {
+    input: bigImgPdf, output: compressedPdf, preset: 'extreme', maxSide: '1280',
+  }, (info) => {
+    if (info.docType !== 'pdf' || info.pageCount !== 1) throw new Error('压缩 PDF 结构异常');
+    if (fs.statSync(compressedPdf).size >= fs.statSync(bigImgPdf).size) {
+      throw new Error('PDF 压缩后体积未减小');
+    }
+  });
+
+  const rasterPdf = path.join(TMP, 'compressed_raster.pdf');
+  await test('131b. PDF 压缩瘦身 (raster 110 DPI)', 'pdfCompress', {
+    input: rotSrcPdf, output: rasterPdf, preset: 'raster', rasterDpi: '110',
+  }, (info) => {
+    if (info.docType !== 'pdf' || info.pageCount !== 2) throw new Error('栅格化压缩 PDF 页数异常');
+  });
+
+  // 132. PDF 转 Word (editable 原生提取 / ocr 扫描识别 / layout 版面保真)
+  const editableDocx = path.join(TMP, 'from_native.docx');
+  await test('132a. PDF 转 Word (editable 原生文本提取)', 'pdfToWord', {
+    input: rotSrcPdf, output: editableDocx, mode: 'editable', ocrLang: 'auto', keepPageBreak: 'yes',
+  }, () => {
+    const z = new AdmZip(editableDocx);
+    const xml = z.getEntry('word/document.xml').getData().toString('utf8');
+    if (!xml.includes('Smoke Test Native Editable PDF') || !xml.includes('Second Page Content')) {
+      throw new Error('editable 模式未能提取 PDF 原文内容');
+    }
+  });
+
+  const scanImg = path.join(TMP, 'scan_ocr.png');
+  const ocrSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="900" height="300"><rect width="900" height="300" fill="#ffffff"/><text x="60" y="100" font-family="Microsoft YaHei" font-size="38" fill="#111827">本地离线文档识别</text><text x="60" y="185" font-family="Microsoft YaHei" font-size="28" fill="#111827">Offline OCR Word Export 2026</text></svg>';
+  fs.writeFileSync(scanImg, new Resvg(ocrSvg, { font: { loadSystemFonts: true, defaultFontFamily: 'Microsoft YaHei' } }).render().asPng());
+  const scanPdf = path.join(TMP, 'scan_only.pdf');
+  await executeTask('test-scan-pdf', 'imagesToPdf', {
+    files: [scanImg], output: scanPdf, pageSize: 'fit', margin: 10, quality: 'high', bgColor: '#ffffff',
+  });
+  const ocrDocx = path.join(TMP, 'from_ocr.docx');
+  await test('132b. PDF 转 Word (ocr 扫描件离线中文+英文识别)', 'pdfToWord', {
+    input: scanPdf, output: ocrDocx, mode: 'ocr', ocrLang: 'auto', keepPageBreak: 'yes',
+  }, () => {
+    const z = new AdmZip(ocrDocx);
+    const xml = z.getEntry('word/document.xml').getData().toString('utf8');
+    if (!xml.includes('本地') || !xml.includes('2026')) {
+      throw new Error(`OCR 识别结果缺失预期文字: ${xml.slice(0, 400)}`);
+    }
+  });
+
+  const layoutDocx = path.join(TMP, 'from_layout.docx');
+  await test('132c. PDF 转 Word (layout 版面保真)', 'pdfToWord', {
+    input: rotSrcPdf, output: layoutDocx, mode: 'layout', dpiScale: '1.5',
+  }, (info) => {
+    if (info.imageCount !== 2) throw new Error(`版面保真 Word 应内嵌 2 张页面图，实际 ${info.imageCount}`);
+  });
+
+  // 132d. PDF 转 Word (editable 深度版面还原：有框 3×3 表格 + JPG/PNG 双图混排 + 双栏阅读顺序)
+  try {
+    const richPdf = path.join(TMP, 'rich_layout.pdf');
+    const richDocx = path.join(TMP, 'from_rich.docx');
+    const rDoc = await PDFDocument.create();
+    const rFont = await rDoc.embedFont(StandardFonts.Helvetica);
+    const rBold = await rDoc.embedFont(StandardFonts.HelveticaBold);
+    const rJpg = await rDoc.embedJpg(fs.readFileSync(bigNoiseJpg));
+    const rPng = await rDoc.embedPng(fs.readFileSync(img1));
+    const rp = rDoc.addPage([595, 842]);
+
+    // 1. 顶部通栏标题
+    rp.drawText('Composite Structured Report 2026', { x: 55, y: 790, size: 18, font: rBold, color: rgb(0.1, 0.2, 0.5) });
+
+    // 2. 3x3 网格表格
+    const colXs = [55, 225, 395, 540];
+    const rowYs = [755, 725, 695, 665];
+    for (const y of rowYs) {
+      rp.drawLine({ start: { x: colXs[0], y }, end: { x: colXs[3], y }, thickness: 1, color: rgb(0.2, 0.25, 0.35) });
+    }
+    for (const x of colXs) {
+      rp.drawLine({ start: { x, y: rowYs[0] }, end: { x, y: rowYs[3] }, thickness: 1, color: rgb(0.2, 0.25, 0.35) });
+    }
+    const tblData = [
+      ['Module', 'Metric', 'State'],
+      ['Engine', '98.5%', 'READY'],
+      ['Parser', '12ms', 'PASS'],
+    ];
+    for (let r = 0; r < tblData.length; r++) {
+      for (let c = 0; c < tblData[r].length; c++) {
+        rp.drawText(tblData[r][c], {
+          x: colXs[c] + 10,
+          y: rowYs[r] - 20,
+          size: 11,
+          font: r === 0 ? rBold : rFont,
+        });
+      }
+    }
+
+    // 3. 中部并排 JPG + PNG 内嵌配图
+    rp.drawImage(rJpg, { x: 55, y: 520, width: 180, height: 110 });
+    rp.drawImage(rPng, { x: 320, y: 520, width: 180, height: 110 });
+
+    // 4. 下半页左右双栏正文（各 5 行）
+    const colYs = [460, 438, 416, 394, 372];
+    for (let i = 0; i < colYs.length; i++) {
+      rp.drawText(`Left Column Line ${i + 1}`, { x: 55, y: colYs[i], size: 11, font: rFont });
+      rp.drawText(`Right Column Line ${i + 1}`, { x: 330, y: colYs[i], size: 11, font: rFont });
+    }
+    fs.writeFileSync(richPdf, await rDoc.save());
+
+    const t0 = Date.now();
+    const res132d = await executeTask('test-132d', 'pdfToWord', {
+      input: richPdf, output: richDocx, mode: 'editable', ocrLang: 'auto', keepPageBreak: 'yes',
+    }, () => {});
+    const summary = res132d?.pdfToWordSummary || {};
+    if ((summary.tableCount || 0) < 1) throw new Error(`应至少重建 1 个表格，实际 ${summary.tableCount}`);
+    if ((summary.imageCount || 0) < 2) throw new Error(`应至少提取 2 张配图，实际 ${summary.imageCount}`);
+    const outInfo = await probe(richDocx);
+    if ((outInfo.imageCount || 0) < 2) throw new Error(`probe 识别 Word 内嵌图应 >= 2，实际 ${outInfo.imageCount}`);
+    const zRich = new AdmZip(richDocx);
+    const richXml = zRich.getEntry('word/document.xml').getData().toString('utf8');
+    if (!richXml.includes('<w:tbl>') || !richXml.includes('<w:tc>') || !richXml.includes('98.5%') || !richXml.includes('READY')) {
+      throw new Error('输出 Word 缺失 <w:tbl> 或表格单元格文本');
+    }
+    if (!richXml.includes('<w:drawing>')) {
+      throw new Error('输出 Word 缺失内嵌图片 <w:drawing>');
+    }
+    const idxL5 = richXml.indexOf('Left Column Line 5');
+    const idxR1 = richXml.indexOf('Right Column Line 1');
+    if (idxL5 < 0 || idxR1 < 0 || idxL5 >= idxR1) {
+      throw new Error(`双栏阅读顺序错误 (L5=${idxL5}, R1=${idxR1})`);
+    }
+    const ms = Date.now() - t0;
+    console.log(`  ✅ 132d. PDF 转 Word 深度版面还原（表格:${summary.tableCount}, 配图:${summary.imageCount}, 双栏顺序通过, ${ms}ms）`);
+  } catch (e) {
+    failed++;
+    console.log(`  ❌ 132d. PDF 转 Word 深度版面还原\n     ${e.message}`);
+  }
+
   if (!failed) fs.rmSync(TMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   console.log(failed ? `\n❌ ${failed} 个用例失败，测试产物：${TMP}` : '\n🎉 全部通过');
   process.exit(failed ? 1 : 0);

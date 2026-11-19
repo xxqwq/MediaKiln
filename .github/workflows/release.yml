@@ -101,6 +101,7 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          VGT_HOTFIX_PRIVATE_KEY: ${{ secrets.VGT_HOTFIX_PRIVATE_KEY }}
           TAG: ${{ needs.check.outputs.tag }}
           REL_VER: ${{ needs.check.outputs.version }}
         run: |

@@ -14,12 +14,14 @@ const {
   runFfmpeg,
   runFfmpegBinary,
   registerCancelableTask,
-  unregisterTask,
+  throwIfTaskCancelled,
+  writeTaskOutput,
 } = require('../core/runner');
 
 const SVG_WORKER_PATH = path.join(__dirname, '..', 'core', 'svg-worker.js');
 
 function runSvgWorker(taskId, op, payload) {
+  throwIfTaskCancelled(taskId);
   return new Promise((resolve, reject) => {
     let worker;
     try {
@@ -33,25 +35,18 @@ function runSvgWorker(taskId, op, payload) {
     let settled = false;
     let cancelled = false;
 
-    const cleanup = () => {
-      unregisterTask(taskId);
-    };
-
-    registerCancelableTask(taskId, () => {
+    const cleanup = registerCancelableTask(taskId, () => {
       cancelled = true;
-      cleanup();
       worker.terminate().catch(() => {});
-      if (!settled) {
-        settled = true;
-        reject(new Error('任务已取消'));
-      }
     });
 
     worker.once('message', (msg) => {
       if (settled) return;
       settled = true;
       cleanup();
-      if (msg && msg.ok) {
+      if (cancelled) {
+        reject(new Error('任务已取消'));
+      } else if (msg && msg.ok) {
         resolve(msg);
       } else {
         reject(new Error(msg?.error || 'SVG Worker 处理失败'));
@@ -126,7 +121,7 @@ function svgToRaster(p) {
       const pngBuf = Buffer.from(res.png);
 
       if (ext === 'png') {
-        fs.writeFileSync(output, pngBuf);
+        writeTaskOutput(output, pngBuf);
         onProgress?.(1);
         return { output };
       }
@@ -189,7 +184,7 @@ function svgOptimize(p) {
         pretty,
       });
 
-      fs.writeFileSync(output, res.data, 'utf8');
+      writeTaskOutput(output, res.data);
       onProgress?.(1);
       return { output };
     },
@@ -245,7 +240,7 @@ function imageToSvg(p) {
         optimizeSvg: p.optimizeSvg !== false && p.optimizeSvg !== 'false',
       });
 
-      fs.writeFileSync(output, res.data, 'utf8');
+      writeTaskOutput(output, res.data);
       onProgress?.(1);
       return { output };
     },

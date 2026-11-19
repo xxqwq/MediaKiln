@@ -56,8 +56,8 @@ const docShot = ['screenshots/doc-extract.webp', 'screenshots/doc-extract-images
       <!-- 目标大小 -->
       <article class="card tile t-target reveal">
         <div class="tile-icon" style="--ic:#f472b6" set:html={iconSvg('target', 19)} />
-        <h3>压到指定大小，一次到位</h3>
-        <p>视频按码率反推，GIF 最多迭代 7 轮，图片用二分搜索画质，直接满足平台上传限制。</p>
+        <h3>按上传限制压缩</h3>
+        <p>视频、GIF、图片和 PDF 都可按目标大小压缩。PDF 保留可选中文字，并显示是否达标。</p>
         <div class="size-chips" aria-label="常用目标大小预设">
           <span>200 KB</span><span>1 MB</span><span>5 MB</span><span>10 MB · Discord</span><span>25 MB · 微信</span><span>50 MB</span>
         </div>
@@ -66,8 +66,8 @@ const docShot = ['screenshots/doc-extract.webp', 'screenshots/doc-extract-images
       <!-- 文档 -->
       <article class="card tile t-doc reveal">
         <div class="tile-icon" style="--ic:#60a5fa" set:html={iconSvg('files', 19)} />
-        <h3>Word / PPT 图片：提取、压缩、放回原位</h3>
-        <p>自动识别 .docx / .pptx 里的所有图片，可以只处理指定章节或页面，原位压缩、打码、美化后再写回文档，文字和排版完全不变。</p>
+        <h3>Word / PPT / PDF 本地处理</h3>
+        <p>提取或回填 Word、PPT 图片，互转 Word 和 PDF。用缩略图整理 PDF 页面，预览后批量裁白边，或给扫描件添加可搜索文字。</p>
         {docShot ? (
           <div class="shot-frame">
             <img

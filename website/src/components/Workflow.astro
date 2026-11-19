@@ -149,7 +149,7 @@ const s = data.stats;
         <h2 class="h2">像搭积木一样，<span class="grad-text">串起整条处理流程</span></h2>
       </div>
       <p class="lead">
-        {s.nodes} 个节点（{s.ioNodes} 个输入输出节点和 {s.nodes - s.ioNodes} 个功能节点）可自由连线。支持类型校验、按格式分流、分支对比、节点旁路与增量缓存。下面是软件内置的 {s.templates} 套模板：
+        {s.nodes} 个节点支持类型校验、按格式分流、分支对比和节点旁路。工作流会复用有效的中间结果，缓存清理只处理应用生成的缓存。内置 {s.templates} 套模板。
       </p>
     </div>
 

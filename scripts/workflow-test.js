@@ -6,14 +6,14 @@ const assert = require('assert');
 const { spawnSync } = require('child_process');
 const AdmZip = require('adm-zip');
 
-const { probe, executeTask, cancelTask, FFMPEG } = require('../ffmpeg');
+const { probe, executeTask, cancelTask, fingerprintReplacements, FFMPEG } = require('../ffmpeg');
 const regFactory = require('../renderer/workflow/node-registry');
 const engineMod = require('../renderer/workflow/engine');
 const tplMod = require('../renderer/workflow/templates');
 
 // 严禁写入 C: 盘，测试产物与工作流缓存全部在 F: 盘项目目录内
 const ROOT = path.resolve(__dirname, '..');
-const TEST_ROOT = path.join(ROOT, 'scripts', 'smoke_wf');
+const TEST_ROOT = process.env.VGT_TEST_ROOT || path.join(ROOT, 'scripts', 'smoke_wf');
 fs.mkdirSync(TEST_ROOT, { recursive: true });
 const RUN_ROOT = fs.mkdtempSync(path.join(TEST_ROOT, 'run-'));
 const TMP = path.join(RUN_ROOT, 'media');
@@ -115,6 +115,7 @@ function createNodeRuntime() {
       walk(dirPath);
       return { ok: true, files: results };
     },
+    fingerprintReplacements,
     statMulti(filePaths) {
       return (filePaths || []).map((p) => {
         try {
@@ -196,10 +197,10 @@ async function step(name, fn) {
   const reg = regFactory.createRegistry(features);
   const runtime = createNodeRuntime();
 
-  await step('1. 节点注册表完整性（9 个 I/O + 63 个子功能 = 72 个节点）', () => {
+  await step('1. 节点注册表完整性（9 个 I/O + 70 个子功能 = 79 个节点）', () => {
     const all = reg.getAllDefs();
-    assert.strictEqual(features.length, 63);
-    assert.strictEqual(all.length, 72);
+    assert.strictEqual(features.length, 70);
+    assert.strictEqual(all.length, 79);
     assert.deepStrictEqual(
       all.filter((def) => !def.isIo).map((def) => def.type).sort(),
       features.map((feature) => `feat.${feature.id}`).sort(),
@@ -226,8 +227,27 @@ async function step(name, fn) {
     assert.equal(build('imageCanvas', { bgMode: 'black' }, image).bgColor, '#000000');
     assert.equal(build('videoCover', {}, video, { coverImage: { paths: ['image.png'] } }).coverImage, 'image.png');
     assert.equal(build('docToPdf', {}, { path: 'readme.md' }).input, 'readme.md');
+    assert.equal(build('wordToPdf', { pageSize: 'a4l' }, { path: 'report.docx' }).pageSize, 'a4l');
+    assert.equal(build('pdfToWord', { mode: 'ocr' }, { path: 'scan.pdf' }).mode, 'ocr');
+    assert.equal(build('pdfCompress', { preset: 'extreme' }, { path: 'big.pdf' }).preset, 'extreme');
+    assert.equal(build('pdfCompress', { preset: 'target', targetMB: '2' }, { path: 'big.pdf' }).targetBytes, 2_000_000);
+    assert.equal(build('pdfSearchable', { ocrLang: 'zh' }, { path: 'scan.pdf' }).ocrLang, 'zh');
+    assert.deepStrictEqual(build('pdfCrop', { padding: '0', pageRange: '2-3' }, { path: 'doc.pdf' }), {
+      input: 'doc.pdf', padding: 0, pageRange: '2-3',
+    });
+    assert.equal(build('pdfRotate', { direction: 'ccw90' }, { path: 'doc.pdf' }).direction, 'ccw90');
+    assert.equal(build('pdfWatermark', { contentMode: 'both' }, { path: 'doc.pdf' }).wmText, '内部资料 · 严禁外传');
     assert.equal(build('addMusic', { ducking: 'yes' }, video, { music: { paths: ['voice.wav'] } }).ducking, 'yes');
     assert.equal(build('watermark', { pos: 'tiled', tileAngle: '0' }, video).tileAngle, '0');
+  });
+
+  await step('单工具与画布共用格式转换校验', async () => {
+    const options = { mode: 'encode', format: 'mov', vcodec: 'av1', height: '0', quality: 'medium' };
+    const file = { path: 'clip.mp4', info: { duration: 1 } };
+    const fromSingleTool = features.find(({ id }) => id === 'convertVideo').collect(options, { file });
+    const fromWorkflow = reg.buildNodeTaskParams({ type: 'feat.convertVideo', params: options }, file);
+    assert.deepStrictEqual(fromSingleTool, fromWorkflow);
+    await assert.rejects(executeTask('wf-invalid-codec', 'convertVideo', fromWorkflow), /MOV 容器不支持 AV1/);
   });
 
   await step('2. 连线校验（自连/环路/不兼容格式拒绝 & 动态输出推断）', () => {
@@ -376,6 +396,34 @@ async function step(name, fn) {
     const relsXml = z.getEntry('word/_rels/document.xml.rels').getData().toString('utf8');
     assert(/media\/screen\.jpg/i.test(relsXml), `docx 媒体关系未更新为 jpg: ${relsXml}`);
     assert(fs.statSync(outDocx).size < fs.statSync(testDocx).size, '回填压缩 JPG 后文档体积应显著减小');
+  });
+
+  await step('回填图片原位修改后，工作流重新生成文档', async () => {
+    const replaceDir = path.join(TMP, 'local-replacements');
+    fs.mkdirSync(replaceDir);
+    const image = path.join(replaceDir, 'screen.png');
+    const renderImage = (color) => runFfmpegSync(['-f', 'lavfi', '-i', `color=${color}:s=64x64`, '-frames:v', '1', image]);
+    renderImage('red');
+    const target = tplMod.normalizeGraphData({
+      name: '本地图片回填',
+      nodes: [
+        { id: 'local-doc', type: 'io.loadFile', x: 0, y: 0, params: { filePath: testDocx } },
+        { id: 'local-repack', type: 'feat.docRepackImages', x: 300, y: 0, params: { __local_replaceSource: replaceDir } },
+      ],
+      edges: [{ id: 'local-edge', fromNode: 'local-doc', fromPort: 'media', toNode: 'local-repack', toPort: 'input' }],
+    }, reg);
+    const getImage = (result) => new AdmZip(result.outputs.get('local-repack').paths[0]).readFile('word/media/screen.png');
+    const first = await runner.execute(target, runtime).promise;
+    assert.deepEqual(getImage(first), fs.readFileSync(image));
+    const cached = await runner.execute(target, runtime).promise;
+    assert.equal(cached.summary.cached, 2);
+    const dirStat = fs.statSync(replaceDir);
+    renderImage('blue');
+    fs.utimesSync(replaceDir, dirStat.atime, dirStat.mtime);
+    const updated = await runner.execute(target, runtime).promise;
+    assert.equal(updated.summary.executed, 1);
+    assert.deepEqual(getImage(updated), fs.readFileSync(image));
+    assert.notDeepEqual(getImage(updated), getImage(first));
   });
 
   await step('7. 真实流水线 3（双视频多线汇聚合并 + 归一化裁剪 + Bypass 旁路跳过）', async () => {
@@ -561,6 +609,47 @@ async function step(name, fn) {
     assert(fs.existsSync(longImg) && longImg.endsWith('.jpg'), 'PDF 转长图应导出 JPG');
     const info = await probe(longImg);
     assert(info.isImage && info.height > info.width, `PDF 2 页纵向长图尺寸异常: ${info.width}x${info.height}`);
+  });
+
+  await step('11. 类 iLovePDF 流水线（PDF 旋转→水印页码→压缩瘦身→转可编辑 Word）', async () => {
+    const officeOutDir = path.join(TMP, 'pdf_office_wf_out');
+    fs.mkdirSync(officeOutDir, { recursive: true });
+    const { PDFDocument, StandardFonts } = require('pdf-lib');
+    const srcPdf = path.join(TMP, 'office_src.pdf');
+    const doc = await PDFDocument.create();
+    const font = await doc.embedFont(StandardFonts.HelveticaBold);
+    const p1 = doc.addPage([595, 842]);
+    p1.drawText('Workflow Office Pipeline 2026', { x: 60, y: 760, size: 22, font });
+    p1.drawText('Automated PDF rotate, watermark, compress and convert to Word.', { x: 60, y: 710, size: 12, font });
+    fs.writeFileSync(srcPdf, await doc.save());
+
+    const flowOffice = tplMod.normalizeGraphData({
+      name: 'PDF办公批处理流',
+      nodes: [
+        { id: 'o1', type: 'io.loadFile', x: 0, y: 0, params: { filePath: srcPdf } },
+        { id: 'o2', type: 'feat.pdfRotate', x: 300, y: 0, params: { direction: 'cw90', pageRange: '' } },
+        { id: 'o3', type: 'feat.pdfWatermark', x: 600, y: 0, params: { contentMode: 'both', wmText: '工作流测试', wmStyle: 'center', wmColor: '#64748b', wmOpacity: '0.28', wmSize: 'medium', numFormat: 'slash', numPos: 'bc', numStart: '1', pageRange: '' } },
+        { id: 'o4', type: 'feat.pdfCompress', x: 900, y: 0, params: { preset: 'balanced', maxSide: '1920', rasterDpi: '150' } },
+        { id: 'o5', type: 'feat.pdfToWord', x: 1200, y: 0, params: { mode: 'editable', ocrLang: 'auto', keepPageBreak: 'yes', dpiScale: '2', pageRange: '' } },
+        { id: 'o6', type: 'io.save', x: 1500, y: 0, params: { outMode: 'custom', customDir: officeOutDir, suffix: '_office', exportAsFolder: 'flat', noOverwrite: 'no' } },
+      ],
+      edges: [
+        { id: 'oe1', fromNode: 'o1', fromPort: 'media', toNode: 'o2', toPort: 'input' },
+        { id: 'oe2', fromNode: 'o2', fromPort: 'out', toNode: 'o3', toPort: 'input' },
+        { id: 'oe3', fromNode: 'o3', fromPort: 'out', toNode: 'o4', toPort: 'input' },
+        { id: 'oe4', fromNode: 'o4', fromPort: 'out', toNode: 'o5', toPort: 'input' },
+        { id: 'oe5', fromNode: 'o5', fromPort: 'out', toNode: 'o6', toPort: 'media' },
+      ],
+    }, reg);
+
+    const { promise } = runner.execute(flowOffice, runtime, { hwAccel: 'cpu' });
+    const res = await promise;
+    assert.strictEqual(res.summary.exportedFiles.length, 1);
+    const outDocx = res.summary.exportedFiles[0];
+    assert(fs.existsSync(outDocx) && outDocx.endsWith('.docx'), 'PDF 转 Word 应导出 .docx');
+    const z = new AdmZip(outDocx);
+    const docXml = z.getEntry('word/document.xml').getData().toString('utf8');
+    assert(docXml.includes('Workflow Office Pipeline 2026'), '导出的 Word 应保留原文标题');
   });
 
   // 清理测试素材与中间缓存

@@ -5,8 +5,7 @@ const path = require('path');
 const os = require('os');
 const { pathToFileURL } = require('url');
 const hljs = require('highlight.js');
-const { writeBufferAtomically } = require('./utils');
-const { registerCancelableTask, unregisterTask } = require('./runner');
+const { registerCancelableTask, throwIfTaskCancelled, writeTaskOutput } = require('./runner');
 
 function escapeHtml(s) {
   return String(s ?? '')
@@ -605,8 +604,9 @@ function buildStyledHtmlDocument(mdText, opts = {}) {
 }
 
 async function renderHtmlFileToPdf(htmlPath, outputPath, opts) {
+  throwIfTaskCancelled(opts.taskId);
   const { BrowserWindow, session } = require('electron');
-  if (!BrowserWindow) throw new Error('请在桌面客户端中转换 Markdown 或 HTML');
+  if (!BrowserWindow) throw new Error('请在桌面客户端中执行文档转 PDF');
   const printSession = session.fromPartition('vgt-pdf-print');
   // 打印本地文档，不允许文档发起网络请求、下载或打开其他页面。
   printSession.webRequest.onBeforeRequest(({ url }, callback) => {
@@ -635,22 +635,42 @@ async function renderHtmlFileToPdf(htmlPath, outputPath, opts) {
     interruption = message;
     if (!pdfWin.isDestroyed()) pdfWin.destroy();
   };
-  registerCancelableTask(opts.taskId, () => interrupt('任务已取消'));
+  const release = registerCancelableTask(opts.taskId, () => interrupt('任务已取消'));
   const timeout = setTimeout(() => interrupt('文档转换 PDF 超时'), 60000);
   try {
     await pdfWin.loadFile(htmlPath);
     const footer = opts.pageNumbers === 'yes';
     const margin = parseFloat(resolveMarginSpec(opts.margin).mm) / 25.4;
+    const cm = opts.customMarginsIn;
+    const margins = footer
+      ? (cm
+        ? {
+            top: Math.max(0.25, Number(cm.top) || margin),
+            bottom: Math.max(0.45, Number(cm.bottom) || margin),
+            left: Math.max(0.2, Number(cm.left) || margin),
+            right: Math.max(0.2, Number(cm.right) || margin),
+          }
+        : { top: margin, bottom: margin, left: margin, right: margin })
+      : { top: 0, bottom: 0, left: 0, right: 0 };
+
+    const cp = opts.customPageSize;
+    let pageSizeOpt = opts.pageSize === 'letter' ? 'Letter' : 'A4';
+    let landscapeOpt = opts.pageSize === 'a4l';
+    if (cp && Number(cp.widthIn) > 0 && Number(cp.heightIn) > 0) {
+      const wIn = Math.max(1, Number(cp.widthIn));
+      const hIn = Math.max(1, Number(cp.heightIn));
+      landscapeOpt = typeof cp.landscape === 'boolean' ? cp.landscape : wIn > hIn;
+      pageSizeOpt = { width: Math.min(wIn, hIn), height: Math.max(wIn, hIn) };
+    }
+
     const pdf = await pdfWin.webContents.printToPDF({
-      landscape: opts.pageSize === 'a4l',
-      pageSize: opts.pageSize === 'letter' ? 'Letter' : 'A4',
+      landscape: landscapeOpt,
+      pageSize: pageSizeOpt,
       printBackground: true,
       generateTaggedPDF: true,
       generateDocumentOutline: true,
       preferCSSPageSize: !footer,
-      margins: footer
-        ? { top: margin, bottom: margin, left: margin, right: margin }
-        : { top: 0, bottom: 0, left: 0, right: 0 },
+      margins,
       displayHeaderFooter: footer,
       ...(footer ? {
         headerTemplate: '<span></span>',
@@ -658,13 +678,13 @@ async function renderHtmlFileToPdf(htmlPath, outputPath, opts) {
       } : {}),
     });
     if (interruption) throw new Error(interruption);
-    writeBufferAtomically(outputPath, pdf);
+    writeTaskOutput(outputPath, pdf);
   } catch (error) {
     if (interruption) throw new Error(interruption, { cause: error });
     throw error;
   } finally {
     clearTimeout(timeout);
-    unregisterTask(opts.taskId);
+    release();
     printSession.removeListener('will-download', denyDownload);
     if (!pdfWin.isDestroyed()) pdfWin.destroy();
   }
@@ -728,5 +748,6 @@ async function convertDocToPdf(inputPath, outputPath, opts = {}) {
 module.exports = {
   renderMarkdownBody,
   buildStyledHtmlDocument,
+  renderHtmlFileToPdf,
   convertDocToPdf,
 };

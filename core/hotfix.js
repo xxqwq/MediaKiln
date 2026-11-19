@@ -11,7 +11,7 @@ const PREVIEW_VERSION = /^0\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
 
 const DEFAULT_PUBLIC_KEY_PEM = [
   '-----BEGIN PUBLIC KEY-----',
-  'MCowBQYDK2VwAyEAcEZAh2kij15RicPfWuDb3SCEzlAmMCDA0thllib4wzA=',
+  'MCowBQYDK2VwAyEA1NRvVSaNif1dptxq0H5crJq0bFky3FXizJnCAVCEbvQ=',
   '-----END PUBLIC KEY-----',
 ].join('\n');
 
@@ -20,6 +20,8 @@ const MIRROR_PREFIXES = {
   ghproxy: 'https://gh-proxy.com/',
   ghfast: 'https://ghfast.top/',
 };
+
+const SIGNED_MANIFEST_FILE = '.vgt-signed-manifest.json';
 
 const REQUIRED_BUNDLE_FILES = [
   'ffmpeg.js',
@@ -113,9 +115,9 @@ function loadState(stateFile) {
   const raw = readJsonSafe(stateFile);
   if (!raw || typeof raw !== 'object') return defaultState();
   return {
-    activeVersion: typeof raw.activeVersion === 'string' && raw.activeVersion ? raw.activeVersion : null,
-    previousVersion: typeof raw.previousVersion === 'string' && raw.previousVersion ? raw.previousVersion : null,
-    pendingVersion: typeof raw.pendingVersion === 'string' && raw.pendingVersion ? raw.pendingVersion : null,
+    activeVersion: PREVIEW_VERSION.test(raw.activeVersion) ? raw.activeVersion : null,
+    previousVersion: PREVIEW_VERSION.test(raw.previousVersion) ? raw.previousVersion : null,
+    pendingVersion: PREVIEW_VERSION.test(raw.pendingVersion) ? raw.pendingVersion : null,
     badVersions: Array.isArray(raw.badVersions) ? raw.badVersions.filter((x) => typeof x === 'string') : [],
     lastCheckedAt: Number.isFinite(raw.lastCheckedAt) ? raw.lastCheckedAt : 0,
   };
@@ -130,38 +132,49 @@ function getReleaseDir(version) {
   return path.join(_ctx.releasesDir, version);
 }
 
-function validateBundleDir(dir, shellVersion) {
-  if (!dir || !fs.existsSync(dir)) return { ok: false, error: '热更新目录不存在' };
-  for (const rel of REQUIRED_BUNDLE_FILES) {
-    const full = path.join(dir, rel);
-    if (!fs.existsSync(full) || !fs.statSync(full).isFile()) {
-      return { ok: false, error: `缺少必要文件: ${rel}` };
+function validateBundleDir(dir, shellVersion, publicKeyPem = _ctx?.publicKeyPem || DEFAULT_PUBLIC_KEY_PEM) {
+  try {
+    if (!dir || !fs.lstatSync(dir).isDirectory()) throw new Error('热更新目录无效');
+    const receiptPath = path.join(dir, SIGNED_MANIFEST_FILE);
+    const metaPath = path.join(dir, 'bundle-meta.json');
+    if (!fs.lstatSync(receiptPath).isFile() || !fs.lstatSync(metaPath).isFile()) {
+      throw new Error('热更新签名记录或元数据无效');
     }
-  }
-  const meta = readJsonSafe(path.join(dir, 'bundle-meta.json'));
-  if (!meta || !PREVIEW_VERSION.test(meta.version)) {
-    return { ok: false, error: 'bundle-meta.json 无效' };
-  }
-  const minShell = meta.minShellVersion || '0.0.0';
-  if (!PREVIEW_VERSION.test(minShell)) {
-    return { ok: false, error: '包内主程序版本号无效' };
-  }
-  if (compareSemver(minShell, shellVersion) > 0) {
-    return { ok: false, error: `需要主程序壳版本 >= ${minShell}（当前 ${shellVersion}）` };
-  }
-  if (meta.filesSha256 && typeof meta.filesSha256 === 'object') {
-    for (const [rel, expectedHash] of Object.entries(meta.filesSha256)) {
-      if (rel === 'bundle-meta.json' || rel.includes('..') || path.isAbsolute(rel)) continue;
-      const target = path.join(dir, rel);
-      if (!fs.existsSync(target) || !fs.statSync(target).isFile()) {
-        return { ok: false, error: `校验文件缺失: ${rel}` };
-      }
-      if (sha256File(target) !== String(expectedHash).toLowerCase()) {
-        return { ok: false, error: `文件校验不通过: ${rel}` };
-      }
+    const receipt = normalizeManifest(readJsonSafe(receiptPath));
+    requireSignedManifest(receipt, publicKeyPem);
+    const metadata = fs.readFileSync(metaPath);
+    if (sha256Buffer(metadata) !== receipt.bundleMetaSha256) throw new Error('包内元数据校验失败');
+    const meta = JSON.parse(metadata.toString('utf8'));
+    if (meta.version !== receipt.version || meta.minShellVersion !== receipt.minShellVersion) {
+      throw new Error('包内版本号与签名清单不一致');
     }
+    if (compareSemver(receipt.minShellVersion, shellVersion) > 0) {
+      throw new Error('需要主程序壳版本 >= ' + receipt.minShellVersion);
+    }
+    const expected = new Map(Object.entries(meta.filesSha256 || {}));
+    for (const rel of REQUIRED_BUNDLE_FILES) {
+      if (rel !== 'bundle-meta.json' && !expected.has(rel)) throw new Error('缺少必要文件: ' + rel);
+    }
+    const checkFiles = (folder, prefix = '') => {
+      for (const ent of fs.readdirSync(folder, { withFileTypes: true })) {
+        const rel = prefix + ent.name;
+        const full = path.join(folder, ent.name);
+        if (!prefix && [SIGNED_MANIFEST_FILE, 'bundle-meta.json'].includes(ent.name)) continue;
+        if (ent.isDirectory() && (prefix || ['core', 'modules', 'renderer'].includes(ent.name))) {
+          checkFiles(full, rel + '/');
+        } else if (!ent.isFile() || !expected.has(rel) || sha256File(full) !== expected.get(rel)) {
+          throw new Error('校验文件不通过: ' + rel);
+        } else {
+          expected.delete(rel);
+        }
+      }
+    };
+    checkFiles(dir);
+    if (expected.size) throw new Error('热更新包缺少签名清单中的文件');
+    return { ok: true, meta };
+  } catch (err) {
+    return { ok: false, error: err.message };
   }
-  return { ok: true, meta };
 }
 
 function pruneReleases() {
@@ -184,7 +197,7 @@ function pruneReleases() {
   } catch {}
 }
 
-function initHotfix({ shellRoot, userDataDir }) {
+function initHotfix({ shellRoot, userDataDir, publicKeyPem = DEFAULT_PUBLIC_KEY_PEM }) {
   const pkg = readJsonSafe(path.join(shellRoot, 'package.json')) || {};
   const builtinVersion = String(pkg.version || '0.0.0').replace(/^v/i, '');
   const shellVersion = String(pkg.shellVersion || builtinVersion).replace(/^v/i, '');
@@ -192,13 +205,15 @@ function initHotfix({ shellRoot, userDataDir }) {
   process.env.VGT_APP_ROOT = shellRoot;
   ensureShellNodeModulesHook(shellRoot);
 
-  const hotfixDir = path.join(userDataDir, 'hotfix-v0');
+  const hotfixDir = path.join(userDataDir, 'hotfix-signed-v0');
   const releasesDir = path.join(hotfixDir, 'releases');
   const tmpDir = path.join(hotfixDir, 'tmp');
   const stateFile = path.join(hotfixDir, 'state.json');
 
-  fs.mkdirSync(releasesDir, { recursive: true });
-  fs.mkdirSync(tmpDir, { recursive: true });
+  for (const dir of [hotfixDir, releasesDir, tmpDir]) {
+    fs.mkdirSync(dir, { recursive: true });
+    if (!fs.lstatSync(dir).isDirectory()) throw new Error('热更新目录不能使用链接');
+  }
 
   const state = loadState(stateFile);
   let stateDirty = false;
@@ -239,8 +254,8 @@ function initHotfix({ shellRoot, userDataDir }) {
       stateDirty = true;
     } else {
       const candidateDir = path.join(releasesDir, state.activeVersion);
-      const check = validateBundleDir(candidateDir, shellVersion);
-      if (check.ok) {
+      const check = validateBundleDir(candidateDir, shellVersion, publicKeyPem);
+      if (check.ok && check.meta.version === state.activeVersion) {
         activeRoot = candidateDir;
         activeMeta = check.meta;
         state.pendingVersion = state.activeVersion;
@@ -264,6 +279,8 @@ function initHotfix({ shellRoot, userDataDir }) {
     stateFile,
     builtinVersion,
     shellVersion,
+    publicKeyPem,
+    installing: false,
     state,
     activeRoot,
     activeMeta,
@@ -372,6 +389,7 @@ function normalizeManifest(raw) {
     bundleUrl,
     bundleSize: Number(raw.bundleSize) || 0,
     bundleSha256,
+    bundleMetaSha256: String(raw.bundleMetaSha256 || '').trim().toLowerCase(),
     signature: String(raw.signature || '').trim(),
     fullReleaseUrl: String(raw.fullReleaseUrl || `https://github.com/${GITHUB_REPO}/releases/tag/v${version}`),
     portableAssetUrl: String(raw.portableAssetUrl || ''),
@@ -380,18 +398,18 @@ function normalizeManifest(raw) {
 }
 
 function buildManifestSignPayload(manifest) {
-  const m = manifest || {};
-  const ver = String(m.version || '').trim().replace(/^v/i, '');
-  const minShell = String(m.minShellVersion || '0.0.0').trim().replace(/^v/i, '');
-  const sha = String(m.bundleSha256 || '').trim().toLowerCase();
-  const size = Number(m.bundleSize) || 0;
-  return `vgt-hotfix-v1\n${ver}\n${minShell}\n${sha}\n${size}`;
+  const m = normalizeManifest(manifest);
+  return JSON.stringify([
+    'vgt-hotfix-v2', m.version, m.minShellVersion, m.bundleSha256, m.bundleMetaSha256,
+    m.bundleSize, m.bundleName, m.bundleUrl, m.fullReleaseUrl, m.portableAssetUrl,
+    m.setupAssetUrl, m.publishedAt, m.notes,
+  ]);
 }
 
 function signManifest(manifest, privateKeyPem) {
   if (!privateKeyPem) throw new Error('缺少 Ed25519 私钥');
   const payload = Buffer.from(buildManifestSignPayload(manifest), 'utf8');
-  const keyObj = crypto.createPrivateKey(privateKeyPem);
+  const keyObj = privateKeyPem instanceof crypto.KeyObject ? privateKeyPem : crypto.createPrivateKey(privateKeyPem);
   return crypto.sign(null, payload, keyObj).toString('base64');
 }
 
@@ -399,7 +417,7 @@ function verifyManifestSignature(manifest, publicKeyPem) {
   try {
     const sigB64 = String(manifest?.signature || '').trim();
     if (!sigB64) return false;
-    const pub = publicKeyPem || process.env.VGT_HOTFIX_PUBLIC_KEY || DEFAULT_PUBLIC_KEY_PEM;
+    const pub = publicKeyPem || DEFAULT_PUBLIC_KEY_PEM;
     if (!pub) return false;
     const payload = Buffer.from(buildManifestSignPayload(manifest), 'utf8');
     const sigBuf = Buffer.from(sigB64, 'base64');
@@ -407,6 +425,14 @@ function verifyManifestSignature(manifest, publicKeyPem) {
     return crypto.verify(null, payload, keyObj, sigBuf);
   } catch {
     return false;
+  }
+}
+
+function requireSignedManifest(manifest, publicKeyPem) {
+  if (!verifyManifestSignature(manifest, publicKeyPem)
+    || !/^[a-f0-9]{64}$/.test(manifest.bundleMetaSha256)
+    || !/^[a-f0-9]{64}$/.test(manifest.bundleSha256)) {
+    throw new Error('热更新清单 Ed25519 签名校验失败');
   }
 }
 
@@ -452,9 +478,13 @@ async function checkForUpdates(opts = {}) {
   const candidates = buildCandidateUrls(manifestUrl || PREVIEW_RELEASE_FEED_URL, mirrorPref);
   const fetchImpl = opts.fetchImpl;
   const timeoutMs = Number(opts.timeoutMs) || 7000;
-  const fetchCandidate = (candidate) => fetchManifestFrom(candidate, {
-    timeoutMs, fetchImpl, discoverPreview: !manifestUrl,
-  });
+  const fetchCandidate = async (candidate) => {
+    const result = await fetchManifestFrom(candidate, {
+      timeoutMs, fetchImpl, discoverPreview: !manifestUrl,
+    });
+    requireSignedManifest(result.manifest, _ctx.publicKeyPem);
+    return result;
+  };
 
   const hit = candidates.length === 1
     ? await fetchCandidate(candidates[0])
@@ -465,14 +495,6 @@ async function checkForUpdates(opts = {}) {
 
   const status = getStatus();
   const { manifest, mirror } = hit;
-
-  const requireSig = Boolean(opts.requireSignature || process.env.VGT_HOTFIX_REQUIRE_SIG === '1');
-  if (manifest.signature || requireSig) {
-    const pubKey = opts.publicKeyPem || process.env.VGT_HOTFIX_PUBLIC_KEY || DEFAULT_PUBLIC_KEY_PEM;
-    if (!verifyManifestSignature(manifest, pubKey)) {
-      throw new Error('热更新清单 Ed25519 签名校验失败');
-    }
-  }
 
   if (compareSemver(manifest.version, status.effectiveVersion) <= 0) {
     return {
@@ -615,12 +637,10 @@ function extractBundleZip(zipPath, stagingDir) {
 async function downloadAndInstall(manifestInput, opts = {}) {
   if (!_ctx) throw new Error('hotfix 未初始化');
   const manifest = normalizeManifest(manifestInput);
-  const requireSig = Boolean(opts.requireSignature || process.env.VGT_HOTFIX_REQUIRE_SIG === '1');
-  if (manifest.signature || requireSig) {
-    const pubKey = opts.publicKeyPem || process.env.VGT_HOTFIX_PUBLIC_KEY || DEFAULT_PUBLIC_KEY_PEM;
-    if (!verifyManifestSignature(manifest, pubKey)) {
-      throw new Error('热更新清单 Ed25519 签名校验失败');
-    }
+  requireSignedManifest(manifest, _ctx.publicKeyPem);
+  if (_ctx.installing) throw new Error('已有热更新正在安装');
+  if (compareSemver(manifest.version, getStatus().effectiveVersion) <= 0) {
+    throw new Error('只能安装比当前版本更新的热更新');
   }
   if (compareSemver(manifest.minShellVersion, _ctx.shellVersion) > 0) {
     throw new Error(`当前壳版本 ${_ctx.shellVersion} 过旧，需先安装主程序 >= ${manifest.minShellVersion}`);
@@ -635,6 +655,7 @@ async function downloadAndInstall(manifestInput, opts = {}) {
   const stagingDir = path.join(_ctx.releasesDir, `.staging-${manifest.version}-${Date.now()}`);
   const finalDir = getReleaseDir(manifest.version);
 
+  _ctx.installing = true;
   try {
     let lastErr = null;
     let downloaded = false;
@@ -669,13 +690,11 @@ async function downloadAndInstall(manifestInput, opts = {}) {
 
     opts.onProgress?.({ stage: 'extracting', ratio: 1 });
     extractBundleZip(zipPath, stagingDir);
+    writeJsonAtomic(path.join(stagingDir, SIGNED_MANIFEST_FILE), manifest);
 
     const validation = validateBundleDir(stagingDir, _ctx.shellVersion);
     if (!validation.ok) {
       throw new Error(validation.error);
-    }
-    if (validation.meta.version !== manifest.version) {
-      throw new Error(`包内版本号 (${validation.meta.version}) 与清单 (${manifest.version}) 不一致`);
     }
 
     if (typeof opts.validateBundleFn === 'function') {
@@ -695,7 +714,7 @@ async function downloadAndInstall(manifestInput, opts = {}) {
 
     _ctx.state.previousVersion = prev || null;
     _ctx.state.activeVersion = manifest.version;
-    _ctx.state.pendingVersion = manifest.version;
+    _ctx.state.pendingVersion = null;
     _ctx.state.badVersions = _ctx.state.badVersions.filter((v) => v !== manifest.version);
     _ctx.activeRoot = finalDir;
     _ctx.activeMeta = validation.meta;
@@ -708,6 +727,7 @@ async function downloadAndInstall(manifestInput, opts = {}) {
       meta: validation.meta,
     };
   } finally {
+    _ctx.installing = false;
     fs.rmSync(zipPath, { force: true });
     fs.rmSync(stagingDir, { recursive: true, force: true });
   }
@@ -717,7 +737,9 @@ function activateAppliedRoot(releaseDir, version) {
   if (!_ctx) return;
   _ctx.activeRoot = releaseDir;
   _ctx.state.activeVersion = version;
+  _ctx.state.pendingVersion = version;
   _ctx.pendingRestart = false;
+  saveState();
 }
 
 function setPendingRestart(flag) {
@@ -748,7 +770,8 @@ function rollbackToPrevious(errVersion) {
 
   if (_ctx.state.previousVersion && !_ctx.state.badVersions.includes(_ctx.state.previousVersion)) {
     const prevDir = getReleaseDir(_ctx.state.previousVersion);
-    if (validateBundleDir(prevDir, _ctx.shellVersion).ok) {
+    const validation = validateBundleDir(prevDir, _ctx.shellVersion);
+    if (validation.ok && validation.meta.version === _ctx.state.previousVersion) {
       targetRoot = prevDir;
       nextActive = _ctx.state.previousVersion;
     }

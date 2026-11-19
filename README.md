@@ -21,16 +21,16 @@ Windows 本地离线多媒体与文档处理桌面应用，基于 Electron + FFm
 
 - **🛠️ 单工具模式 & 🕸️ 节点画布模式**：顶部/侧栏一键切换「单工具」快速处理与「节点画布」可视化工作流编排，支持参数面板一键「🕸️ 带参数入画布」、命名参数预设保存以及全局 `Ctrl+V` 粘贴剪贴板截图/文件。
 - **🕸️ 节点画布工作流**：
-  - 提供 **72 个节点**（9 个输入、输出与分流节点，加上 63 个功能节点）和 **7 套模板**。
+  - 提供 **79 个节点**（9 个输入、输出与分流节点，加上 70 个功能节点）和 **7 套模板**。
   - 支持连接类型校验、**多分支 DAG 并行调度与并发 List-Map**、**文件夹递归扫描**、**按格式/条件多路分流**（含 PDF 专属路由、空分支自动跳过、多分支汇总导出）、**画布分组注释便签**、节点 Bypass 旁路跳过、**增量智能缓存**（自动容量与过期清理、支持自定义缓存目录）以及工作流 JSON 导入导出。
-- **📦 批量队列处理**：除需交互框选/标段或原位回填的功能（画面裁剪、局部打码、多段剪辑、图片放回原位）及 5 个多文件合并/拼图/转 PDF 功能外，其余 **47 个功能**均支持一次选择或拖入多个文件批量处理（图片/SVG 队列自动 3 路并发加速，支持随时 `+ 添加文件`、移除队列项、独立定位输出文件与中途取消）。
+- **📦 批量队列处理**：**60 个功能**支持一次选择或拖入多个文件批量处理（图片/SVG 队列自动 3 路并发加速，支持随时 `+ 添加文件`、移除队列项、独立定位输出文件与中途取消）。
 - **🔍 放大预览与对比**：处理完成后点击预览图或「⛶ 放大对比」，支持**并排同步缩放/平移**与**卷帘对比**（支持视频、GIF、位图与 SVG 矢量 vs 位图）。
-- **⚡ 轻量级业务热更新**支持应用内检查、国内镜像、SHA-256 校验与启动异常回滚，也可校验已签名的 Ed25519 清单。升级客户端壳或新增内置依赖时，应用会提示下载完整程序。
+- **⚡ 轻量级业务热更新**要求 Ed25519 发布签名，并用 SHA-256 校验下载与本地缓存。启动异常时回滚。客户端壳升级需要下载完整程序。
 - **⚙️ 全局输出与硬件加速**：支持设置输出位置（源文件同目录 / `output` 子目录 / 自定义文件夹）、防覆盖自动编号，以及视频硬件编码加速（支持 **H.264 / H.265(HEVC) / AV1**，自动检测 NVIDIA NVENC / Intel QSV / AMD AMF 与 CPU 回退）。
 
 ---
 
-## 功能清单（63 个，8 大类）
+## 功能清单（70 个，8 大类）
 
 ### 转换
 | 功能 | 说明 |
@@ -80,9 +80,16 @@ Windows 本地离线多媒体与文档处理桌面应用，基于 Electron + FFm
 | ✨ Word / PPT 图片统一美化 | 一键为 `.docx` / `.pptx` 指定章节或全篇图片批量添加抗锯齿圆角、纯色边框或中文字体水印 |
 | 📝 Markdown 图片整理 | 将 `.md` 中的网络图/本地图/Base64/内联 SVG 一键归拢至 `assets/` 并重写相对路径、全部内嵌为单文件 Base64，或安全清理资源子目录未使用图片 |
 | 🖨️ MD / HTML 排版转 PDF | 离线导出 Markdown 和本地 HTML，支持 PDF 目录、代码高亮、表格与页码 |
+| 📘 Word 转 PDF | 离线将 `.docx` / `.doc` 高清转换为矢量 PDF，智能优先调用本机 Office / WPS / LibreOffice 原生引擎并自动回退内置排版引擎（保留文本框/公式/表格/图片与大纲书签） |
+| 📝 PDF 转 Word | 离线将 PDF 转为可编辑 `.docx`，自动重建可编辑表格 `<w:tbl>`、提取内嵌配图混排并识别双栏阅读顺序；扫描件自动启用 Windows 离线 OCR 中英文识别 |
+| 🗜️ PDF 压缩瘦身 | 按画质档位或目标大小压缩并保留可选中文字，也可选择全页栅格化 |
+| 🔍 扫描件转可搜索 PDF | 离线 OCR 为扫描页添加可搜索和复制的文字层，并保留页面画面 |
+| ✂️ PDF 批量裁白边 | 预览自动检测的裁剪框，按指定边距批量裁去页边空白，保留文字和矢量内容 |
+| 🔁 PDF 页面旋转 | 无损旋转 PDF 全部或指定页码范围（顺时针 90° / 逆时针 90° / 180°） |
+| 🏷️ PDF 水印与页码 | 为 PDF 批量叠加全屏斜向平铺/居中/角落中文水印，或添加页脚/页眉页码（支持跳过封面） |
 | 📄 多图合并为 PDF | 将多张图片离线合成为单份 PDF 1.4 文档，支持 A4 竖向 / A4 横向 / 按每张图片原尺寸自适应与三档画质 |
 | 🖼️ PDF 转图片 / 长图 | 基于系统原生渲染离线将 PDF 导出为逐页高清图片（PNG/JPG/WebP），或拼接为单张纵向长图（支持指定页码范围与倍率） |
-| 📚 PDF 合并 | 将多份 PDF 文档按顺序离线无损合并为单份 PDF（支持拖拽调整合并顺序） |
+| 📚 PDF 页面整理 / 合并 | 用缩略图拖拽重排、旋转、移除或恢复页面，也可以把多份 PDF 整理成一份 |
 | ✂️ PDF 拆分 / 重排 | 按输入顺序提取或重排页面，例如 `3, 1-2`。也可删除指定页或按固定页数拆分 |
 
 ### 剪辑
@@ -142,6 +149,8 @@ npm run dist                   # 打包便携版 + 安装版到 release/
 npm run release                # 一键发布（支持 -Bump patch/minor/major 与 -HotfixOnly）
 ```
 
+签名构建从 `VGT_HOTFIX_PRIVATE_KEY` 读取私钥文件路径或私钥内容。发布包使用与客户端内置公钥匹配的 Ed25519 私钥。
+
 > 若在无头环境下运行 Electron UI 自检（`scripts/workflow-ui-check.js`），请先清空环境变量 `ELECTRON_RUN_AS_NODE` 后再用 `node_modules\electron\dist\electron.exe scripts\workflow-ui-check.js` 启动。
 
 ## 代码结构
@@ -156,6 +165,7 @@ core/
   ├── ffmpeg-bin.js     内置 FFmpeg 路径解析、Brotli 自动解压与 SHA-256 校验
   ├── runner.js         ffprobe / ffmpeg / SVG / PDF / 文档探测与 AsyncLocalStorage 并发安全执行器
   ├── pdf-engine.js     零依赖离线 PDF 引擎（WinRT 高清渲染 + 纯 Node XRef/ObjStm 无损合并与拆分）
+  ├── pdf-office.js     离线 Word ↔ PDF 互转（DOCX/PDF 解析 + WinRT OCR）与 PDF 压缩/旋转/水印页码引擎
   ├── svg-worker.js     SVG 渲染 / 压缩 / 位图矢量化 Worker 子线程（不阻塞主进程且支持立即取消）
   ├── doc-parser.js     DOCX / PPTX / MD 媒体解析、冗余关系扫描与安全替换回填
   └── utils.js          动态系统字体探测、滤镜拼装、并发池 mapConcurrent、GIF 调色板与 PGM 遮罩工具
@@ -163,9 +173,9 @@ modules/                功能实现：video.js、image.js、svg.js、document.j
 preload.js              contextBridge 安全桥接（含安全 toFileUrl 编码与 webUtils.getPathForFile 拖拽路径获取）
 renderer/
   ├── app.js            单工具主界面、并发批量队列、全局 Ctrl+V 粘贴与工作流桥接
-  ├── features/         63 个功能注册表（video-gif.js、image.js、svg.js、document.js）
+  ├── features/         70 个功能注册表（video-gif.js、image.js、svg.js、document.js）
   ├── ui/               参数面板（含命名预设与带参数入画布）、裁剪画布、放大对比弹窗、热更新弹窗
-  └── workflow/         节点画布、并行 DAG 执行引擎、72 个节点与 7 套模板
+  └── workflow/         节点画布、并行 DAG 执行引擎、79 个节点与 7 套模板
 bin/                    内置 FFmpeg 9.0.2（gyan.dev）：仓库内置 .br 压缩包（每件 ~28MB）与 binaries.json；安装/启动自动解压，打包时经 extraResources 释放
 scripts/                ensure-ffmpeg.js、build-hotfix.js、hotfix-test.js、smoke-test.js、workflow-test.js、workflow-ui-check.js、webp-check.js、release.ps1
 website/                产品官网（Astro 静态站点，构建时自动读取功能/节点/模板注册表；见 website/README.md）

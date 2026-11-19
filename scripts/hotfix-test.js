@@ -56,8 +56,10 @@ function createFakeBundleZip({ version = '0.9.9', minShellVersion = '0.1.0', ext
   addReal('core/utils.js');
   addReal('core/svg-worker.js');
   addReal('core/pdf-engine.js');
+  addReal('core/pdf-office.js');
   addReal('core/md-renderer.js');
   addReal('core/doc-parser.js');
+  addReal('core/doc-replacements.js');
   addReal('core/ffmpeg-bin.js');
   addReal('core/file-filters.js');
   addReal('modules/video.js');
@@ -90,9 +92,19 @@ async function run() {
   const tmpSignedOut = makeTempDir('vgt-hotfix-sigout-');
   const tmpSignedUserData = makeTempDir('vgt-hotfix-sigud-');
 
+  const { publicKey: publicKeyPem, privateKey: privateKeyPem } = crypto.generateKeyPairSync('ed25519', {
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+  });
+  const sign = (manifest, bundle) => {
+    const metaSha = bundle ? hotfix.sha256Buffer(new AdmZip(bundle).readFile('bundle-meta.json')) : '1'.repeat(64);
+    const fields = { bundleMetaSha256: metaSha, ...manifest };
+    return { ...fields, signature: hotfix.signManifest(fields, privateKeyPem) };
+  };
+
   try {
     // 1. 打包测试
-    const built = buildHotfix({ outDir: tmpOut, notes: '测试热更新发布说明' });
+    const built = buildHotfix({ outDir: tmpOut, notes: '测试热更新发布说明', privateKeyPem, publicKeyPem });
     assert(fs.existsSync(built.bundlePath), 'bundle zip should exist');
     assert(fs.existsSync(built.manifestPath), 'manifest json should exist');
     assert(built.bundleSize > 10000 && built.bundleSize < 2 * 1024 * 1024, `unexpected bundle size: ${built.bundleSize}`);
@@ -102,6 +114,7 @@ async function run() {
     assert(entryNames.includes('ffmpeg.js'), 'bundle must include ffmpeg.js');
     assert(entryNames.includes('core/svg-worker.js'), 'bundle must include core/svg-worker.js');
     assert(entryNames.includes('core/pdf-engine.js'), 'bundle must include core/pdf-engine.js');
+    assert(entryNames.includes('core/pdf-office.js'), 'bundle must include core/pdf-office.js');
     assert(entryNames.includes('core/md-renderer.js'), 'bundle must include core/md-renderer.js');
     assert(entryNames.includes('core/file-filters.js'), 'bundle must include core/file-filters.js');
     assert(entryNames.includes('renderer/index.html'), 'bundle must include renderer/index.html');
@@ -109,11 +122,11 @@ async function run() {
     console.log(`[1/8] buildHotfix OK (${(built.bundleSize / 1024).toFixed(1)} KB, ${built.fileCount} files)`);
 
     // 2. 初始化测试
-    const legacyDir = path.join(tmpUserData, 'hotfix');
+    const legacyDir = path.join(tmpUserData, 'hotfix-v0');
     fs.mkdirSync(legacyDir);
     const legacyState = path.join(legacyDir, 'state.json');
     fs.writeFileSync(legacyState, '{"activeVersion":"2.1.10"}');
-    const st0 = hotfix.initHotfix({ shellRoot: ROOT, userDataDir: tmpUserData });
+    const st0 = hotfix.initHotfix({ shellRoot: ROOT, userDataDir: tmpUserData, publicKeyPem });
     assert.strictEqual(st0.isHotfix, false);
     assert.strictEqual(st0.activeRoot, ROOT);
     assert.strictEqual(fs.readFileSync(legacyState, 'utf8'), '{"activeVersion":"2.1.10"}');
@@ -133,12 +146,12 @@ async function run() {
       manifestUrl,
       fetchImpl: makeMockFetch({
         [manifestUrl]: {
-          json: {
+          json: sign({
             version: curVer,
             minShellVersion: curVer,
             bundleUrl,
             bundleSha256: sha099,
-          },
+          }),
         },
       }),
     });
@@ -149,12 +162,12 @@ async function run() {
       manifestUrl,
       fetchImpl: makeMockFetch({
         [manifestUrl]: {
-          json: {
+          json: sign({
             version: '0.99.0',
             minShellVersion: '0.99.0',
             bundleUrl,
             bundleSha256: sha099,
-          },
+          }),
         },
       }),
     });
@@ -165,14 +178,14 @@ async function run() {
       manifestUrl,
       fetchImpl: makeMockFetch({
         [manifestUrl]: {
-          json: {
+          json: sign({
             version: '0.9.9',
             minShellVersion: pkg.shellVersion || curVer,
             bundleUrl,
             bundleSize: bundle099.length,
             bundleSha256: sha099,
             notes: '测试新版本',
-          },
+          }, bundle099),
         },
       }),
     });
@@ -205,7 +218,7 @@ async function run() {
     // 4. SHA-256 篡改拒绝 + 路径穿越拒绝
     await assert.rejects(
       () => hotfix.downloadAndInstall(
-        { ...availRes.manifest, bundleSha256: '0'.repeat(64) },
+        sign({ ...availRes.manifest, bundleSha256: '0'.repeat(64) }),
         { mirror: 'official', fetchImpl: makeMockFetch({ [bundleUrl]: { buffer: bundle099 } }) },
       ),
       /SHA-256/,
@@ -217,7 +230,7 @@ async function run() {
     const evilBuf = evilZip.toBuffer();
     await assert.rejects(
       () => hotfix.downloadAndInstall(
-        { ...availRes.manifest, bundleSha256: hotfix.sha256Buffer(evilBuf) },
+        sign({ ...availRes.manifest, bundleSha256: hotfix.sha256Buffer(evilBuf) }),
         { mirror: 'official', fetchImpl: makeMockFetch({ [bundleUrl]: { buffer: evilBuf } }) },
       ),
       /非法路径/,
@@ -244,19 +257,19 @@ async function run() {
     assert.strictEqual(applyRes.version, '0.9.9');
     assert(loadedFfmpegFromHotfix);
 
-    // 模拟冷启动 + confirmBoot
-    hotfix.confirmBoot('0.9.9');
-    const stAfterBoot = hotfix.initHotfix({ shellRoot: ROOT, userDataDir: tmpUserData });
+    // 模拟运行中收到更新，首次重启仍可加载已签名的版本。
+    hotfix.setPendingRestart(true);
+    const stAfterBoot = hotfix.initHotfix({ shellRoot: ROOT, userDataDir: tmpUserData, publicKeyPem });
     assert.strictEqual(stAfterBoot.isHotfix, true);
     assert.strictEqual(stAfterBoot.effectiveVersion, '0.9.9');
     hotfix.confirmBoot('0.9.9');
     console.log('[5/8] downloadAndInstall + external module/bin resolution + confirmBoot OK');
 
     // 6. 模拟启动未确认即崩溃 -> 自动回滚并标坏
-    const stCrashInit = hotfix.initHotfix({ shellRoot: ROOT, userDataDir: tmpUserData });
+    const stCrashInit = hotfix.initHotfix({ shellRoot: ROOT, userDataDir: tmpUserData, publicKeyPem });
     assert.strictEqual(stCrashInit.isHotfix, true); // 设置 pendingVersion = 0.9.9，故意不调用 confirmBoot()
 
-    const stRecovered = hotfix.initHotfix({ shellRoot: ROOT, userDataDir: tmpUserData });
+    const stRecovered = hotfix.initHotfix({ shellRoot: ROOT, userDataDir: tmpUserData, publicKeyPem });
     assert.strictEqual(stRecovered.isHotfix, false);
     assert.strictEqual(stRecovered.rolledBackFrom, '0.9.9');
     assert(stRecovered.badVersions.includes('0.9.9'));
@@ -276,50 +289,41 @@ async function run() {
       path.join(tmpShellUpgrade, 'package.json'),
       JSON.stringify({ version: '0.10.0', shellVersion: '0.10.0' }),
     );
-    const stShellUpgraded = hotfix.initHotfix({ shellRoot: tmpShellUpgrade, userDataDir: tmpUserData });
+    const stShellUpgraded = hotfix.initHotfix({ shellRoot: tmpShellUpgrade, userDataDir: tmpUserData, publicKeyPem });
     assert.strictEqual(stShellUpgraded.isHotfix, false);
     assert.strictEqual(stShellUpgraded.effectiveVersion, '0.10.0');
     console.log('[7/8] builtin shell upgrade precedence OK');
 
     // 8. Ed25519 清单签名构建与校验测试
-    const { publicKey: publicKeyPem, privateKey: privateKeyPem } = crypto.generateKeyPairSync('ed25519', {
-      publicKeyEncoding: { type: 'spki', format: 'pem' },
-      privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
-    });
-
     const signedBuild = buildHotfix({
       outDir: tmpSignedOut,
       notes: '签名测试版本',
       privateKeyPem,
+      publicKeyPem,
     });
     assert(signedBuild.manifest.signature && signedBuild.manifest.signature.length > 20, 'signed manifest must include signature');
     assert.strictEqual(hotfix.verifyManifestSignature(signedBuild.manifest, publicKeyPem), true);
 
-    hotfix.initHotfix({ shellRoot: ROOT, userDataDir: tmpSignedUserData });
+    hotfix.initHotfix({ shellRoot: ROOT, userDataDir: tmpSignedUserData, publicKeyPem });
     const bundle098 = createFakeBundleZip({ version: '0.9.8', minShellVersion: pkg.shellVersion || curVer });
-    const signedManifest = {
+    const signedManifest = sign({
       version: '0.9.8',
       minShellVersion: pkg.shellVersion || curVer,
       bundleUrl: 'https://example.test/hotfix-bundle-0.9.8.zip',
       bundleSize: bundle098.length,
       bundleSha256: hotfix.sha256Buffer(bundle098),
       notes: '签名验证测试',
-    };
-    signedManifest.signature = hotfix.signManifest(signedManifest, privateKeyPem);
+    }, bundle098);
 
     const signedCheck = await hotfix.checkForUpdates({
       mirror: 'official',
       manifestUrl,
-      publicKeyPem,
-      requireSignature: true,
       fetchImpl: makeMockFetch({ [manifestUrl]: { json: signedManifest } }),
     });
     assert.strictEqual(signedCheck.status, 'hotfix-available');
 
     const signedApply = await hotfix.downloadAndInstall(signedManifest, {
       mirror: 'official',
-      publicKeyPem,
-      requireSignature: true,
       fetchImpl: makeMockFetch({ [signedManifest.bundleUrl]: { buffer: bundle098 } }),
     });
     assert.strictEqual(signedApply.ok, true);
@@ -330,8 +334,6 @@ async function run() {
       () => hotfix.checkForUpdates({
         mirror: 'official',
         manifestUrl,
-        publicKeyPem,
-        requireSignature: true,
         fetchImpl: makeMockFetch({
           [manifestUrl]: { json: { ...signedManifest, bundleSha256: 'a'.repeat(64) } },
         }),
@@ -341,7 +343,7 @@ async function run() {
     await assert.rejects(
       () => hotfix.downloadAndInstall(
         { ...signedManifest, bundleSha256: 'a'.repeat(64) },
-        { mirror: 'official', publicKeyPem, requireSignature: true, fetchImpl: makeMockFetch({ [signedManifest.bundleUrl]: { buffer: bundle098 } }) },
+        { mirror: 'official', fetchImpl: makeMockFetch({ [signedManifest.bundleUrl]: { buffer: bundle098 } }) },
       ),
       /签名校验失败/,
     );
@@ -351,8 +353,6 @@ async function run() {
       () => hotfix.checkForUpdates({
         mirror: 'official',
         manifestUrl,
-        publicKeyPem,
-        requireSignature: true,
         fetchImpl: makeMockFetch({
           [manifestUrl]: { json: { ...signedManifest, signature: Buffer.from('forged-signature').toString('base64') } },
         }),
@@ -360,15 +360,13 @@ async function run() {
       /签名校验失败/,
     );
 
-    // 缺失签名且 requireSignature: true 应被拒绝
+    // 缺失签名必须拒绝
     const unsignedManifest = { ...signedManifest };
     delete unsignedManifest.signature;
     await assert.rejects(
       () => hotfix.checkForUpdates({
         mirror: 'official',
         manifestUrl,
-        publicKeyPem,
-        requireSignature: true,
         fetchImpl: makeMockFetch({ [manifestUrl]: { json: unsignedManifest } }),
       }),
       /签名校验失败/,
@@ -376,10 +374,21 @@ async function run() {
     await assert.rejects(
       () => hotfix.downloadAndInstall(
         unsignedManifest,
-        { mirror: 'official', publicKeyPem, requireSignature: true, fetchImpl: makeMockFetch({ [signedManifest.bundleUrl]: { buffer: bundle098 } }) },
+        { mirror: 'official', fetchImpl: makeMockFetch({ [signedManifest.bundleUrl]: { buffer: bundle098 } }) },
       ),
       /签名校验失败/,
     );
+    await assert.rejects(() => hotfix.checkForUpdates({
+      mirror: 'official', manifestUrl,
+      fetchImpl: makeMockFetch({ [manifestUrl]: { json: { ...signedManifest, notes: '被修改的说明' } } }),
+    }), /签名校验失败/);
+    assert.throws(() => buildHotfix({ outDir: tmpSignedOut, privateKeyPem }), /内置公钥不匹配/);
+    hotfix.activateAppliedRoot(signedApply.releaseDir, '0.9.8');
+    hotfix.confirmBoot('0.9.8');
+    fs.appendFileSync(path.join(signedApply.releaseDir, 'ffmpeg.js'), '\\n// 本地完整性检查');
+    const afterTampering = hotfix.initHotfix({ shellRoot: ROOT, userDataDir: tmpSignedUserData, publicKeyPem });
+    assert.strictEqual(afterTampering.isHotfix, false);
+    assert(afterTampering.badVersions.includes('0.9.8'));
     console.log('[8/8] Ed25519 manifest signature verification & tamper rejection OK');
 
     console.log('HOTFIX_TEST_OK');

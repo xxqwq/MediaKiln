@@ -24,6 +24,8 @@ const {
   probe,
   runFfmpeg,
   runFfmpegCapture,
+  commitOutput,
+  copyTaskOutput,
   videoCodecArgs,
   defaultOutput,
   defaultDirOutput,
@@ -150,6 +152,9 @@ const builders = {
     }
 
     const vcodec = ['h264', 'hevc', 'av1'].includes(p.vcodec) ? p.vcodec : 'h264';
+    if (format === 'mov' && vcodec === 'av1') {
+      throw new Error('MOV 容器不支持 AV1 编码，请选 MP4 / MKV / WebM 或切换 H.265');
+    }
     const output = defaultOutput(p.input, format, format);
     const res = num(p.height, 0);
     const crf = { high: 18, medium: 23, low: 28 }[p.quality] || 23;
@@ -165,8 +170,7 @@ const builders = {
           '-c:a', 'libopus', '-b:a', '128k');
       }
     } else {
-      const codec = vcodec === 'hevc' ? 'hevc' : (vcodec === 'av1' && format !== 'mov' ? 'av1' : 'h264');
-      args.push(...resolveVideoCodecArgs(p, { crf, preset: 'medium', codec }), '-c:a', 'aac', '-b:a', '128k');
+      args.push(...resolveVideoCodecArgs(p, { crf, preset: 'medium', codec: vcodec }), '-c:a', 'aac', '-b:a', '128k');
       if (format === 'mp4' || format === 'mov') args.push('-movflags', '+faststart');
     }
     return {
@@ -433,12 +437,12 @@ const builders = {
               bestFile = tmpOut;
             }
             if (size > 0 && size <= targetBytes) {
-              fs.copyFileSync(tmpOut, output);
+              copyTaskOutput(tmpOut, output);
               onProgress?.(1);
               return { output, targetReached: true, targetMB };
             }
           }
-          if (bestFile) fs.copyFileSync(bestFile, output);
+          if (bestFile) copyTaskOutput(bestFile, output);
           onProgress?.(1);
           return { output, targetReached: bestSize <= targetBytes, targetMB };
         } finally {
@@ -547,7 +551,7 @@ const builders = {
           const { args, totalDuration } = buildXfadeArgs(resolvedInfos, tmpOut);
           try {
             await runFfmpeg(taskId, args, { totalDuration, onProgress });
-            fs.renameSync(tmpOut, output);
+            commitOutput(tmpOut, output);
             return { output };
           } finally {
             await fs.promises.rm(tmpOut, { force: true, maxRetries: 5, retryDelay: 200 }).catch(() => {});
@@ -897,7 +901,7 @@ const builders = {
               ], { totalDuration: dur, from: 0.2, to: 1, onProgress });
             }
 
-            fs.renameSync(tmpOut, output);
+            commitOutput(tmpOut, output);
             onProgress?.(1);
             return { output, outputType: 'file' };
           } finally {
@@ -1382,7 +1386,7 @@ const builders = {
                 totalDuration: totalDur, from: 0.3, to: 1, onProgress,
               });
             }
-            fs.renameSync(tmpOut, output);
+            commitOutput(tmpOut, output);
             onProgress?.(1);
             return {
               output,
@@ -1469,7 +1473,7 @@ const builders = {
             });
           }
 
-          fs.renameSync(tmpOut, output);
+          commitOutput(tmpOut, output);
           onProgress?.(1);
           return {
             output,
@@ -1728,7 +1732,7 @@ const builders = {
 
         if (!cropFilter) {
           if (isGif) {
-            fs.copyFileSync(p.input, output);
+            copyTaskOutput(p.input, output);
           } else {
             await runFfmpeg(taskId, ['-i', p.input, '-c', 'copy', output], {
               totalDuration: D, from: 0.15, to: 1, onProgress,
@@ -2411,7 +2415,7 @@ const builders = {
             '-disposition:v:0', 'attached_pic',
             '-movflags', '+faststart', '-f', 'mp4', staged,
           ], { totalDuration: num(p.totalDuration, 0), from: 0.15, to: 1, onProgress });
-          fs.renameSync(staged, output);
+          commitOutput(staged, output);
           return { output };
         } finally {
           fs.rmSync(tmpDir, { recursive: true, force: true });

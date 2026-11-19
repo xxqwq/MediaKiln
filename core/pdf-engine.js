@@ -2,10 +2,9 @@
 
 const fs = require('fs');
 const path = require('path');
-const { PDFDocument } = require('pdf-lib');
+const { PDFDocument, PDFName, PDFPageLeaf, degrees } = require('pdf-lib');
 const { spawn } = require('child_process');
-const { registerCancelableTask, unregisterTask } = require('./runner');
-const { writeBufferAtomically } = require('./utils');
+const { registerCancelableTask, throwIfTaskCancelled, writeTaskOutput, commitOutput } = require('./runner');
 
 const activePdfTasks = new Map(); // taskId -> ChildProcess
 
@@ -203,6 +202,7 @@ function buildPdfFromJpegPages(pages, { pageSize = 'a4p', margin = 20 } = {}) {
 // ---------------------------------------------------------------------------
 
 function runPowerShellPdfScript(psScript, envVars, taskId, onLine) {
+  throwIfTaskCancelled(taskId);
   return new Promise((resolve, reject) => {
     const child = spawn(
       'powershell.exe',
@@ -212,10 +212,12 @@ function runPowerShellPdfScript(psScript, envVars, taskId, onLine) {
         env: { ...process.env, ...envVars },
       },
     );
-    if (taskId) {
-      activePdfTasks.set(taskId, child);
-      registerCancelableTask?.(taskId, () => cancelPdfTask(taskId));
-    }
+    if (taskId) activePdfTasks.set(taskId, child);
+    const release = registerCancelableTask(taskId, () => cancelPdfTask(taskId));
+    const cleanup = () => {
+      if (activePdfTasks.get(taskId) === child) activePdfTasks.delete(taskId);
+      release();
+    };
 
     let stdout = '';
     let stderr = '';
@@ -237,18 +239,12 @@ function runPowerShellPdfScript(psScript, envVars, taskId, onLine) {
     });
 
     child.on('error', (err) => {
-      if (taskId) {
-        activePdfTasks.delete(taskId);
-        unregisterTask?.(taskId);
-      }
+      cleanup();
       reject(err);
     });
 
     child.on('close', (code) => {
-      if (taskId) {
-        activePdfTasks.delete(taskId);
-        unregisterTask?.(taskId);
-      }
+      cleanup();
       if (lineBuf.trim()) onLine?.(lineBuf.trim());
       if (child.__cancelled) {
         return reject(new Error('任务已取消'));
@@ -276,7 +272,7 @@ async function getPdfPageCount(file) {
   return (await readPdfDocument(file)).getPageCount();
 }
 
-async function renderPdfViaWinRt(absInput, outDir, pages, scale, taskId, onProgress) {
+async function renderPdfViaWinRt(absInput, outDir, pages, scale, taskId, onProgress, previewSide) {
   fs.mkdirSync(outDir, { recursive: true });
   const pagesCsv = pages && pages.length ? pages.join(',') : '';
 
@@ -308,6 +304,7 @@ function AwaitAct($act) {
 $inPath  = $env:VGT_PDF_INPUT
 $outDir  = $env:VGT_PDF_OUTDIR
 $scale   = [double]$env:VGT_PDF_SCALE
+$previewSide = [int]$env:VGT_PDF_PREVIEW_SIDE
 $rawPages = $env:VGT_PDF_PAGES
 
 $file = AwaitOp ([Windows.Storage.StorageFile]::GetFileFromPathAsync($inPath)) ([Windows.Storage.StorageFile])
@@ -329,8 +326,15 @@ for ($idx = 0; $idx -lt $count; $idx++) {
   $page = $pdf.GetPage([uint32]($pNum - 1))
   try {
     $destW = [uint32][Math]::Min(6000, [Math]::Max(200, [Math]::Round($page.Size.Width * $scale)))
+    if ($previewSide -gt 0) {
+      $previewScale = $previewSide / [Math]::Max($page.Size.Width, $page.Size.Height)
+      $destW = [uint32][Math]::Max(1, [Math]::Floor($page.Size.Width * $previewScale))
+    }
     $opts = New-Object Windows.Data.Pdf.PdfPageRenderOptions
     $opts.DestinationWidth = $destW
+    if ($previewSide -gt 0) {
+      $opts.DestinationHeight = [uint32][Math]::Max(1, [Math]::Floor($page.Size.Height * $previewScale))
+    }
     $memStream = New-Object Windows.Storage.Streams.InMemoryRandomAccessStream
     try {
       AwaitAct ($page.RenderToStreamAsync($memStream, $opts))
@@ -367,6 +371,7 @@ for ($idx = 0; $idx -lt $count; $idx++) {
       VGT_PDF_INPUT: absInput,
       VGT_PDF_OUTDIR: outDir,
       VGT_PDF_SCALE: String(scale),
+      VGT_PDF_PREVIEW_SIDE: String(previewSide || 0),
       VGT_PDF_PAGES: pagesCsv,
     },
     taskId,
@@ -388,15 +393,16 @@ for ($idx = 0; $idx -lt $count; $idx++) {
     const fp = path.join(outDir, `page_${String(i).padStart(4, '0')}.png`);
     if (fs.existsSync(fp)) generatedFiles.push(fp);
   }
-  if (!generatedFiles.length) {
-    throw new Error('WinRT 未能导出任何 PDF 页面图像');
+  if (!generatedFiles.length || generatedFiles.length !== count) {
+    throw new Error('未能完整导出 PDF 页面图像');
   }
   return generatedFiles;
 }
 
-async function renderPdfPagesToPngs(pdfPath, outDir, { pages = null, scale = 2, taskId = null, onProgress = null } = {}) {
+async function renderPdfPagesToPngs(pdfPath, outDir, { pages = null, scale = 2, taskId = null, onProgress = null, previewSide = 0 } = {}) {
   const safeScale = Math.min(Math.max(Number(scale) || 2, 1), 4);
-  return renderPdfViaWinRt(path.resolve(pdfPath), outDir, pages, safeScale, taskId, onProgress);
+  const safePreviewSide = Math.min(Math.max(Math.round(Number(previewSide)) || 0, 0), 1200);
+  return renderPdfViaWinRt(path.resolve(pdfPath), outDir, pages, safeScale, taskId, onProgress, safePreviewSide);
 }
 
 async function appendPdfPages(destination, source, indices) {
@@ -405,8 +411,8 @@ async function appendPdfPages(destination, source, indices) {
 }
 
 async function writePdf(doc, outputPath) {
-  const data = await doc.save({ useObjectStreams: false });
-  writeBufferAtomically(outputPath, data);
+  const data = await doc.save({ useObjectStreams: false, updateFieldAppearances: false });
+  writeTaskOutput(outputPath, data);
   return { output: outputPath, pageCount: doc.getPageCount(), outputSize: data.length };
 }
 
@@ -414,7 +420,9 @@ async function mergePdfFiles(files, outputPath, { onProgress } = {}) {
   if (!Array.isArray(files) || files.length < 2) throw new Error('请至少选择 2 个 PDF 文件进行合并');
   const destination = await PDFDocument.create();
   for (let i = 0; i < files.length; i++) {
+    throwIfTaskCancelled();
     const source = await readPdfDocument(files[i]);
+    throwIfTaskCancelled();
     await appendPdfPages(destination, source, source.getPageIndices());
     onProgress?.(0.9 * (i + 1) / files.length);
   }
@@ -423,8 +431,73 @@ async function mergePdfFiles(files, outputPath, { onProgress } = {}) {
   return result;
 }
 
+async function organizePdfPages(files, pages, outputPath, { onProgress } = {}) {
+  if (!Array.isArray(files) || !Array.isArray(pages) || !pages.length) {
+    throw new Error('请至少保留一页 PDF');
+  }
+  const selected = new Map();
+  const seen = new Set();
+  for (const item of pages) {
+    const { fileIndex, page, rotation } = item || {};
+    if (!Number.isSafeInteger(fileIndex) || fileIndex < 0 || fileIndex >= files.length
+      || !Number.isSafeInteger(page) || page < 1 || ![0, 90, 180, 270].includes(rotation)) {
+      throw new Error('PDF 页面或旋转角度无效');
+    }
+    const key = `${fileIndex}:${page}`;
+    if (seen.has(key)) throw new Error('页面整理中有重复的源页');
+    seen.add(key);
+    if (!selected.has(fileIndex)) selected.set(fileIndex, []);
+    selected.get(fileIndex).push(item);
+  }
+
+  let destination = await PDFDocument.create();
+  let retainDocument = false;
+  const outputPages = new Map();
+  for (const [fileIndex, items] of selected) {
+    throwIfTaskCancelled();
+    const source = await readPdfDocument(files[fileIndex]);
+    if (items.some(({ page }) => page > source.getPageCount())) {
+      throw new Error('页码超出源文件范围，请重新载入 PDF');
+    }
+    if (selected.size === 1 && items.length === source.getPageCount()) {
+      destination = source;
+      retainDocument = true;
+      const originalPages = source.getPages();
+      for (const item of items) outputPages.set(item, originalPages[item.page - 1]);
+      if (items.some(({ page }, index) => page !== index + 1)) {
+        for (const { node } of originalPages) {
+          for (const entry of PDFPageLeaf.InheritableEntries) {
+            const name = PDFName.of(entry);
+            const value = node.getInheritableAttribute(name);
+            if (value && !node.has(name)) node.set(name, value);
+          }
+        }
+        for (let index = originalPages.length - 1; index >= 0; index--) destination.removePage(index);
+        for (const item of items) destination.addPage(outputPages.get(item));
+      }
+    } else {
+      if (source.catalog.get(PDFName.of('AcroForm')) && source.getForm().getFields().length) {
+        throw new Error('选中的文件含有可填写表单。页面整理支持对这类文件保留全部页面后排序或旋转');
+      }
+      const copied = await destination.copyPages(source, items.map(({ page }) => page - 1));
+      items.forEach((item, index) => outputPages.set(item, copied[index]));
+    }
+    onProgress?.(0.75 * outputPages.size / pages.length);
+  }
+  for (const item of pages) {
+    const page = outputPages.get(item);
+    if (item.rotation) page.setRotation(degrees((page.getRotation().angle + item.rotation + 360) % 360));
+    if (!retainDocument) destination.addPage(page);
+  }
+  onProgress?.(0.85);
+  const result = await writePdf(destination, outputPath);
+  onProgress?.(1);
+  return result;
+}
+
 async function extractPdfPages(pdfPath, pageNumbers, outputPath, { onProgress } = {}) {
   const source = await readPdfDocument(pdfPath);
+  throwIfTaskCancelled();
   const destination = await PDFDocument.create();
   await appendPdfPages(destination, source, pageNumbers.map((page) => page - 1));
   onProgress?.(0.7);
@@ -450,7 +523,7 @@ async function splitPdfIntoChunks(pdfPath, chunks, outDir, { onProgress } = {}) 
       totalSize += result.outputSize;
       onProgress?.(0.9 * (i + 1) / chunks.length);
     }
-    fs.renameSync(staging, outDir);
+    commitOutput(staging, outDir);
     return { files, totalSize };
   } finally {
     fs.rmSync(staging, { recursive: true, force: true });
@@ -464,6 +537,7 @@ module.exports = {
   buildPdfFromJpegPages,
   getJpegDimensions,
   mergePdfFiles,
+  organizePdfPages,
   extractPdfPages,
   splitPdfIntoChunks,
   cancelPdfTask,

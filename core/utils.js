@@ -5,13 +5,13 @@ const path = require('path');
 const os = require('os');
 const { randomUUID } = require('crypto');
 
-function writeBufferAtomically(outputPath, buffer) {
+function writeBufferAtomically(outputPath, buffer, commit = fs.renameSync) {
   const dir = path.dirname(outputPath);
   fs.mkdirSync(dir, { recursive: true });
   const staged = path.join(dir, `.vgt-${randomUUID()}.tmp`);
   try {
     fs.writeFileSync(staged, buffer, { flag: 'wx' });
-    fs.renameSync(staged, outputPath);
+    commit(staged, outputPath);
   } finally {
     fs.rmSync(staged, { force: true });
   }

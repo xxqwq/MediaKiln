@@ -86,11 +86,11 @@ window.VGT.VIDEO_FEATURES = [
         showIf: (v) => v.mode !== 'copy' },
     ],
     collect(v, ctx) {
-      const vcodec = v.vcodec || 'h264';
-      if (v.mode !== 'copy' && v.format === 'mov' && vcodec === 'av1') {
-        throw new Error('MOV 容器不支持 AV1 编码，请选 MP4 / MKV / WebM 或切换 H.265');
-      }
-      return { input: ctx.file.path, mode: v.mode, format: v.format, vcodec, height: v.height, quality: v.quality, totalDuration: ctx.file.info.duration };
+      return {
+        input: ctx.file.path, mode: v.mode || 'encode', format: v.format || 'mp4',
+        vcodec: v.vcodec || 'h264', height: v.height || '0', quality: v.quality || 'medium',
+        totalDuration: ctx.file.info.duration,
+      };
     },
   },
 

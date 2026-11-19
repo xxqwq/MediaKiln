@@ -75,6 +75,7 @@ function withGlobalPrefs(params, extra = {}) {
 }
 
 const $ = (id) => document.getElementById(id);
+const pdfOrganizer = window.VGT.pdfTools.createOrganizer($('batch-list'), $('btn-run'), () => running);
 const round1 = window.VGT.params.round1;
 const collectFieldValues = window.VGT.params.collectFieldValues;
 
@@ -202,7 +203,9 @@ function renderNav() {
 
 function updateFeatureHint(f) {
   const extsText = f.accept.map((e) => e.toUpperCase()).join(' / ');
-  if (f.multi) {
+  if (f.id === 'pdfMerge') {
+    $('dz-hint').textContent = '选择一份或多份 PDF，按页面整理';
+  } else if (f.multi) {
     $('dz-hint').textContent = `支持多选，可一次拖入多个文件拼接/合并（${extsText}）`;
   } else if (f.noBatch) {
     $('dz-hint').textContent = `支持格式：${extsText}（需交互标记，仅支持单文件）`;
@@ -244,6 +247,13 @@ function selectFeature(f, { forceClear = false } = {}) {
 
   if (forceClear || f === prevFeature) {
     if (forceClear) clearFile();
+    return;
+  }
+
+  const retainedFiles = file ? [file.path] : (batchFiles || []).map((item) => item.path);
+  if (f.id === 'pdfMerge' && retainedFiles.length && retainedFiles.every((input) => /\.pdf$/i.test(input))) {
+    clearFile();
+    useFiles(retainedFiles);
     return;
   }
 
@@ -304,12 +314,14 @@ async function useFiles(paths, append = false) {
   }
 
   if (currentFeature.multi) {
+    const feature = currentFeature;
     const prevPaths = append && files?.length ? files.map((f) => f.path) : [];
     const seen = new Set(prevPaths);
-    const toAdd = append ? valid.filter((p) => !seen.has(p)) : valid;
+    const toAdd = [...new Set(valid)].filter((p) => !seen.has(p));
     if (append && !toAdd.length) return toast('所选文件已在列表中');
 
     const infos = await window.api.probeMulti(toAdd);
+    if (currentFeature !== feature) return;
     if (infos.some((i) => !i.info)) return toast('部分文件无法读取，请检查格式', true);
     files = append ? [...(files || []), ...infos] : infos;
     file = null;
@@ -318,11 +330,11 @@ async function useFiles(paths, append = false) {
     $('file-card').classList.remove('preview-large');
     $('btn-add-more').classList.remove('hidden');
     $('btn-replace').textContent = '重选文件';
-    renderMultiCard();
+    renderMultiCard(append);
     if (!append) renderParams();
     $('action-bar').classList.remove('hidden');
     $('result-card').classList.add('hidden');
-    $('btn-run').textContent = '开始转换';
+    $('btn-run').textContent = feature.id === 'pdfMerge' ? '导出 PDF' : '开始转换';
     return;
   }
 
@@ -470,15 +482,19 @@ function renderFileCard(ext) {
     parts.push(
       info.docType === 'docx'
         ? 'Word 文档 (.docx)'
-        : (info.docType === 'pptx'
-          ? 'PPT 演示文稿 (.pptx)'
-          : (info.docType === 'pdf'
-            ? 'PDF 文档 (.pdf)'
-            : (info.docType === 'html' ? 'HTML 网页 (.html)' : 'Markdown 文档'))),
+        : (info.docType === 'doc'
+          ? 'Word 文档 (.doc)'
+          : (info.docType === 'pptx'
+            ? 'PPT 演示文稿 (.pptx)'
+            : (info.docType === 'pdf'
+              ? 'PDF 文档 (.pdf)'
+              : (info.docType === 'html' ? 'HTML 网页 (.html)' : 'Markdown 文档')))),
     );
     const st = info.docStats || {};
     if (info.docType === 'pdf') {
       parts.push(`共 ${info.pageCount || 0} 页`);
+    } else if (info.docType === 'doc') {
+      parts.push('由本机 Office / WPS / LibreOffice 原生转换');
     } else if (info.docType === 'html') {
       if (info.title) parts.push(info.title);
     } else if (info.docType === 'md' && info.imageCount > 0) {
@@ -516,7 +532,7 @@ function renderFileCard(ext) {
   const url = toFileUrl(file.path);
   const zoomBtn = $('btn-zoom-preview');
   if (isDoc) {
-    const icon = info.docType === 'docx' ? '📘' : (info.docType === 'pptx' ? '📊' : (info.docType === 'pdf' ? '📄' : (info.docType === 'html' ? '🌐' : '📝')));
+    const icon = (info.docType === 'docx' || info.docType === 'doc') ? '📘' : (info.docType === 'pptx' ? '📊' : (info.docType === 'pdf' ? '📄' : (info.docType === 'html' ? '🌐' : '📝')));
     box.innerHTML = `<div class="no-preview">${icon}</div>`;
     zoomBtn.classList.add('hidden');
   } else if (ext === 'gif' || ext === 'apng' || ext === 'webp' || ext === 'svg' || IMG_EXTS.includes(ext)) {
@@ -534,7 +550,7 @@ function renderFileCard(ext) {
   }
 }
 
-function renderMultiCard() {
+function renderMultiCard(append = false) {
   $('dropzone').classList.add('hidden');
   $('file-card').classList.remove('hidden');
   $('preview-box').style.display = 'none';
@@ -542,7 +558,8 @@ function renderMultiCard() {
   $('file-card').classList.remove('preview-large');
 
   const names = files.map((f) => f.path.split(/[\\/]/).pop());
-  $('file-name').textContent = `已选 ${files.length} 个文件（可上下调整顺序）`;
+  const organizePdf = currentFeature.id === 'pdfMerge';
+  $('file-name').textContent = organizePdf ? `已选 ${files.length} 份 PDF` : `已选 ${files.length} 个文件（可上下调整顺序）`;
   $('file-name').title = files.map((f) => f.path).join('\n');
   const totalSize = files.reduce((s, f) => s + (f.info?.size || 0), 0);
   const totalDur = files.reduce((s, f) => s + (f.info?.duration || 0), 0);
@@ -551,6 +568,10 @@ function renderMultiCard() {
 
   const listEl = $('batch-list');
   listEl.classList.remove('hidden');
+  if (organizePdf) {
+    pdfOrganizer.load(files.map((item) => item.path), append);
+    return;
+  }
   listEl.innerHTML = '';
   files.forEach((item, idx) => {
     const row = document.createElement('div');
@@ -635,7 +656,7 @@ function renderBatchHeader() {
 
 const BATCH_SHOW_PCT_IDS = new Set([
   'compressGif', 'imageConvert', 'imageCompressTarget', 'compressTarget',
-  'svgOptimize', 'imageToSvg', 'docCompressImages', 'docRepackImages', 'docCleanupMedia',
+  'svgOptimize', 'imageToSvg', 'docCompressImages', 'docRepackImages', 'docCleanupMedia', 'pdfCompress',
 ]);
 
 function applyBatchStatusEl(statusEl, item) {
@@ -650,6 +671,9 @@ function applyBatchStatusEl(statusEl, item) {
       statusEl.textContent = item.extractSummary
         ? `✅ 提取 ${item.extractSummary.savedCount} 张图`
         : '✅ 已导出';
+    } else if (currentFeature.id === 'pdfCompress' && item.targetReached === false) {
+      statusEl.className = 'batch-status warn';
+      statusEl.textContent = `未达 ${item.targetMB} MB · ${fmtSize(item.outSize)}`;
     } else if (BATCH_SHOW_PCT_IDS.has(currentFeature.id) && item.info?.size && item.outSize) {
       const pct = Math.round((1 - item.outSize / item.info.size) * 100);
       statusEl.textContent = pct > 0
@@ -703,7 +727,11 @@ function renderBatchList() {
 
     const metaParts = [];
     if (item.info?.isDoc) {
-      metaParts.push(item.info.docType === 'pdf' ? `${item.info.pageCount || 0} 页` : `${item.info.imageCount || 0} 张图`);
+      metaParts.push(
+        item.info.docType === 'pdf'
+          ? `${item.info.pageCount || 0} 页`
+          : (item.info.docType === 'doc' ? '旧版 .doc' : `${item.info.imageCount || 0} 张图`),
+      );
     }
     if (item.info?.width) metaParts.push(`${item.info.width}×${item.info.height}`);
     if (item.info?.duration > 0) metaParts.push(fmtDur(item.info.duration));
@@ -747,6 +775,8 @@ function renderBatchList() {
 }
 
 function clearFile() {
+  pdfOrganizer.dispose();
+  $('btn-run').disabled = false;
   file = null;
   files = null;
   batchFiles = null;
@@ -797,6 +827,7 @@ async function runTask() {
   if (currentFeature.multi ? !files?.length : !file) return;
   let params;
   try {
+    if (currentFeature.id === 'pdfMerge') ctx.pdfPages = pdfOrganizer.getPlan();
     params = withGlobalPrefs(await currentFeature.collect(collectFieldValues(), ctx));
   } catch (err) {
     return toast(err.message, true);
@@ -1144,6 +1175,46 @@ async function showSuccess(res) {
     } else if (res.docToPdfSummary) {
       const ds = res.docToPdfSummary;
       line = `✅ 排版转 PDF 完成：${escHtml(ds.title || name)}（${fmtSize(outSize)}）`;
+    } else if (res.wordToPdfSummary) {
+      const ws = res.wordToPdfSummary;
+      const engName = ws.engineUsed === 'word'
+        ? '本机 Word 原生引擎'
+        : (ws.engineUsed === 'wps'
+          ? '本机 WPS 原生引擎'
+          : (ws.engineUsed === 'libreoffice' ? 'LibreOffice 原生引擎' : '内置排版引擎'));
+      line = `✅ Word 转 PDF 完成（${engName}）：共 ${ws.pageCount} 页（${fmtSize(outSize)}）`;
+    } else if (res.pdfToWordSummary) {
+      const ps = res.pdfToWordSummary;
+      if (ps.mode === 'layout') {
+        line = `✅ PDF 转 Word 完成（版面保真）：共 ${ps.pageCount} 页（${fmtSize(outSize)}）`;
+      } else {
+        const parts = [];
+        if (ps.nativePages) parts.push(`文本提取 ${ps.nativePages} 页`);
+        if (ps.ocrPages) parts.push(`离线 OCR ${ps.ocrPages} 页`);
+        if (ps.tableCount) parts.push(`还原表格 ${ps.tableCount} 个`);
+        if (ps.imageCount) parts.push(`提取配图 ${ps.imageCount} 张`);
+        line = `✅ PDF 转 Word 完成：共 ${ps.pageCount} 页` + (parts.length ? `（${parts.join(' · ')}，${fmtSize(outSize)}）` : `（${fmtSize(outSize)}）`);
+      }
+    } else if (res.pdfCompressSummary) {
+      const ps = res.pdfCompressSummary;
+      if (ps.targetBytes !== undefined) {
+        const target = `${ps.targetBytes / 1_000_000} MB`;
+        const sizes = `${fmtSize(ps.origSize)} → ${fmtSize(ps.newSize)}`;
+        line = ps.targetReached ? `✅ 已达到 ${target} 目标 · ${sizes}` : `⚠️ 未达到 ${target} 目标，已导出最小结果 · ${sizes}`;
+      } else if (ps.origSize > 0 && ps.newSize < ps.origSize) {
+        const pct = Math.round((1 - ps.newSize / ps.origSize) * 100);
+        const imgNote = ps.compressedImages ? `，重压内嵌图 ${ps.compressedImages} 张` : '';
+        line = `✅ PDF 压缩完成：${fmtSize(ps.origSize)} → ${fmtSize(ps.newSize)}，节省 ${pct}%${imgNote}`;
+      } else {
+        line = `✅ PDF 已优化（${fmtSize(ps.newSize)}）：原文档已接近最优，尝试“极限瘦身”或“扫描化极限压缩”`;
+      }
+    } else if (res.pdfSearchableSummary) {
+      const ps = res.pdfSearchableSummary;
+      line = `✅ 可搜索 PDF 已导出 · 新增文字 ${ps.ocrPages} 页 · 已有文字 ${ps.textPages} 页`;
+      if (ps.blankPages) line += ` · 未识别出文字 ${ps.blankPages} 页`;
+    } else if (res.pdfCropSummary) {
+      const ps = res.pdfCropSummary;
+      line = `✅ PDF 已导出 · 裁去 ${ps.croppedPages} / ${ps.processedPages} 页白边`;
     } else if (res.animSpriteSummary) {
       const as = res.animSpriteSummary;
       line = as.mode === 'toSprite'
@@ -1227,10 +1298,17 @@ async function showSuccess(res) {
       const ps = res.pdfSummary;
       if (ps.action === 'merge') {
         line = `✅ PDF 合并完成：${ps.fileCount} 份文档共合并为 ${ps.pageCount} 页（${fmtSize(outSize)}）`;
+      } else if (ps.action === 'organize') {
+        line = `✅ PDF 页面整理完成 · 已导出 ${ps.pageCount} 页（${fmtSize(outSize)}）`;
       } else if (ps.action === 'extract' || ps.action === 'remove') {
         line = `✅ PDF 页面处理完成：共输出 ${ps.pageCount} / ${ps.totalPages} 页（${fmtSize(outSize)}）`;
       } else if (ps.action === 'burst') {
         line = `✅ PDF 拆分完成：共拆分为 ${ps.fileCount} 份独立 PDF 文件`;
+      } else if (ps.action === 'rotate') {
+        line = `✅ PDF 页面旋转完成：已将 ${ps.rotatedCount} / ${ps.totalPages} 页旋转 ${ps.angle}°（${fmtSize(outSize)}）`;
+      } else if (ps.action === 'watermark') {
+        const what = ps.contentMode === 'pageNum' ? '页码' : (ps.contentMode === 'both' ? '水印与页码' : '水印');
+        line = `✅ PDF 添加${what}完成：共处理 ${ps.affectedCount} / ${ps.totalPages} 页（${fmtSize(outSize)}）`;
       } else {
         const modeName = ps.pageSize === 'a4l' ? 'A4 横向' : (ps.pageSize === 'fit' ? '按原图尺寸自适应' : 'A4 竖向');
         line = `✅ PDF 合成完成：共 ${ps.pageCount} 页（${modeName}，${fmtSize(outSize)}）`;
@@ -1689,6 +1767,7 @@ async function showSuccess(res) {
 
 function setRunning(on) {
   running = on;
+  if (currentFeature.id === 'pdfMerge' && files?.length) pdfOrganizer.render();
   $('btn-run').classList.toggle('hidden', on);
   $('btn-cancel').classList.toggle('hidden', !on);
   $('progress-area').classList.toggle('hidden', !on);
@@ -2127,6 +2206,7 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 
   window.api.onProgress(({ taskId, ratio }) => {
+    if (taskId.startsWith('pdf-preview-')) return;
     currentTaskId = taskId;
     if (wfTaskProgressCb) {
       wfTaskProgressCb(ratio, taskId);

@@ -16,7 +16,7 @@ const {
   applyTextReplacements,
 } = require('../core/doc-parser');
 const { FONT, num, normalizeHexColor, imageCodecArgs, writeRoundedMaskPgm } = require('../core/utils');
-const { probe, runFfmpeg, defaultOutput, defaultDirOutput, stampOutput } = require('../core/runner');
+const { probe, runFfmpeg, defaultOutput, defaultDirOutput, stampOutput, throwIfTaskCancelled, commitOutput, writeTaskOutput, copyTaskOutput } = require('../core/runner');
 const {
   parsePageRange,
   getPdfPageCount,
@@ -24,10 +24,19 @@ const {
   buildPdfFromJpegPages,
   getJpegDimensions,
   mergePdfFiles,
+  organizePdfPages,
   extractPdfPages,
   splitPdfIntoChunks,
 } = require('../core/pdf-engine');
+const { collectCandidateImages, readManifestNear } = require('../core/doc-replacements');
 const { convertDocToPdf } = require('../core/md-renderer');
+const {
+  convertWordToPdf,
+  convertPdfToWord,
+  compressPdfFile,
+  rotatePdfPages,
+  watermarkAndNumberPdf,
+} = require('../core/pdf-office');
 
 async function runWithConcurrency(items, concurrency, worker) {
   if (!items.length) return [];
@@ -72,7 +81,6 @@ const MIME_EXT = {
 const RASTER_MEDIA_EXTS = new Set(['png', 'jpg', 'jpeg', 'bmp', 'tif', 'tiff', 'webp']);
 const VIDEO_MEDIA_EXTS = new Set(['mp4', 'mov', 'avi', 'mkv', 'webm', 'wmv', 'm4v', 'flv', 'mpg', 'mpeg']);
 const WORD_SAFE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'bmp', 'tif', 'tiff']);
-const REPLACE_IMG_EXTS = new Set(['png', 'jpg', 'jpeg', 'webp', 'bmp', 'avif', 'gif', 'tif', 'tiff']);
 
 function sanitizeBase(raw, fallback = 'image') {
   const cleaned = String(raw || '')
@@ -645,7 +653,7 @@ function docCompressImages(p) {
         }
 
         fs.mkdirSync(path.dirname(output), { recursive: true });
-        zip.writeZip(output);
+        writeTaskOutput(output, zip.toBuffer());
         onProgress?.(1);
 
         const newSize = fs.statSync(output).size;
@@ -668,73 +676,6 @@ function docCompressImages(p) {
       }
     },
   };
-}
-
-function collectCandidateImages(replaceDir, replaceFiles) {
-  const candidates = [];
-  const seen = new Set();
-  const addFile = (filePath, priorityBoost = 0) => {
-    const abs = path.resolve(filePath);
-    const key = abs.toLowerCase();
-    if (seen.has(key)) return;
-    let st;
-    try { st = fs.statSync(abs); } catch { return; }
-    if (!st.isFile()) return;
-    const ext = path.extname(abs).slice(1).toLowerCase();
-    if (!REPLACE_IMG_EXTS.has(ext)) return;
-    seen.add(key);
-    candidates.push({
-      path: abs,
-      filename: path.basename(abs),
-      stem: path.basename(abs, path.extname(abs)),
-      ext,
-      mtimeMs: st.mtimeMs,
-      priorityBoost,
-    });
-  };
-
-  if (Array.isArray(replaceFiles)) {
-    for (const f of replaceFiles) addFile(f, 2);
-  }
-
-  if (replaceDir && fs.existsSync(replaceDir)) {
-    const scanDir = (dir, boost) => {
-      let entries = [];
-      try { entries = fs.readdirSync(dir); } catch { return; }
-      for (const name of entries) {
-        if (name.startsWith('.')) continue;
-        addFile(path.join(dir, name), boost);
-      }
-    };
-    scanDir(replaceDir, 0);
-    const subOut = path.join(replaceDir, 'output');
-    if (fs.existsSync(subOut)) scanDir(subOut, 1);
-  }
-
-  return candidates;
-}
-
-function readManifestNear(replaceDir, replaceFiles) {
-  const dirsToCheck = [];
-  if (replaceDir) {
-    dirsToCheck.push(replaceDir);
-    dirsToCheck.push(path.dirname(replaceDir));
-  }
-  if (Array.isArray(replaceFiles) && replaceFiles.length) {
-    const d = path.dirname(replaceFiles[0]);
-    dirsToCheck.push(d);
-    dirsToCheck.push(path.dirname(d));
-  }
-  for (const dir of dirsToCheck) {
-    if (!dir) continue;
-    const mp = path.join(dir, '.vgt-manifest.json');
-    try {
-      if (fs.existsSync(mp)) {
-        return JSON.parse(fs.readFileSync(mp, 'utf8'));
-      }
-    } catch {}
-  }
-  return null;
 }
 
 function docRepackImages(p) {
@@ -929,7 +870,7 @@ function docRepackImages(p) {
         }
 
         fs.mkdirSync(path.dirname(output), { recursive: true });
-        zip.writeZip(output);
+        writeTaskOutput(output, zip.toBuffer());
         onProgress?.(1);
 
         const origSize = fs.statSync(p.input).size;
@@ -1043,7 +984,7 @@ function docCleanupMedia(p) {
       }
 
       fs.mkdirSync(path.dirname(output), { recursive: true });
-      zip.writeZip(output);
+      writeTaskOutput(output, zip.toBuffer());
       onProgress?.(1);
 
       const newSize = fs.statSync(output).size;
@@ -1319,7 +1260,7 @@ function docStyleImages(p) {
         }
 
         fs.mkdirSync(path.dirname(output), { recursive: true });
-        zip.writeZip(output);
+        writeTaskOutput(output, zip.toBuffer());
         onProgress?.(1);
 
         const newSize = fs.statSync(output).size;
@@ -1478,7 +1419,7 @@ function mdOrganizeImages(p) {
 
         if (output !== p.input) {
           fs.mkdirSync(path.dirname(output), { recursive: true });
-          fs.copyFileSync(p.input, output);
+          copyTaskOutput(p.input, output);
         }
         onProgress?.(1);
 
@@ -1636,7 +1577,7 @@ function mdOrganizeImages(p) {
 
       const nextBody = applyTextReplacements(scan.raw, patches);
       fs.mkdirSync(outDir, { recursive: true });
-      fs.writeFileSync(output, (scan.hasBom ? '\uFEFF' : '') + nextBody, 'utf8');
+      writeTaskOutput(output, (scan.hasBom ? '\uFEFF' : '') + nextBody);
       onProgress?.(1);
 
       return {
@@ -1707,7 +1648,7 @@ function imagesToPdf(p) {
 
         const pdfBuf = buildPdfFromJpegPages(pages, { pageSize, margin });
         fs.mkdirSync(path.dirname(output), { recursive: true });
-        fs.writeFileSync(output, pdfBuf);
+        writeTaskOutput(output, pdfBuf);
         onProgress?.(1);
 
         return {
@@ -1762,6 +1703,7 @@ function pdfToImages(p) {
     async run(taskId, onProgress) {
       onProgress?.(0.03);
       const totalPages = await getPdfPageCount(p.input);
+      throwIfTaskCancelled(taskId);
       const pages = parsePageRange(pageRange, totalPages);
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vgt_pdf_img_'));
 
@@ -1907,7 +1849,7 @@ function pdfToImages(p) {
             );
           }
 
-          fs.renameSync(tmpOut, output);
+          commitOutput(tmpOut, output);
           onProgress?.(1);
           return {
             output,
@@ -1934,27 +1876,66 @@ function pdfToImages(p) {
 // 9. PDF 合并
 // ---------------------------------------------------------------------------
 function pdfMerge(p) {
-  const files = Array.isArray(p.files) ? p.files.filter(Boolean) : [];
-  if (files.length < 2) {
+  const pages = p.pages;
+  const files = Array.isArray(p.files) ? (pages === undefined ? p.files.filter(Boolean) : p.files) : [];
+  if (pages === undefined && files.length < 2) {
     throw new Error('请至少选择 2 个 PDF 文件进行合并');
   }
-  const output = p.output || stampOutput(files[0], 'PDF合并', 'pdf');
+  if (!files.length || files.some((file) => typeof file !== 'string' || path.extname(file).toLowerCase() !== '.pdf')) {
+    throw new Error('请选择 PDF 文件');
+  }
+  const output = p.output || stampOutput(files[0], pages === undefined ? 'PDF合并' : 'PDF页面整理', 'pdf');
+  if (files.some((file) => path.resolve(file).toLowerCase() === path.resolve(output).toLowerCase())) {
+    throw new Error('输出文件不能与源 PDF 相同');
+  }
 
   return {
     output,
     outputType: 'file',
     async run(taskId, onProgress) {
-      const res = await mergePdfFiles(files, output, { taskId, onProgress });
+      const res = pages === undefined
+        ? await mergePdfFiles(files, output, { taskId, onProgress })
+        : await organizePdfPages(files, pages, output, { onProgress });
       return {
         output,
         outputType: 'file',
         pdfSummary: {
-          action: 'merge',
+          action: pages === undefined ? 'merge' : 'organize',
           fileCount: files.length,
           pageCount: res.pageCount,
           outputSize: res.outputSize,
         },
       };
+    },
+  };
+}
+
+function pdfPreview(p) {
+  if (typeof p.input !== 'string' || !path.isAbsolute(p.input) || path.extname(p.input).toLowerCase() !== '.pdf') {
+    throw new Error('请选择 PDF 文件');
+  }
+  return {
+    async run(taskId) {
+      if (p.mode === 'count') {
+        return { pdfPreviewSummary: { pageCount: await getPdfPageCount(p.input) } };
+      }
+      if (p.mode === 'crop') {
+        const { previewPdfCrop } = require('../core/pdf-crop');
+        const { image, bounds } = await previewPdfCrop(p.input, { taskId, page: p.page, padding: p.padding });
+        return { pdfPreviewSummary: { image: `data:image/png;base64,${image.toString('base64')}`, bounds } };
+      }
+      if (!Array.isArray(p.pages) || !p.pages.length || p.pages.length > 6
+        || p.pages.some((page) => !Number.isSafeInteger(page) || page < 1)) {
+        throw new Error('缩略图页码无效');
+      }
+      const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'vgt_pdf_previews_'));
+      try {
+        const paths = await renderPdfPagesToPngs(p.input, tmpDir, { pages: p.pages, previewSide: 300, taskId });
+        const images = await Promise.all(paths.map(async (file) => `data:image/png;base64,${(await fs.promises.readFile(file)).toString('base64')}`));
+        return { pdfPreviewSummary: { images } };
+      } finally {
+        await fs.promises.rm(tmpDir, { recursive: true, force: true });
+      }
     },
   };
 }
@@ -1988,6 +1969,7 @@ function pdfSplit(p) {
     async run(taskId, onProgress) {
       onProgress?.(0.05);
       const totalPages = await getPdfPageCount(p.input);
+      throwIfTaskCancelled(taskId);
 
       if (mode === 'extract') {
         const keepPages = parsePageRange(pageRange, totalPages);
@@ -2097,6 +2079,259 @@ function docToPdf(p) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// 12. Word (.docx / .doc) 转矢量 PDF（双引擎：本机 Office/WPS/LibreOffice + 内置排版引擎）
+// ---------------------------------------------------------------------------
+function wordToPdf(p) {
+  const ext = path.extname(String(p.input || '')).slice(1).toLowerCase();
+  if (ext !== 'docx' && ext !== 'doc') {
+    throw new Error('请选择 Word (.docx / .doc) 文件');
+  }
+  const engine = ['auto', 'builtin', 'office'].includes(p.engine) ? p.engine : 'auto';
+  const pageSize = ['auto', 'a4p', 'a4l', 'letter'].includes(p.pageSize) ? p.pageSize : 'auto';
+  const margin = ['auto', 'narrow', 'normal', 'wide'].includes(p.margin) ? p.margin : 'auto';
+  const pageNumbers = p.pageNumbers === 'yes' ? 'yes' : 'no';
+  const output = p.output || defaultOutput(p.input, '转PDF', 'pdf');
+
+  return {
+    output,
+    outputType: 'file',
+    async run(taskId, onProgress) {
+      onProgress?.(0.15);
+      const res = await convertWordToPdf(p.input, output, {
+        engine,
+        pageSize,
+        margin,
+        pageNumbers,
+        taskId,
+      });
+      onProgress?.(1);
+      return {
+        output,
+        outputType: 'file',
+        wordToPdfSummary: {
+          title: res.title,
+          pageCount: res.pageCount,
+          imageCount: res.imageCount,
+          tableCount: res.tableCount,
+          engineUsed: res.engineUsed || 'builtin',
+          outputSize: res.outputSize,
+        },
+      };
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 13. PDF 转 Word (.docx)（表格/配图/双栏重构 + WinRT OCR + 版面保真）
+// ---------------------------------------------------------------------------
+function pdfToWord(p) {
+  const ext = path.extname(String(p.input || '')).slice(1).toLowerCase();
+  if (ext !== 'pdf') {
+    throw new Error('请选择 PDF (.pdf) 文件');
+  }
+  const mode = ['editable', 'ocr', 'layout'].includes(p.mode) ? p.mode : 'editable';
+  const ocrLang = ['auto', 'zh', 'en'].includes(p.ocrLang) ? p.ocrLang : 'auto';
+  const keepPageBreak = p.keepPageBreak === 'no' ? 'no' : 'yes';
+  const dpiScale = Math.min(Math.max(num(p.dpiScale, 2), 1.5), 3);
+  const pageRange = String(p.pageRange || '').trim();
+  const output = p.output || defaultOutput(p.input, '转Word', 'docx');
+
+  return {
+    output,
+    outputType: 'file',
+    async run(taskId, onProgress) {
+      const res = await convertPdfToWord(p.input, output, {
+        mode,
+        ocrLang,
+        keepPageBreak,
+        dpiScale,
+        pageRange,
+        taskId,
+        onProgress,
+      });
+      return {
+        output,
+        outputType: 'file',
+        pdfToWordSummary: {
+          mode: res.mode,
+          pageCount: res.pageCount,
+          totalPages: res.totalPages,
+          nativePages: res.nativePages,
+          ocrPages: res.ocrPages,
+          tableCount: res.tableCount || 0,
+          imageCount: res.imageCount || 0,
+          outputSize: res.outputSize,
+        },
+      };
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 14. PDF 压缩瘦身
+// ---------------------------------------------------------------------------
+function pdfCompress(p) {
+  const ext = path.extname(String(p.input || '')).slice(1).toLowerCase();
+  if (ext !== 'pdf') {
+    throw new Error('请选择 PDF (.pdf) 文件');
+  }
+  const targetBytes = p.targetBytes;
+  const preset = targetBytes !== undefined ? 'balanced'
+    : (['high', 'balanced', 'extreme', 'raster'].includes(p.preset) ? p.preset : 'balanced');
+  const maxSide = p.maxSide !== undefined ? Math.max(0, Math.round(num(p.maxSide, 1920))) : undefined;
+  const rasterDpi = Math.min(Math.max(num(p.rasterDpi, 150), 72), 300);
+  const output = p.output || defaultOutput(p.input, 'PDF压缩', 'pdf');
+
+  return {
+    output,
+    outputType: 'file',
+    async run(taskId, onProgress) {
+      const res = await compressPdfFile(p.input, output, {
+        preset,
+        maxSide,
+        rasterDpi,
+        targetBytes,
+        taskId,
+        onProgress,
+      });
+      return {
+        output,
+        outputType: 'file',
+        targetReached: res.targetReached,
+        targetMB: res.targetBytes === undefined ? undefined : res.targetBytes / 1_000_000,
+        pdfCompressSummary: {
+          mode: res.mode,
+          pageCount: res.pageCount,
+          origSize: res.origSize,
+          newSize: res.newSize,
+          compressedImages: res.compressedImages,
+          skippedShrink: res.skippedShrink,
+          targetBytes: res.targetBytes,
+          targetReached: res.targetReached,
+        },
+      };
+    },
+  };
+}
+
+function pdfSearchable(p) {
+  if (path.extname(String(p.input || '')).toLowerCase() !== '.pdf') throw new Error('请选择 PDF 文件');
+  const output = p.output || defaultOutput(p.input, '可搜索', 'pdf');
+  return {
+    output,
+    outputType: 'file',
+    async run(taskId, onProgress) {
+      const { makePdfSearchable } = require('../core/pdf-searchable');
+      const { output: _, ...pdfSearchableSummary } = await makePdfSearchable(p.input, output, {
+        taskId, onProgress, ocrLang: p.ocrLang, pageRange: p.pageRange,
+      });
+      return { output, outputType: 'file', pdfSearchableSummary };
+    },
+  };
+}
+
+function pdfCrop(p) {
+  if (path.extname(String(p.input || '')).toLowerCase() !== '.pdf') throw new Error('请选择 PDF 文件');
+  const output = p.output || defaultOutput(p.input, '裁白边', 'pdf');
+  return {
+    output,
+    outputType: 'file',
+    async run(taskId, onProgress) {
+      const { cropPdfMargins } = require('../core/pdf-crop');
+      const { output: _, ...pdfCropSummary } = await cropPdfMargins(p.input, output, {
+        taskId, onProgress, padding: p.padding, pageRange: p.pageRange,
+      });
+      return { output, outputType: 'file', pdfCropSummary };
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 15. PDF 页面旋转
+// ---------------------------------------------------------------------------
+function pdfRotate(p) {
+  const ext = path.extname(String(p.input || '')).slice(1).toLowerCase();
+  if (ext !== 'pdf') {
+    throw new Error('请选择 PDF (.pdf) 文件');
+  }
+  const direction = ['cw90', 'ccw90', '180'].includes(p.direction) ? p.direction : 'cw90';
+  const pageRange = String(p.pageRange || '').trim();
+  const output = p.output || defaultOutput(p.input, '旋转PDF', 'pdf');
+
+  return {
+    output,
+    outputType: 'file',
+    async run(_taskId, onProgress) {
+      const res = await rotatePdfPages(p.input, output, {
+        direction,
+        pageRange,
+        onProgress,
+      });
+      return {
+        output,
+        outputType: 'file',
+        pdfSummary: {
+          action: 'rotate',
+          totalPages: res.totalPages,
+          rotatedCount: res.rotatedCount,
+          angle: res.angle,
+          pageCount: res.totalPages,
+          outputSize: res.outputSize,
+        },
+      };
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 16. PDF 水印与页码
+// ---------------------------------------------------------------------------
+function pdfWatermark(p) {
+  const ext = path.extname(String(p.input || '')).slice(1).toLowerCase();
+  if (ext !== 'pdf') {
+    throw new Error('请选择 PDF (.pdf) 文件');
+  }
+  const contentMode = ['watermark', 'pageNum', 'both'].includes(p.contentMode) ? p.contentMode : 'watermark';
+  const wmText = String(p.wmText || '').trim();
+  if ((contentMode === 'watermark' || contentMode === 'both') && !wmText) {
+    throw new Error('请输入要添加的水印文字');
+  }
+  const output = p.output || defaultOutput(p.input, contentMode === 'pageNum' ? '加页码' : '加水印', 'pdf');
+
+  return {
+    output,
+    outputType: 'file',
+    async run(_taskId, onProgress) {
+      const res = await watermarkAndNumberPdf(p.input, output, {
+        contentMode,
+        wmText,
+        wmStyle: p.wmStyle || 'tiled',
+        wmColor: p.wmColor || '#64748b',
+        wmOpacity: p.wmOpacity ?? '0.28',
+        wmSize: p.wmSize || 'medium',
+        numFormat: p.numFormat || 'slash',
+        numPos: p.numPos || 'bc',
+        numStart: p.numStart || '1',
+        pageRange: String(p.pageRange || '').trim(),
+        onProgress,
+      });
+      return {
+        output,
+        outputType: 'file',
+        pdfSummary: {
+          action: 'watermark',
+          contentMode,
+          totalPages: res.totalPages,
+          affectedCount: res.affectedCount,
+          pageCount: res.totalPages,
+          outputSize: res.outputSize,
+        },
+      };
+    },
+  };
+}
+
 module.exports = {
   docExtractImages,
   docCompressImages,
@@ -2105,8 +2340,16 @@ module.exports = {
   docStyleImages,
   mdOrganizeImages,
   docToPdf,
+  wordToPdf,
+  pdfToWord,
+  pdfCompress,
+  pdfSearchable,
+  pdfCrop,
+  pdfRotate,
+  pdfWatermark,
   imagesToPdf,
   pdfToImages,
   pdfMerge,
   pdfSplit,
+  pdfPreview,
 };
