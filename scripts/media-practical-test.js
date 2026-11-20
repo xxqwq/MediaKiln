@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { executeTask, probe, ensureBinaries, FFMPEG } = require('../ffmpeg');
+const videoBuilders = require('../modules/video');
 
 function runBin(args) {
   const res = spawnSync(FFMPEG, ['-hide_banner', '-loglevel', 'error', '-y', ...args], { encoding: 'utf8' });
@@ -57,6 +58,37 @@ async function main() {
     const d33 = extractGifDelaysCs(r33.output);
     assert(d33.length >= 12, `33fps GIF 帧数不足: ${d33.length}`);
     assert(d33.every((d) => d === 3), `33fps GIF 延迟应全为 3cs: ${JSON.stringify(d33)}`);
+
+    // 1b. 视频转 GIF 多档 / 按比例 / 自定义 / 保持原宽宽度
+    const rRatioWithSrc = await executeTask('mp-gif-p50-src', 'videoToGif', {
+      input: mp4, start: 0, duration: 0.4, fps: 15, width: 'p50', srcW: 96, colors: 128,
+    });
+    assert.equal((await probe(rRatioWithSrc.output)).width, 48, 'p50 (with srcW) 输出宽度应为 48');
+
+    const rRatioNoSrc = await executeTask('mp-gif-p50-nosrc', 'videoToGif', {
+      input: mp4, start: 0, duration: 0.4, fps: 15, width: 'p50', colors: 128,
+    });
+    assert.equal((await probe(rRatioNoSrc.output)).width, 48, 'p50 (without srcW) 输出宽度应为 48');
+
+    const rCustomEven = await executeTask('mp-gif-custom-even', 'videoToGif', {
+      input: mp4, start: 0, duration: 0.4, fps: 15, width: 'custom', customWidth: 140, colors: 128,
+    });
+    assert.equal((await probe(rCustomEven.output)).width, 140, 'customWidth 140 输出宽度应为 140');
+
+    const rCustomOdd = await executeTask('mp-gif-custom-odd', 'videoToGif', {
+      input: mp4, start: 0, duration: 0.4, fps: 15, width: 'custom', customWidth: 141, colors: 128,
+    });
+    assert.equal((await probe(rCustomOdd.output)).width, 142, 'customWidth 141 应偶对齐为 142');
+
+    const rKeepNoSrc = await executeTask('mp-gif-keep-nosrc', 'videoToGif', {
+      input: mp4, start: 0, duration: 0.4, fps: 15, width: '0', colors: 128,
+    });
+    assert.equal((await probe(rKeepNoSrc.output)).width, 96, '保持原宽 (without srcW) 输出宽度应为 96');
+
+    const plan2560 = videoBuilders.videoToGif({ input: mp4, width: 'custom', customWidth: 2560 });
+    assert(plan2560.steps[0].args.join(' ').includes('scale=2560:-2:flags=lanczos'), '2560 customWidth 应生成对应 scale');
+    const planClamp = videoBuilders.videoToGif({ input: mp4, width: 'custom', customWidth: 5000 });
+    assert(planClamp.steps[0].args.join(' ').includes('scale=3840:-2:flags=lanczos'), '超过 3840 的 customWidth 应限制为 3840');
 
     // 2. GIF 压缩保持 50fps 与自定义 50fps
     const gifInfo = await probe(gif50);

@@ -15,7 +15,7 @@ const painPoints = [
     icon: 'files',
     color: '#60a5fa',
     title: '几百 MB 的 PPT 发不出',
-    desc: '不用一页页另存压缩。自动扫描 .docx / .pptx 内嵌图片原位瘦身与 SHA-256 去重，排版纹丝不动。',
+    desc: '不用一页页另存压缩。自动扫描 .docx / .pptx 内嵌图片、GIF 动图与视频按分类策略原位瘦身，并支持 SHA-256 去重，排版与动效纹丝不动。',
   },
   {
     icon: 'palette',
@@ -52,7 +52,7 @@ const rows = [
   },
   {
     dim: '画质与硬件加速',
-    ours: '两遍调色板 GIF 编码 + 自动检测 NVENC / QSV / AMF',
+    ours: '两遍调色板 GIF 编码（最高 50 fps、多档/按比例/自定义宽度）+ 自动检测 NVENC / QSV / AMF',
     web: '受限于服务器算力，常强制压缩画质或降帧降分辨率',
     heavy: '画质极强，但参数门槛高、占用数 GB 内存与磁盘',
   },

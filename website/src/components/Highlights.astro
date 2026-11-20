@@ -35,14 +35,14 @@ const docShot = ['screenshots/doc-extract.webp', 'screenshots/doc-extract-images
       <article class="card tile t-batch reveal">
         <div class="tile-icon" style="--ic:#8b84ff" set:html={iconSvg('package', 19)} />
         <h3>拖进一堆文件，批量处理</h3>
-        <p>{s.batchFeatures} 个功能支持多文件队列：可以随时添加、移除、中途取消，单个文件失败不会影响其他文件。</p>
+        <p>{s.batchFeatures} 个功能支持多文件队列与图片缩略图网格预览：支持切换列表/大图与点击放大，随时添加、移除或中途取消，单文件失败不影响其他文件。</p>
         {batchShot && (
           <div class="shot-frame">
             <img
               class="tile-shot"
               src={url(batchShot)}
               alt="批量队列处理完成后的界面截图"
-              data-caption="批量队列处理：一次拖入多个文件顺序处理，实时显示各自压缩率"
+              data-caption="批量队列处理：支持图片缩略图网格与列表切换、点击放大预览，实时显示各自压缩率"
               data-zoomable
               loading="lazy"
               width="1440"
@@ -67,7 +67,7 @@ const docShot = ['screenshots/doc-extract.webp', 'screenshots/doc-extract-images
       <article class="card tile t-doc reveal">
         <div class="tile-icon" style="--ic:#60a5fa" set:html={iconSvg('files', 19)} />
         <h3>Word / PPT / PDF 本地处理</h3>
-        <p>提取或回填 Word、PPT 图片，互转 Word 和 PDF。用缩略图整理 PDF 页面，预览后批量裁白边，或给扫描件添加可搜索文字。</p>
+        <p>按静态图、GIF 与内嵌视频分类原位瘦身 Word / PPT，支持提取回填与 Word ↔ PDF 互转；用缩略图整理 PDF 页面、预览裁白边或离线 OCR。</p>
         {docShot ? (
           <div class="shot-frame">
             <img

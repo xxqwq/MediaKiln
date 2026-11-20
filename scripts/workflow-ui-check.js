@@ -44,6 +44,9 @@ async function checkImageOcr(win) {
       delete navigator.clipboard.writeText;
     }
     await useFiles(inputs);
+    if (!document.querySelector('#batch-list .batch-items.is-grid') || !document.querySelector('#batch-list .batch-thumb-wrap img')) {
+      throw new Error('多图批量队列未展示缩略图网格');
+    }
     await runTask();
     if (document.querySelectorAll('#batch-list .batch-status.ok').length !== inputs.length) throw new Error('批量识字未全部导出');
   })(${JSON.stringify(files)})`);
@@ -82,6 +85,10 @@ async function checkPdfTools(win) {
     selectFeatureById('pdfMerge');
     await useFiles([first]);
     await until(() => cards().length === 3 && cards().every((card) => card.querySelector('img').naturalWidth), 'PDF 缩略图未加载');
+    assert(el('batch-list').classList.contains('batch-list-pdf'), 'PDF 页面整理未解除 batch-list 限制');
+    assert(getComputedStyle(el('batch-list')).maxHeight === 'none', 'PDF 页面整理外层高度仍被截断');
+    query('[data-pdf-size="lg"]')?.click();
+    assert(query('.pdf-page-grid')?.dataset.size === 'lg', 'PDF 缩略图尺寸切换失败');
     cards()[1].click();
     control('earlier');
     assert(cards()[0].dataset.pageId === '0-2', '按钮未能前移页面');
@@ -238,12 +245,20 @@ function registerStubIpc() {
   ipcMain.handle('wf:stat-multi', () => []);
   ipcMain.handle('wf:scan-dir', () => ({ ok: true, files: [] }));
   const isFixture = (file) => path.dirname(file) === PROFILE && /\.(pdf|png|txt)$/.test(file);
-  ipcMain.handle('probe', async (_e, p) => (p === 'F:\\stub.mp4'
-    ? { ok: true, info: { duration: 5, width: 640, height: 360, fps: 24, size: 10240, isImage: false, hasAudio: true } }
-    : (isFixture(p) ? { ok: true, info: await probe(p) } : { ok: false, error: 'stub' })));
+  const stubInfoFor = (p) => {
+    if (p === 'F:\\stub.mp4') return { duration: 5, width: 640, height: 360, fps: 24, size: 10240, isImage: false, hasAudio: true };
+    if (p === 'F:\\stub.pptx') return { duration: 0, width: 0, height: 0, fps: 0, size: 20480, isImage: false, isDoc: true, docType: 'pptx', imageCount: 2, videoCount: 1, docStats: { gifCount: 1, videoCount: 1, audioCount: 0 }, sections: [] };
+    if (p === 'F:\\stub.docx') return { duration: 0, width: 0, height: 0, fps: 0, size: 15360, isImage: false, isDoc: true, docType: 'docx', imageCount: 2, videoCount: 0, docStats: { gifCount: 1, videoCount: 0, audioCount: 0 }, sections: [] };
+    return null;
+  };
+  ipcMain.handle('probe', async (_e, p) => {
+    const stub = stubInfoFor(p);
+    if (stub) return { ok: true, info: stub };
+    return isFixture(p) ? { ok: true, info: await probe(p) } : { ok: false, error: 'stub' };
+  });
   ipcMain.handle('probe-multi', (_e, ps) => Promise.all((ps || []).map(async (p) => ({
     path: p,
-    info: p === 'F:\\stub.mp4' ? { duration: 5, width: 640, height: 360, fps: 24, size: 10240, isImage: false, hasAudio: true } : (isFixture(p) ? await probe(p) : null),
+    info: stubInfoFor(p) || (isFixture(p) ? await probe(p) : null),
   }))));
   ipcMain.handle('task:start', async (_e, { feature, params }) => {
     try {
@@ -392,6 +407,26 @@ app.whenReady().then(async () => {
       const singleItems = document.querySelectorAll('#nav .nav-item:not(.wf-node-tpl)').length;
       if (singleItems !== 73) throw new Error('单工具模式导航恢复异常: ' + singleItems);
 
+      const widthSel = document.querySelector('#params select[data-key="width"]');
+      if (!widthSel) throw new Error('视频转 GIF 宽度下拉框缺失');
+      const widthVals = [...widthSel.options].map((o) => o.value);
+      for (const expectedW of ['1920', '1280', 'p50', 'custom']) {
+        if (!widthVals.includes(expectedW)) {
+          throw new Error('视频转 GIF 缺少宽度选项: ' + expectedW);
+        }
+      }
+      widthSel.value = 'custom';
+      widthSel.dispatchEvent(new Event('change'));
+      const customWidthField = document.querySelector('#params .field[data-field-key="customWidth"]');
+      if (!customWidthField || customWidthField.style.display === 'none') {
+        throw new Error('选择自定义宽度时未显示 customWidth 输入框');
+      }
+      widthSel.value = '480';
+      widthSel.dispatchEvent(new Event('change'));
+      if (customWidthField.style.display !== 'none') {
+        throw new Error('切回固定宽度时未隐藏 customWidth 输入框');
+      }
+
       const setFps = (value) => {
         const input = document.querySelector('#params select[data-key="fps"]');
         input.value = value;
@@ -421,6 +456,41 @@ app.whenReady().then(async () => {
       }
       modeBtnSingle.click();
       await new Promise((r) => setTimeout(r, 60));
+
+      // 校验 Word / PPT 一键压缩瘦身的分类策略参数与联动隐藏
+      document.querySelector('#nav [data-id="docCompressImages"]')?.click();
+      await useFiles(['F:\\\\stub.pptx']);
+      await new Promise((r) => setTimeout(r, 40));
+      if (document.querySelectorAll('#params .field-group-header').length !== 3) {
+        throw new Error('docCompressImages 未渲染 3 个分类策略标题');
+      }
+      if (!document.getElementById('file-info')?.textContent.includes('含 GIF 1')) {
+        throw new Error('PPT 文件信息未展示含 GIF 数量');
+      }
+      document.querySelector('#params [data-key="preset"] [data-val="extreme"]')?.click();
+      if (document.querySelector('#params select[data-key="imageMaxSide"]')?.value !== '1280'
+          || document.querySelector('#params select[data-key="gifMaxSide"]')?.value !== '480'
+          || document.querySelector('#params select[data-key="videoMaxSide"]')?.value !== '960') {
+        throw new Error('docCompressImages 预设联动未同步更新分类参数');
+      }
+      document.querySelector('#params [data-key="gifMode"] [data-val="keep"]')?.click();
+      if (document.querySelector('#params .field[data-field-key="gifMaxSide"]')?.style.display !== 'none') {
+        throw new Error('跳过 GIF 时未隐藏 GIF 子选项');
+      }
+      document.querySelector('#params [data-key="gifMode"] [data-val="compress"]')?.click();
+      const gifMaxSel = document.querySelector('#params select[data-key="gifMaxSide"]');
+      gifMaxSel.value = 'custom';
+      gifMaxSel.dispatchEvent(new Event('change'));
+      if (document.querySelector('#params .field[data-field-key="gifCustomMaxSide"]')?.style.display === 'none') {
+        throw new Error('选择自定义 GIF 上限时未显示数值输入框');
+      }
+      await useFiles(['F:\\\\stub.docx']);
+      await new Promise((r) => setTimeout(r, 40));
+      if (document.querySelector('#params .field[data-field-key="__hdr_video"]')?.style.display !== 'none'
+          || document.querySelector('#params .field[data-field-key="videoMode"]')?.style.display !== 'none') {
+        throw new Error('Word (.docx) 未自动隐藏 PPT 内嵌视频策略');
+      }
+      document.getElementById('btn-reset-params')?.click();
 
       // 8. 校验热更新弹窗开启与关闭
       const updBtn = document.getElementById('btn-check-update');

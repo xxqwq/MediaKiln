@@ -569,6 +569,7 @@
   function buildDefaultParams(feature) {
     const defaults = {};
     for (const field of feature.fields || []) {
+      if (field.type === 'groupHeader') continue;
       if (field.type === 'times') {
         defaults.tStart = 0;
         defaults.tEnd = 0; // 0 代表自动取完整时长（由 buildNodeTaskParams 处理）
@@ -1149,8 +1150,11 @@
             duration: t.duration,
             end: t.end,
             fps: v.fps || '15',
-            width: v.width === '0' ? info.width : (v.width || '480'),
+            width: v.width ?? '480',
+            customWidth: v.customWidth || '600',
+            srcW: info.width,
             colors: v.colors || '128',
+            totalDuration: dur,
           };
         }
         case 'gifToVideo':
@@ -1641,9 +1645,23 @@
           return {
             input: inputPath,
             preset: v.preset || 'balanced',
-            maxSide: v.maxSide || '1920',
+            ...(v.maxSide !== undefined ? { maxSide: v.maxSide } : {}),
+            imageMode: v.imageMode || 'compress',
+            imageQuality: v.imageQuality || v.preset || 'balanced',
+            ...(v.imageMaxSide !== undefined ? { imageMaxSide: v.imageMaxSide } : {}),
+            ...(v.imageCustomMaxSide !== undefined ? { imageCustomMaxSide: v.imageCustomMaxSide } : {}),
             formatMode: v.formatMode || 'auto',
+            gifMode: v.gifMode || 'compress',
+            ...(v.gifMaxSide !== undefined ? { gifMaxSide: v.gifMaxSide } : {}),
+            ...(v.gifCustomMaxSide !== undefined ? { gifCustomMaxSide: v.gifCustomMaxSide } : {}),
+            ...(v.gifFps !== undefined ? { gifFps: v.gifFps } : {}),
+            ...(v.gifCustomFps !== undefined ? { gifCustomFps: v.gifCustomFps } : {}),
+            ...(v.gifColors !== undefined ? { gifColors: v.gifColors } : {}),
+            ...(v.gifLossy !== undefined ? { gifLossy: v.gifLossy } : {}),
             videoMode: v.videoMode || 'compress',
+            videoQuality: v.videoQuality || v.preset || 'balanced',
+            ...(v.videoMaxSide !== undefined ? { videoMaxSide: v.videoMaxSide } : {}),
+            ...(v.videoCustomMaxSide !== undefined ? { videoCustomMaxSide: v.videoCustomMaxSide } : {}),
             sectionKeyword: v.sectionKeyword || '',
           };
         case 'docExtractImages':

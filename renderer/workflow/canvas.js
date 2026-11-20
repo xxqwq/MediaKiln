@@ -958,7 +958,7 @@
       if ([
         'wfFilePicker', 'wfBatchPicker', 'wfFolderScanPicker', 'wfDirPicker',
         'cropCanvas', 'multiSegments', 'secondFile', 'replaceSource',
-        'times', 'text', 'color',
+        'times', 'text', 'color', 'groupHeader',
       ].includes(field.type)) return true;
       if (field.type === 'chips') {
         const opts = field.options || [];
@@ -1221,6 +1221,9 @@
             onParamsChanged(node, false);
             rerenderNodeBody(node);
           };
+        } else if (field.type === 'groupHeader') {
+          fw.classList.add('wf-field-group-header');
+          fw.innerHTML = `<div class="wf-group-head"><span>${esc(field.label)}</span>${field.hint ? `<span class="wf-group-hint">${esc(field.hint)}</span>` : ''}</div>`;
         }
 
         body.appendChild(fw);
@@ -1248,7 +1251,8 @@
       const upSpec = def.inputs?.[0] ? reg.getUpstreamSpecForPort(graph, nodeId, def.inputs[0].id) : null;
       const isImage = !!(upSpec?.exts?.length && upSpec.exts.every((e) => reg.IMG_EXTS.includes(e)));
       const isGif = !!(upSpec?.exts?.length && upSpec.exts.every((e) => e === 'gif'));
-      const ctx = { isImage, isGif };
+      const isDocx = !!(upSpec?.exts?.length && upSpec.exts.every((e) => e === 'docx'));
+      const ctx = { isImage, isGif, isDocx };
       const vals = node.params || {};
 
       for (const field of def.fields) {
@@ -2783,7 +2787,7 @@
       const presetParams = { ...def.defaultParams() };
       if (fieldValues && typeof fieldValues === 'object') {
         for (const f of def.fields || []) {
-          if (f.key && fieldValues[f.key] !== undefined) {
+          if (f.type !== 'groupHeader' && f.key && fieldValues[f.key] !== undefined) {
             presetParams[f.key] = fieldValues[f.key];
           }
         }

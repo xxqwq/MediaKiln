@@ -320,6 +320,7 @@ function inspectDocx(filePath) {
   });
 
   const vectorCount = items.filter((i) => i.isVectorLegacy).length;
+  const gifCount = items.filter((i) => i.ext === 'gif').length;
   return {
     docType: 'docx',
     items,
@@ -329,6 +330,7 @@ function inspectDocx(filePath) {
       imageCount: items.length,
       rasterCount: items.length - vectorCount,
       vectorCount,
+      gifCount,
       videoCount: 0,
       audioCount: 0,
     },
@@ -512,6 +514,7 @@ function inspectPptx(filePath) {
   const audioCount = items.filter((i) => i.mediaKind === 'audio').length;
   const imageItems = items.filter((i) => i.mediaKind === 'image');
   const vectorCount = imageItems.filter((i) => i.isVectorLegacy).length;
+  const gifCount = imageItems.filter((i) => i.ext === 'gif').length;
 
   return {
     docType: 'pptx',
@@ -522,6 +525,7 @@ function inspectPptx(filePath) {
       imageCount: imageItems.length,
       rasterCount: imageItems.length - vectorCount,
       vectorCount,
+      gifCount,
       videoCount,
       audioCount,
     },

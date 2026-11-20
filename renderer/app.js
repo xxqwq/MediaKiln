@@ -63,6 +63,97 @@ function toFileUrl(filePath) {
 }
 window.VGT.toFileUrl = toFileUrl;
 
+const PREVIEWABLE_IMG_EXTS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'apng', 'bmp', 'avif', 'ico', 'svg']);
+const isPreviewableImagePath = (p) => PREVIEWABLE_IMG_EXTS.has(String(p || '').split('.').pop().toLowerCase());
+
+let batchViewMode = localStorage.getItem('vgt_batch_view') === 'list' ? 'list' : 'grid';
+let batchThumbSize = localStorage.getItem('vgt_batch_size') === 'lg' ? 'lg' : 'md';
+let batchListExpanded = localStorage.getItem('vgt_batch_expanded') === '1';
+
+function createQueueToolbar({ count, allImages, onRerender }) {
+  const bar = document.createElement('div');
+  bar.className = 'batch-toolbar';
+
+  const info = document.createElement('span');
+  info.className = 'muted';
+  info.textContent = allImages ? `共 ${count} 张图片（点击缩略图可放大）` : `共 ${count} 个文件`;
+  bar.appendChild(info);
+
+  const right = document.createElement('div');
+  right.className = 'batch-toolbar-right';
+
+  if (allImages) {
+    for (const [mode, lbl] of [['grid', '缩略图'], ['list', '列表']]) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `batch-btn${batchViewMode === mode ? ' on' : ''}`;
+      btn.textContent = lbl;
+      btn.onclick = () => {
+        if (batchViewMode === mode) return;
+        batchViewMode = mode;
+        try { localStorage.setItem('vgt_batch_view', mode); } catch {}
+        onRerender();
+      };
+      right.appendChild(btn);
+    }
+    if (batchViewMode === 'grid') {
+      for (const [sz, lbl] of [['md', '中图'], ['lg', '大图']]) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = `batch-btn${batchThumbSize === sz ? ' on' : ''}`;
+        btn.textContent = lbl;
+        btn.onclick = () => {
+          if (batchThumbSize === sz) return;
+          batchThumbSize = sz;
+          try { localStorage.setItem('vgt_batch_size', sz); } catch {}
+          onRerender();
+        };
+        right.appendChild(btn);
+      }
+    }
+  }
+
+  const expBtn = document.createElement('button');
+  expBtn.type = 'button';
+  expBtn.className = `batch-btn${batchListExpanded ? ' on' : ''}`;
+  expBtn.textContent = batchListExpanded ? '收起高度' : '展开全部';
+  expBtn.onclick = () => {
+    batchListExpanded = !batchListExpanded;
+    try { localStorage.setItem('vgt_batch_expanded', batchListExpanded ? '1' : '0'); } catch {}
+    onRerender();
+  };
+  right.appendChild(expBtn);
+
+  bar.appendChild(right);
+  return bar;
+}
+
+function openQueueLightbox(items, itemPath) {
+  const imgItems = items.filter((it) => isPreviewableImagePath(it.path));
+  const index = Math.max(0, imgItems.findIndex((it) => it.path === itemPath));
+  window.VGT.lightbox?.openSingle({
+    list: imgItems.map((it) => ({ path: it.path, label: it.path.split(/[\\/]/).pop() })),
+    index,
+  });
+}
+
+function createQueueImgEl(item, allItems, className) {
+  const img = document.createElement('img');
+  const isSvg = item.path.toLowerCase().endsWith('.svg');
+  if (className) img.className = className + (isSvg ? ' is-svg' : '');
+  else if (isSvg) img.className = 'is-svg';
+  img.src = toFileUrl(item.path);
+  img.alt = item.path.split(/[\\/]/).pop();
+  img.loading = 'lazy';
+  img.draggable = false;
+  img.title = '点击放大查看';
+  img.onclick = (e) => {
+    e.stopPropagation();
+    openQueueLightbox(allItems, item.path);
+  };
+  return img;
+}
+
 function withGlobalPrefs(params, extra = {}) {
   return {
     ...params,
@@ -511,11 +602,12 @@ function renderFileCard(ext) {
       parts.push(`识别到 ${info.imageCount} 处图片${sub.length ? `（${sub.join(' · ')}）` : ''}`);
     } else if (info.docType === 'pptx') {
       const extra = [];
+      if (st.gifCount) extra.push(`含 GIF ${st.gifCount}`);
       if (st.videoCount) extra.push(`视频 ${st.videoCount}`);
       if (st.audioCount) extra.push(`音频 ${st.audioCount}`);
-      parts.push(`识别到 ${info.imageCount || 0} 张图片${extra.length ? ` · ${extra.join(' · ')}` : ''}`);
+      parts.push(`识别到 ${info.imageCount || 0} 张图片${extra.length ? `（${extra.join(' · ')}）` : ''}`);
     } else {
-      parts.push(`识别到 ${info.imageCount || 0} 张图片`);
+      parts.push(`识别到 ${info.imageCount || 0} 张图片${st.gifCount ? `（含 GIF ${st.gifCount}）` : ''}`);
     }
   } else {
     if (info.isSvg) parts.push('SVG 矢量图');
@@ -554,6 +646,57 @@ function renderFileCard(ext) {
   }
 }
 
+function buildQueueMetaText(item) {
+  const metaParts = [];
+  if (item.info?.isDoc) {
+    metaParts.push(
+      item.info.docType === 'pdf'
+        ? `${item.info.pageCount || 0} 页`
+        : (item.info.docType === 'doc' ? '旧版 .doc' : `${item.info.imageCount || 0} 张图`),
+    );
+  }
+  if (item.info?.width) metaParts.push(`${item.info.width}×${item.info.height}`);
+  if (item.info?.duration > 0) metaParts.push(fmtDur(item.info.duration));
+  metaParts.push(fmtSize(item.info?.size));
+  return metaParts.join(' · ');
+}
+
+function appendQueueLayout(row, { idx, item, items, useGrid, tailEls }) {
+  const nameEl = document.createElement('div');
+  nameEl.className = 'batch-name';
+  nameEl.textContent = useGrid ? item.path.split(/[\\/]/).pop() : `${idx + 1}. ${item.path.split(/[\\/]/).pop()}`;
+  nameEl.title = item.path;
+
+  const metaEl = document.createElement('div');
+  metaEl.className = 'batch-meta';
+  metaEl.textContent = buildQueueMetaText(item);
+
+  if (useGrid) {
+    const thumbWrap = document.createElement('div');
+    thumbWrap.className = 'batch-thumb-wrap';
+    thumbWrap.onclick = () => openQueueLightbox(items, item.path);
+    thumbWrap.appendChild(createQueueImgEl(item, items));
+    const badge = document.createElement('span');
+    badge.className = 'batch-idx-badge';
+    badge.textContent = `#${idx + 1}`;
+    thumbWrap.appendChild(badge);
+    row.appendChild(thumbWrap);
+    row.appendChild(nameEl);
+    row.appendChild(metaEl);
+    const foot = document.createElement('div');
+    foot.className = 'batch-card-foot';
+    tailEls.forEach((el) => foot.appendChild(el));
+    row.appendChild(foot);
+  } else {
+    if (isPreviewableImagePath(item.path)) {
+      row.appendChild(createQueueImgEl(item, items, 'batch-thumb'));
+    }
+    row.appendChild(nameEl);
+    row.appendChild(metaEl);
+    tailEls.forEach((el) => row.appendChild(el));
+  }
+}
+
 function renderMultiCard(append = false) {
   $('dropzone').classList.add('hidden');
   $('file-card').classList.remove('hidden');
@@ -572,30 +715,30 @@ function renderMultiCard(append = false) {
 
   const listEl = $('batch-list');
   listEl.classList.remove('hidden');
+  listEl.classList.toggle('batch-list-pdf', organizePdf);
   if (organizePdf) {
     pdfOrganizer.load(files.map((item) => item.path), append);
     return;
   }
   listEl.innerHTML = '';
+
+  const allImages = files.length > 0 && files.every((it) => isPreviewableImagePath(it.path));
+  const useGrid = allImages && batchViewMode === 'grid';
+  if (allImages || files.length > 6) {
+    listEl.appendChild(createQueueToolbar({
+      count: files.length,
+      allImages,
+      onRerender: () => renderMultiCard(),
+    }));
+  }
+
+  const itemsWrap = document.createElement('div');
+  itemsWrap.className = 'batch-items' + (useGrid ? ' is-grid' : '') + (batchListExpanded ? ' is-expanded' : '');
+  if (useGrid) itemsWrap.dataset.size = batchThumbSize;
+
   files.forEach((item, idx) => {
     const row = document.createElement('div');
     row.className = 'batch-item';
-
-    const nameEl = document.createElement('div');
-    nameEl.className = 'batch-name';
-    nameEl.textContent = `${idx + 1}. ${item.path.split(/[\\/]/).pop()}`;
-    nameEl.title = item.path;
-    row.appendChild(nameEl);
-
-    const metaParts = [];
-    if (item.info?.docType === 'pdf') metaParts.push(`${item.info.pageCount || 0} 页`);
-    if (item.info?.width) metaParts.push(`${item.info.width}×${item.info.height}`);
-    if (item.info?.duration > 0) metaParts.push(fmtDur(item.info.duration));
-    metaParts.push(fmtSize(item.info?.size));
-    const metaEl = document.createElement('div');
-    metaEl.className = 'batch-meta';
-    metaEl.textContent = metaParts.join(' · ');
-    row.appendChild(metaEl);
 
     const upBtn = document.createElement('button');
     upBtn.className = 'batch-btn';
@@ -607,7 +750,6 @@ function renderMultiCard(append = false) {
       [files[idx - 1], files[idx]] = [files[idx], files[idx - 1]];
       renderMultiCard();
     };
-    row.appendChild(upBtn);
 
     const downBtn = document.createElement('button');
     downBtn.className = 'batch-btn';
@@ -619,7 +761,6 @@ function renderMultiCard(append = false) {
       [files[idx], files[idx + 1]] = [files[idx + 1], files[idx]];
       renderMultiCard();
     };
-    row.appendChild(downBtn);
 
     const rmBtn = document.createElement('button');
     rmBtn.className = 'batch-btn';
@@ -632,10 +773,11 @@ function renderMultiCard(append = false) {
       files = remaining;
       renderMultiCard();
     };
-    row.appendChild(rmBtn);
 
-    listEl.appendChild(row);
+    appendQueueLayout(row, { idx, item, items: files, useGrid, tailEls: [upBtn, downBtn, rmBtn] });
+    itemsWrap.appendChild(row);
   });
+  listEl.appendChild(itemsWrap);
 }
 
 function outModeText() {
@@ -710,6 +852,7 @@ function updateBatchItemStatus(idx) {
 
 function renderBatchList() {
   const listEl = $('batch-list');
+  listEl.classList.remove('batch-list-pdf');
   if (!batchFiles?.length) {
     listEl.classList.add('hidden');
     listEl.innerHTML = '';
@@ -718,44 +861,36 @@ function renderBatchList() {
   listEl.classList.remove('hidden');
   listEl.innerHTML = '';
 
+  const allImages = batchFiles.every((it) => isPreviewableImagePath(it.path));
+  const useGrid = allImages && batchViewMode === 'grid';
+  if (allImages || batchFiles.length > 6) {
+    listEl.appendChild(createQueueToolbar({
+      count: batchFiles.length,
+      allImages,
+      onRerender: () => renderBatchList(),
+    }));
+  }
+
+  const itemsWrap = document.createElement('div');
+  itemsWrap.className = 'batch-items' + (useGrid ? ' is-grid' : '') + (batchListExpanded ? ' is-expanded' : '');
+  if (useGrid) itemsWrap.dataset.size = batchThumbSize;
+
   batchFiles.forEach((item, idx) => {
     const row = document.createElement('div');
     row.className = 'batch-item';
     row.dataset.idx = String(idx);
 
-    const nameEl = document.createElement('div');
-    nameEl.className = 'batch-name';
-    nameEl.textContent = `${idx + 1}. ${item.path.split(/[\\/]/).pop()}`;
-    nameEl.title = item.path;
-    row.appendChild(nameEl);
-
-    const metaParts = [];
-    if (item.info?.isDoc) {
-      metaParts.push(
-        item.info.docType === 'pdf'
-          ? `${item.info.pageCount || 0} 页`
-          : (item.info.docType === 'doc' ? '旧版 .doc' : `${item.info.imageCount || 0} 张图`),
-      );
-    }
-    if (item.info?.width) metaParts.push(`${item.info.width}×${item.info.height}`);
-    if (item.info?.duration > 0) metaParts.push(fmtDur(item.info.duration));
-    metaParts.push(fmtSize(item.info?.size));
-    const metaEl = document.createElement('div');
-    metaEl.className = 'batch-meta';
-    metaEl.textContent = metaParts.join(' · ');
-    row.appendChild(metaEl);
-
     const statusEl = document.createElement('div');
     applyBatchStatusEl(statusEl, item);
-    row.appendChild(statusEl);
 
+    const tailEls = [statusEl];
     if (item.status === 'done' && item.output) {
       const locBtn = document.createElement('button');
       locBtn.className = 'batch-btn';
       locBtn.textContent = '定位';
       locBtn.onclick = () =>
         item.outputType === 'dir' ? window.api.openFolder(item.output) : window.api.showInFolder(item.output);
-      row.appendChild(locBtn);
+      tailEls.push(locBtn);
     } else if (!running) {
       const rmBtn = document.createElement('button');
       rmBtn.className = 'batch-btn';
@@ -771,11 +906,13 @@ function renderBatchList() {
         renderBatchList();
         $('btn-run').textContent = `开始批量处理 (${batchFiles.length})`;
       };
-      row.appendChild(rmBtn);
+      tailEls.push(rmBtn);
     }
 
-    listEl.appendChild(row);
+    appendQueueLayout(row, { idx, item, items: batchFiles, useGrid, tailEls });
+    itemsWrap.appendChild(row);
   });
+  listEl.appendChild(itemsWrap);
 }
 
 function clearFile() {
@@ -798,6 +935,7 @@ function clearFile() {
   $('btn-zoom-preview').classList.add('hidden');
   $('btn-zoom-preview').textContent = '⛶ 放大预览';
   $('batch-list').classList.add('hidden');
+  $('batch-list').classList.remove('batch-list-pdf');
   $('batch-list').innerHTML = '';
   $('btn-add-more').classList.add('hidden');
   $('btn-replace').textContent = '换一个文件';
@@ -1238,15 +1376,19 @@ async function showSuccess(res) {
     } else if (res.docCompressSummary) {
       const ds = res.docCompressSummary;
       const docLbl = ds.docType === 'pptx' ? 'PPT' : 'Word';
-      const vNote = ds.videoCompressedCount ? `，含视频 ${ds.videoCompressedCount} 个` : '';
+      const breakdown = [];
+      if (ds.imageCompressedCount) breakdown.push(`图片 ${ds.imageCompressedCount}`);
+      if (ds.gifCompressedCount) breakdown.push(`GIF ${ds.gifCompressedCount}`);
+      if (ds.videoCompressedCount) breakdown.push(`视频 ${ds.videoCompressedCount}`);
+      const detailNote = breakdown.length ? `，其中 ${breakdown.join(' / ')}` : '';
       const secScope = ds.sectionFiltered && ds.sectionTitles?.length
         ? `（仅所选 ${ds.sectionTitles.length} 个章节：${escHtml(ds.sectionTitles.slice(0, 2).join('、'))}${ds.sectionTitles.length > 2 ? ' 等' : ''}）`
         : '';
       if (ds.newSize < ds.origSize) {
         const pct = Math.round((1 - ds.newSize / ds.origSize) * 100);
-        line = `✅ ${docLbl}${secScope} 压缩完成：${fmtSize(ds.origSize)} → ${fmtSize(ds.newSize)}，节省 ${pct}%（已压缩 ${ds.compressedCount}/${ds.totalMedia} 项媒体${vNote}）`;
+        line = `✅ ${docLbl}${secScope} 压缩完成：${fmtSize(ds.origSize)} → ${fmtSize(ds.newSize)}，节省 ${pct}%（已压缩 ${ds.compressedCount}/${ds.totalMedia} 项媒体${detailNote}）`;
       } else {
-        line = `✅ ${docLbl}${secScope} 处理完成：${fmtSize(ds.origSize)} → ${fmtSize(ds.newSize)}（所选范围内媒体已接近最优，尝试降低分辨率上限或切换“极限瘦身”）`;
+        line = `✅ ${docLbl}${secScope} 处理完成：${fmtSize(ds.origSize)} → ${fmtSize(ds.newSize)}（所选范围内媒体已接近最优，尝试调整各媒体分类策略或切换“极限瘦身”）`;
       }
     } else if (res.docRepackSummary) {
       const rs = res.docRepackSummary;
@@ -1373,6 +1515,10 @@ async function showSuccess(res) {
         const toolbarHint = canRepackDir
           ? `已选 ${shownThumbs.length} / ${shownThumbs.length} 张（点「🔄 换图 / 📋 贴截图」或直接把截图拖到对应卡片上即可替换，最后点下方「📥 改完放回原 ${repackDocLabel}」）`
           : `已选 ${shownThumbs.length} / ${shownThumbs.length} 张（可直接勾选发给其他工具，或拖拽单图到外部软件）`;
+        const thumbSize = ['sm', 'md', 'lg'].includes(localStorage.getItem('vgt_thumb_size'))
+          ? localStorage.getItem('vgt_thumb_size')
+          : 'md';
+        const thumbExpanded = localStorage.getItem('vgt_thumb_expanded') === '1';
         previewHtml = `
           <div class="result-preview-wrap" id="result-preview-wrap">
             <div class="result-thumb-toolbar">
@@ -1380,8 +1526,14 @@ async function showSuccess(res) {
               <button class="batch-btn" id="thumb-sel-all">全选</button>
               <button class="batch-btn" id="thumb-sel-none">全不选</button>
               ${hasRasterThumb && hasSvgThumb ? '<button class="batch-btn" id="thumb-sel-raster">仅位图</button><button class="batch-btn" id="thumb-sel-svg">仅 SVG</button>' : ''}
+              <div class="result-thumb-toolbar-right">
+                <button class="batch-btn${thumbSize === 'sm' ? ' on' : ''}" data-thumb-size="sm" title="紧凑缩略图">小</button>
+                <button class="batch-btn${thumbSize === 'md' ? ' on' : ''}" data-thumb-size="md" title="默认缩略图">中</button>
+                <button class="batch-btn${thumbSize === 'lg' ? ' on' : ''}" data-thumb-size="lg" title="大图预览">大</button>
+                <button class="batch-btn${thumbExpanded ? ' on' : ''}" id="thumb-expand-btn" title="展开或收起缩略图网格高度">${thumbExpanded ? '收起高度' : '展开全部'}</button>
+              </div>
             </div>
-            <div class="result-thumb-grid">
+            <div class="result-thumb-grid${thumbExpanded ? ' is-expanded' : ''}" id="result-thumb-grid" data-size="${thumbSize}">
               ${shownThumbs.map((p, idx) => {
                 const u = toFileUrl(p);
                 const fn = escHtml(p.split(/[\\/]/).pop());
@@ -1629,6 +1781,25 @@ async function showSuccess(res) {
     }
 
     const wrap = $('result-preview-wrap');
+    const thumbGridEl = $('result-thumb-grid');
+    wrap?.querySelectorAll('[data-thumb-size]').forEach((btn) => {
+      btn.onclick = () => {
+        const nextSize = btn.dataset.thumbSize;
+        if (!thumbGridEl || !nextSize) return;
+        thumbGridEl.dataset.size = nextSize;
+        try { localStorage.setItem('vgt_thumb_size', nextSize); } catch {}
+        wrap.querySelectorAll('[data-thumb-size]').forEach((b) => b.classList.toggle('on', b === btn));
+      };
+    });
+    if ($('thumb-expand-btn') && thumbGridEl) {
+      $('thumb-expand-btn').onclick = () => {
+        const nextExp = !thumbGridEl.classList.contains('is-expanded');
+        thumbGridEl.classList.toggle('is-expanded', nextExp);
+        $('thumb-expand-btn').classList.toggle('on', nextExp);
+        $('thumb-expand-btn').textContent = nextExp ? '收起高度' : '展开全部';
+        try { localStorage.setItem('vgt_thumb_expanded', nextExp ? '1' : '0'); } catch {}
+      };
+    }
     wrap?.querySelectorAll('[data-thumb-idx]').forEach((el) => {
       const idx = Number(el.dataset.thumbIdx) || 0;
       el.onclick = () => openSingleLightbox(idx);

@@ -250,6 +250,16 @@ async function step(name, fn) {
     assert.equal(build('pdfWatermark', { contentMode: 'both' }, { path: 'doc.pdf' }).wmText, '内部资料 · 严禁外传');
     assert.equal(build('addMusic', { ducking: 'yes' }, video, { music: { paths: ['voice.wav'] } }).ducking, 'yes');
     assert.equal(build('watermark', { pos: 'tiled', tileAngle: '0' }, video).tileAngle, '0');
+    const gifRatio = build('videoToGif', { width: 'p50' }, video);
+    assert.equal(gifRatio.width, 'p50');
+    assert.equal(gifRatio.srcW, 128);
+    const gifCustom = build('videoToGif', { width: 'custom', customWidth: '720' }, video);
+    assert.equal(gifCustom.width, 'custom');
+    assert.equal(gifCustom.customWidth, '720');
+    assert.equal(gifCustom.srcW, 128);
+    const gifKeep = build('videoToGif', { width: '0' }, video);
+    assert.equal(gifKeep.width, '0');
+    assert.equal(gifKeep.srcW, 128);
   });
 
   await step('单工具与画布共用格式转换校验', async () => {

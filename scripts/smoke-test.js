@@ -1523,6 +1523,114 @@ async function test(name, feature, params, check) {
     console.log(`  ❌ 132d. PDF 转 Word 深度版面还原\n     ${e.message}`);
   }
 
+  // 133. Word / PPT 一键压缩瘦身：GIF 动图压缩与按媒体分类独立策略
+  try {
+    const heavyGif = path.join(TMP, 'heavy_anim.gif');
+    run(['-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=20:duration=2.5', heavyGif]);
+    const origPngBuf = fs.readFileSync(bigPng);
+    const origGifBuf = fs.readFileSync(heavyGif);
+    const origMovBuf = fs.readFileSync(heavyClipMov);
+
+    const buildGifDeck = (outPath, { includeStatic = true, includeVideo = true } = {}) => {
+      const z = new AdmZip();
+      z.addFile('[Content_Types].xml', Buffer.from('<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Default Extension="jpg" ContentType="image/jpeg"/><Default Extension="gif" ContentType="image/gif"/><Default Extension="mov" ContentType="video/quicktime"/><Default Extension="mp4" ContentType="video/mp4"/></Types>', 'utf8'));
+      z.addFile('ppt/_rels/presentation.xml.rels', Buffer.from('<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/></Relationships>', 'utf8'));
+      z.addFile('ppt/presentation.xml', Buffer.from('<?xml version="1.0" encoding="UTF-8"?><p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst></p:presentation>', 'utf8'));
+      const rels = ['<Relationship Id="rIdGif" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/anim.gif"/>'];
+      const shapes = ['<p:pic><p:blipFill><a:blip r:embed="rIdGif"/></p:blipFill></p:pic>'];
+      if (includeStatic) {
+        rels.push('<Relationship Id="rIdImg" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/pic.png"/>');
+        shapes.push('<p:pic><p:blipFill><a:blip r:embed="rIdImg"/></p:blipFill></p:pic>');
+        z.addFile('ppt/media/pic.png', origPngBuf);
+      }
+      if (includeVideo) {
+        rels.push('<Relationship Id="rIdVid" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/video" Target="../media/clip.mov"/>');
+        shapes.push('<p:pic><p:blipFill><a:videoFile r:link="rIdVid"/></p:blipFill></p:pic>');
+        z.addFile('ppt/media/clip.mov', origMovBuf);
+      }
+      z.addFile('ppt/slides/_rels/slide1.xml.rels', Buffer.from(`<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels.join('')}</Relationships>`, 'utf8'));
+      z.addFile('ppt/slides/slide1.xml', Buffer.from(`<?xml version="1.0" encoding="UTF-8"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:cSld><p:spTree>${shapes.join('')}</p:spTree></p:cSld></p:sld>`, 'utf8'));
+      z.addFile('ppt/media/anim.gif', origGifBuf);
+      z.writeZip(outPath);
+    };
+
+    const deckGifPptx = path.join(TMP, 'deck_gif.pptx');
+    buildGifDeck(deckGifPptx);
+    const deckGifProbe = await probe(deckGifPptx);
+    if (deckGifProbe.docStats?.gifCount !== 1) {
+      throw new Error(`PPTX gifCount 识别异常: ${JSON.stringify(deckGifProbe)}`);
+    }
+
+    // 133a. 静态图 + GIF 动图 + 视频 全部分类独立压缩
+    const out133a = path.join(TMP, 'deck_gif_all.pptx');
+    const t133a = Date.now();
+    const res133a = await executeTask('test-133a', 'docCompressImages', {
+      input: deckGifPptx,
+      output: out133a,
+      preset: 'balanced',
+      imageMode: 'compress', imageQuality: 'balanced', imageMaxSide: '1280', formatMode: 'auto',
+      gifMode: 'compress', gifMaxSide: '360', gifFps: '10', gifColors: '64', gifLossy: 'small',
+      videoMode: 'compress', videoQuality: 'balanced', videoMaxSide: '960',
+    }, () => {});
+    const s133a = res133a.docCompressSummary;
+    if (s133a.imageCompressedCount !== 1 || s133a.gifCompressedCount !== 1 || s133a.videoCompressedCount !== 1) {
+      throw new Error(`133a 分类计数异常: ${JSON.stringify(s133a)}`);
+    }
+    const z133a = new AdmZip(out133a);
+    const cmpGifBuf = z133a.getEntry('ppt/media/anim.gif')?.getData();
+    if (!cmpGifBuf || cmpGifBuf.length >= origGifBuf.length) {
+      throw new Error(`133a GIF 未缩小: ${origGifBuf.length} -> ${cmpGifBuf?.length}`);
+    }
+    const cmpGifTmp = path.join(TMP, 'out_133a_anim.gif');
+    fs.writeFileSync(cmpGifTmp, cmpGifBuf);
+    const cmpGifInfo = await probe(cmpGifTmp);
+    if (cmpGifInfo.nbFrames <= 1 || Math.max(cmpGifInfo.width, cmpGifInfo.height) > 360) {
+      throw new Error(`133a GIF 动效或分辨率上限异常: ${JSON.stringify(cmpGifInfo)}`);
+    }
+    console.log(`  ✅ 133a. PPT 分类策略压缩（图片+GIF动图+视频, GIF ${Math.round(origGifBuf.length / 1024)}KB→${Math.round(cmpGifBuf.length / 1024)}KB, ${Date.now() - t133a}ms）`);
+
+    // 133b. 仅压 GIF，跳过静态图与视频（验证逐字节保留）
+    const out133b = path.join(TMP, 'deck_gif_only_mode.pptx');
+    const res133b = await executeTask('test-133b', 'docCompressImages', {
+      input: deckGifPptx,
+      output: out133b,
+      preset: 'balanced',
+      imageMode: 'keep',
+      gifMode: 'compress', gifMaxSide: '360', gifFps: '10', gifColors: '64', gifLossy: 'small',
+      videoMode: 'keep',
+    }, () => {});
+    const s133b = res133b.docCompressSummary;
+    if (s133b.gifCompressedCount !== 1 || s133b.imageCompressedCount !== 0 || s133b.videoCompressedCount !== 0) {
+      throw new Error(`133b 仅压 GIF 计数异常: ${JSON.stringify(s133b)}`);
+    }
+    const z133b = new AdmZip(out133b);
+    if (!z133b.getEntry('ppt/media/pic.png')?.getData().equals(origPngBuf)
+        || !z133b.getEntry('ppt/media/clip.mov')?.getData().equals(origMovBuf)) {
+      throw new Error('133b 跳过静态图/视频后原媒体字节被改动');
+    }
+    console.log('  ✅ 133b. PPT 分类选择性压缩（仅压 GIF，跳过静态图与视频原样保留）');
+
+    // 133c. 纯 GIF PPTX 压缩（不含其他位图或视频）
+    const onlyGifPptx = path.join(TMP, 'only_gif.pptx');
+    const out133c = path.join(TMP, 'only_gif_已压缩.pptx');
+    buildGifDeck(onlyGifPptx, { includeStatic: false, includeVideo: false });
+    const res133c = await executeTask('test-133c', 'docCompressImages', {
+      input: onlyGifPptx,
+      output: out133c,
+      preset: 'balanced',
+      imageMode: 'compress',
+      gifMode: 'compress', gifMaxSide: '360', gifFps: '10', gifColors: '64', gifLossy: 'balanced',
+      videoMode: 'compress',
+    }, () => {});
+    if (res133c.docCompressSummary.gifCompressedCount !== 1 || fs.statSync(out133c).size >= fs.statSync(onlyGifPptx).size) {
+      throw new Error(`133c 纯 GIF PPTX 压缩异常: ${JSON.stringify(res133c.docCompressSummary)}`);
+    }
+    console.log('  ✅ 133c. 纯 GIF 的 PPT (.pptx) 压缩通过');
+  } catch (e) {
+    failed++;
+    console.log(`  ❌ 133. PPT GIF 压缩与分类策略测试\n     ${e.message}`);
+  }
+
   if (!failed) fs.rmSync(TMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   console.log(failed ? `\n❌ ${failed} 个用例失败，测试产物：${TMP}` : '\n🎉 全部通过');
   process.exit(failed ? 1 : 0);

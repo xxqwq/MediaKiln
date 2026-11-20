@@ -41,6 +41,9 @@ function createOrganizer(container, exportButton, isRunning) {
   let error = '';
   let thumbnailWork;
   let grid;
+  let thumbSize = ['sm', 'md', 'lg'].includes(localStorage.getItem('vgt_pdf_thumb_size'))
+    ? localStorage.getItem('vgt_pdf_thumb_size')
+    : 'md';
 
   function dispose() {
     revision++;
@@ -147,6 +150,7 @@ function createOrganizer(container, exportButton, isRunning) {
     </div><div class="pdf-page-grid" role="list" aria-label="PDF 页面"></div><div class="pdf-page-nav"></div>`;
     container.replaceChildren(panel);
     grid = panel.querySelector('.pdf-page-grid');
+    grid.dataset.size = thumbSize;
     const status = panel.querySelector('[role="status"]');
     const disabled = loading || !!error || isRunning();
     exportButton.disabled = disabled || !pages.length;
@@ -172,6 +176,27 @@ function createOrganizer(container, exportButton, isRunning) {
     control(tools, 'rotate-right', '右转', index < 0, () => rotate(90));
     control(tools, 'remove', '移除', index < 0 || pages.length <= 1, () => remove(index));
     control(tools, 'restore', '恢复移除', !removed.length, restore);
+
+    const sizeGroup = document.createElement('span');
+    sizeGroup.className = 'pdf-size-group';
+    sizeGroup.setAttribute('role', 'group');
+    sizeGroup.setAttribute('aria-label', '缩略图大小');
+    for (const [sz, lbl] of [['sm', '小'], ['md', '中'], ['lg', '大']]) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = `batch-btn pdf-size-btn${thumbSize === sz ? ' on' : ''}`;
+      b.dataset.pdfSize = sz;
+      b.textContent = lbl;
+      b.title = `缩略图尺寸：${lbl}`;
+      b.onclick = () => {
+        thumbSize = sz;
+        grid.dataset.size = sz;
+        try { localStorage.setItem('vgt_pdf_thumb_size', sz); } catch {}
+        sizeGroup.querySelectorAll('.pdf-size-btn').forEach((btn) => btn.classList.toggle('on', btn === b));
+      };
+      sizeGroup.append(b);
+    }
+    tools.append(sizeGroup);
 
     visiblePages().forEach((item, offset) => {
       const card = document.createElement('button');

@@ -82,15 +82,36 @@ const builders = {
   videoToGif(p) {
     const output = defaultOutput(p.input, 'gif', 'gif');
     const fps = Math.min(Math.max(num(p.fps, 15), 5), 50);
-    const width = Math.min(Math.max(num(p.width, 480), 64), 1920);
+    const srcW = num(p.srcW, 0);
+    const rawW = String(p.width ?? '480').trim();
+    const ratioMap = { p75: 0.75, p50: 0.5, p30: 0.3, p25: 0.25 };
+    let scaleVf = null;
+
+    if (rawW === '0') {
+      if (srcW > 0) {
+        scaleVf = scaleFilter(even(Math.min(Math.max(srcW, 32), 3840)));
+      }
+    } else if (Object.prototype.hasOwnProperty.call(ratioMap, rawW)) {
+      const ratio = ratioMap[rawW];
+      if (srcW > 0) {
+        scaleVf = scaleFilter(even(Math.min(Math.max(srcW * ratio, 32), 3840)));
+      } else {
+        scaleVf = `scale='min(3840,max(32,trunc(iw*${ratio}/2)*2))':-2:flags=lanczos`;
+      }
+    } else if (rawW === 'custom') {
+      scaleVf = scaleFilter(even(Math.min(Math.max(num(p.customWidth, 600), 32), 3840)));
+    } else {
+      scaleVf = scaleFilter(even(Math.min(Math.max(num(rawW, 480), 32), 3840)));
+    }
+
     const colors = Math.min(Math.max(num(p.colors, 128), 16), 256);
     const start = Math.max(num(p.start, 0), 0);
     const dur = num(p.duration, 0);
     const total = dur > 0 ? dur : num(p.totalDuration, 0);
     const seg = dur > 0 ? ['-ss', String(start), '-t', String(dur)] : ['-ss', String(start)];
+    const vf = scaleVf ? `fps=${fps},${scaleVf}` : `fps=${fps}`;
     return gifPlan({
-      input: p.input, output, colors, seg, totalDuration: total,
-      vf: `fps=${fps},${scaleFilter(width)}`,
+      input: p.input, output, colors, seg, totalDuration: total, vf,
     });
   },
 

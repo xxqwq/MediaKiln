@@ -634,10 +634,10 @@ let _hwCache = null;
 function testHwEncoder(enc) {
   return new Promise((resolve) => {
     const child = spawn(FFMPEG, [
-      '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=black:s=64x64:d=0.1',
+      '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=black:s=256x256:d=0.1',
       '-frames:v', '1', '-c:v', enc, '-pix_fmt', 'yuv420p', '-f', 'null', '-',
     ], { windowsHide: true });
-    const timer = setTimeout(() => { try { child.kill(); } catch {} resolve(false); }, 3000);
+    const timer = setTimeout(() => { try { child.kill(); } catch {} resolve(false); }, 5000);
     child.on('error', () => { clearTimeout(timer); resolve(false); });
     child.on('close', (code) => { clearTimeout(timer); resolve(code === 0); });
   });

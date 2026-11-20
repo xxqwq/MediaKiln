@@ -16,22 +16,58 @@ const rt = (f) => window.VGT.params.readTimes(f);
 window.VGT.VIDEO_FEATURES = [
   // ================= 转换 =================
   {
-    id: 'videoToGif', group: '转换', icon: '🎞️', name: '视频转 GIF', desc: '选段转高质量动图（调色板两遍编码，最高支持 50 fps）',
+    id: 'videoToGif', group: '转换', icon: '🎞️', name: '视频转 GIF', desc: '选段转高质量动图（调色板两遍编码，最高支持 50 fps，支持多档/按比例/自定义宽度）',
     accept: VIDEO_EXTS,
     fields: [
       { type: 'times' },
       { key: 'fps', label: '帧率', type: 'select', def: '15',
         options: [['10', '10 fps（体积小）'], ['12', '12 fps'], ['15', '15 fps（推荐）'], ['20', '20 fps'], ['24', '24 fps'], ['25', '25 fps'], ['30', '30 fps（流畅）'], ['33', '33 fps（高流畅）'], ['50', '50 fps（最高·浏览器上限）']] },
-      { key: 'width', label: '宽度', type: 'select', def: '480',
-        options: [['320', '320 px'], ['480', '480 px（推荐）'], ['640', '640 px'], ['800', '800 px'], ['0', '保持原宽']] },
+      { key: 'width', label: '宽度 / 缩放', type: 'select', def: '480',
+        options: [
+          ['0', '保持原宽 (100%)'],
+          ['p75', '按比例 75%'],
+          ['p50', '按比例 50%（宽高减半）'],
+          ['p25', '按比例 25%'],
+          ['1920', '1920 px（1080p 全屏）'],
+          ['1440', '1440 px'],
+          ['1280', '1280 px（720p 高清）'],
+          ['1080', '1080 px（竖屏高清）'],
+          ['960', '960 px（清晰演示）'],
+          ['800', '800 px'],
+          ['720', '720 px'],
+          ['640', '640 px'],
+          ['540', '540 px'],
+          ['480', '480 px（推荐）'],
+          ['360', '360 px'],
+          ['320', '320 px'],
+          ['240', '240 px（表情包）'],
+          ['160', '160 px（缩略图）'],
+          ['custom', '自定义宽度…'],
+        ] },
+      { key: 'customWidth', label: '自定义宽度 (px)', type: 'number', def: '600', min: 32, max: 3840, step: 2,
+        showIf: (v) => v.width === 'custom' },
       { key: 'colors', label: '颜色数', type: 'select', def: '128',
         options: [['64', '64 色（最小）'], ['128', '128 色（推荐）'], ['256', '256 色（最佳画质）']] },
     ],
     collect(v, ctx) {
+      if (v.width === 'custom') {
+        const cw = Number(v.customWidth);
+        if (v.customWidth === '' || !Number.isFinite(cw) || cw < 32 || cw > 3840) {
+          throw new Error('请输入 32~3840 px 的自定义宽度');
+        }
+      }
       const t = rt(ctx.file);
       return {
-        input: ctx.file.path, start: t.start, duration: t.duration, end: t.end,
-        fps: v.fps, width: v.width === '0' ? ctx.file.info.width : v.width, colors: v.colors,
+        input: ctx.file.path,
+        start: t.start,
+        duration: t.duration,
+        end: t.end,
+        fps: v.fps,
+        width: v.width,
+        customWidth: v.customWidth,
+        srcW: ctx.file.info?.width,
+        colors: v.colors,
+        totalDuration: ctx.file.info?.duration,
       };
     },
   },

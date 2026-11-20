@@ -87,10 +87,19 @@ function createParamsController(appCtx) {
     return false;
   };
 
+  const isContextDocx = () => {
+    const file = getFile();
+    if (file?.info?.docType) return file.info.docType === 'docx';
+    if (file?.path && file.path.toLowerCase().endsWith('.docx')) return true;
+    const batch = getBatchFiles();
+    if (batch?.length && batch.every((b) => b.info?.docType === 'docx' || b.path?.toLowerCase().endsWith('.docx'))) return true;
+    return false;
+  };
+
   function syncVisibility() {
     const currentFeature = getCurrentFeature();
     const values = collectFieldValues();
-    const ctx = { isImage: isContextImage(), isGif: isContextGif() };
+    const ctx = { isImage: isContextImage(), isGif: isContextGif(), isDocx: isContextDocx() };
     for (const field of currentFeature.fields) {
       if (!field.showIf) continue;
       let target = null;
@@ -301,6 +310,9 @@ function createParamsController(appCtx) {
       } else if (field.type === 'pdfCropPreview') {
         wrap.classList.add('pdf-crop-field');
         wrap.hidden = !file;
+      } else if (field.type === 'groupHeader') {
+        wrap.classList.add('field-full', 'field-group-header');
+        wrap.innerHTML = `<div class="param-group-head"><span class="param-group-title">${escHtml(field.label)}</span>${field.hint ? `<span class="param-group-hint">${escHtml(field.hint)}</span>` : ''}</div>`;
       } else if (field.type === 'docSections') {
         const sections = file?.info?.sections || [];
         const actionWord = field.actionWord || '提取';
@@ -317,6 +329,7 @@ function createParamsController(appCtx) {
             <div class="doc-sections-empty muted">${emptyMsg}</div>`;
         } else {
           window.__docSelectedSectionIds = sections.map((s) => s.id);
+          const secExpanded = localStorage.getItem('vgt_doc_sec_expanded') === '1';
           const rowsHtml = sections.map((s) => {
             const indent = Math.min(5, Math.max(0, (s.level || 1) - 1));
             const countText = s.imageCount > 0
@@ -336,10 +349,11 @@ function createParamsController(appCtx) {
                 <button type="button" class="batch-btn" id="doc-sec-all">全选</button>
                 <button type="button" class="batch-btn" id="doc-sec-with-img" title="只保留含图片或媒体的章节">仅选有图</button>
                 <button type="button" class="batch-btn" id="doc-sec-none">清空</button>
+                <button type="button" class="batch-btn${secExpanded ? ' on' : ''}" id="doc-sec-expand" title="展开或收起章节列表高度">${secExpanded ? '收起高度' : '展开全部'}</button>
                 <label class="doc-sec-cascade" title="勾选/取消父章节时连带其子章节"><input type="checkbox" id="doc-sec-cascade" checked /> 连带子章节</label>
               </div>
               <div class="doc-sec-summary" id="doc-sec-summary"></div>
-              <div class="doc-sec-list" id="doc-sec-list">${rowsHtml}</div>
+              <div class="doc-sec-list${secExpanded ? ' is-expanded' : ''}" id="doc-sec-list">${rowsHtml}</div>
             </div>`;
         }
       }
@@ -863,6 +877,17 @@ function createParamsController(appCtx) {
         }
         syncDocSections();
       };
+      const secExpandBtn = docSecBox.querySelector('#doc-sec-expand');
+      const secListEl = docSecBox.querySelector('#doc-sec-list');
+      if (secExpandBtn && secListEl) {
+        secExpandBtn.onclick = () => {
+          const nextExp = !secListEl.classList.contains('is-expanded');
+          secListEl.classList.toggle('is-expanded', nextExp);
+          secExpandBtn.classList.toggle('on', nextExp);
+          secExpandBtn.textContent = nextExp ? '收起高度' : '展开全部';
+          try { localStorage.setItem('vgt_doc_sec_expanded', nextExp ? '1' : '0'); } catch {}
+        };
+      }
       if (searchEl) {
         searchEl.oninput = () => {
           const q = searchEl.value.trim().toLowerCase();

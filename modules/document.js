@@ -80,6 +80,7 @@ const MIME_EXT = {
 
 const RASTER_MEDIA_EXTS = new Set(['png', 'jpg', 'jpeg', 'bmp', 'tif', 'tiff', 'webp']);
 const VIDEO_MEDIA_EXTS = new Set(['mp4', 'mov', 'avi', 'mkv', 'webm', 'wmv', 'm4v', 'flv', 'mpg', 'mpeg']);
+const GIF_MEDIA_EXTS = new Set(['gif']);
 const WORD_SAFE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'bmp', 'tif', 'tiff']);
 
 function sanitizeBase(raw, fallback = 'image') {
@@ -164,7 +165,44 @@ function isAlphaPixFmt(pixFmt) {
   return f.includes('rgba') || f.includes('bgra') || f.includes('yuva') || f.includes('ya') || f.includes('pal8') || f.includes('abgr') || f.includes('argb');
 }
 
-async function compressRasterFile(taskId, srcPath, origExt, { maxSide, preset, formatMode }, tmpDir, idx) {
+function resolveMaxSideSpec(rawVal, customVal, fallbackPx, { min = 32, max = 8192 } = {}) {
+  const s = String(rawVal ?? '');
+  if (s === 'p75') return { mode: 'ratio', ratio: 0.75 };
+  if (s === 'p50') return { mode: 'ratio', ratio: 0.5 };
+  if (s === 'p30') return { mode: 'ratio', ratio: 0.3 };
+  if (s === 'custom') {
+    const px = Math.min(max, Math.max(min, Math.round(num(customVal, fallbackPx || 720))));
+    return { mode: 'maxSide', maxSide: px };
+  }
+  return { mode: 'maxSide', maxSide: Math.max(0, Math.round(num(rawVal, fallbackPx))) };
+}
+
+function buildResizeFilter(w, h, spec, { minDim = 2, even = false } = {}) {
+  if (spec?.mode === 'ratio') {
+    let tw = Math.max(minDim, Math.round(w * spec.ratio));
+    let th = Math.max(minDim, Math.round(h * spec.ratio));
+    if (even) {
+      tw = Math.max(minDim, Math.floor(tw / 2) * 2);
+      th = Math.max(minDim, Math.floor(th / 2) * 2);
+    }
+    return `scale=${tw}:${th}:flags=lanczos`;
+  }
+  if (spec?.mode === 'maxSide' && spec.maxSide > 0 && Math.max(w, h) > spec.maxSide) {
+    return `scale='min(${spec.maxSide},iw)':'min(${spec.maxSide},ih)':force_original_aspect_ratio=decrease:flags=lanczos`;
+  }
+  return null;
+}
+
+function resolveGifFpsSpec(rawVal, customVal, fallbackFps) {
+  const s = String(rawVal ?? '');
+  if (s === 'p50') return { mode: 'half' };
+  if (s === 'custom') {
+    return { mode: 'cap', fps: Math.max(1, Math.min(50, num(customVal, 10))) };
+  }
+  return { mode: 'cap', fps: Math.max(0, Math.min(50, num(rawVal, fallbackFps))) };
+}
+
+async function compressRasterFile(taskId, srcPath, origExt, { maxSide, resizeSpec, preset, formatMode }, tmpDir, idx) {
   const info = await probe(srcPath);
   const w = info.width || 0;
   const h = info.height || 0;
@@ -182,12 +220,11 @@ async function compressRasterFile(taskId, srcPath, origExt, { maxSide, preset, f
 
   const outPath = path.join(tmpDir, `out_${idx}.${targetFmt}`);
   const vfParts = [];
-  if (maxSide > 0 && Math.max(w, h) > maxSide) {
-    vfParts.push(`scale='min(${maxSide},iw)':'min(${maxSide},ih)':force_original_aspect_ratio=decrease:flags=lanczos`);
-  }
+  const scaleExpr = buildResizeFilter(w, h, resizeSpec || { mode: 'maxSide', maxSide });
+  if (scaleExpr) vfParts.push(scaleExpr);
 
   if (targetFmt === 'png') {
-    if (preset === 'high') {
+    if (preset === 'ultra' || preset === 'high') {
       const args = ['-i', srcPath];
       if (vfParts.length) args.push('-vf', vfParts.join(','));
       args.push('-map_metadata', '-1', '-c:v', 'png', '-compression_level', '9', '-update', '1', '-frames:v', '1', outPath);
@@ -195,7 +232,7 @@ async function compressRasterFile(taskId, srcPath, origExt, { maxSide, preset, f
     } else {
       const palPath = path.join(tmpDir, `pal_${idx}.png`);
       const scaleChain = vfParts.length ? `${vfParts.join(',')},` : '';
-      const maxColors = preset === 'extreme' ? 128 : 256;
+      const maxColors = preset === 'extreme' ? 128 : (preset === 'compact' ? 192 : 256);
       await runFfmpeg(taskId, [
         '-i', srcPath,
         '-vf', `${scaleChain}palettegen=max_colors=${maxColors}:stats_mode=single:reserve_transparent=1`,
@@ -208,7 +245,8 @@ async function compressRasterFile(taskId, srcPath, origExt, { maxSide, preset, f
       ], { totalDuration: 0 });
     }
   } else {
-    const qv = preset === 'high' ? 3 : (preset === 'extreme' ? 9 : 5);
+    const qvMap = { ultra: 2, high: 3, balanced: 5, compact: 7, extreme: 9 };
+    const qv = qvMap[preset] ?? 5;
     const args = ['-i', srcPath];
     if (hasAlpha) {
       const scaleChain = vfParts.length ? `${vfParts.join(',')},` : '';
@@ -229,18 +267,18 @@ async function compressRasterFile(taskId, srcPath, origExt, { maxSide, preset, f
   return { ext: targetFmt, buf };
 }
 
-async function compressEmbeddedVideoFile(taskId, srcPath, { maxSide, preset }, tmpDir, idx) {
+async function compressEmbeddedVideoFile(taskId, srcPath, { maxSide, resizeSpec, preset }, tmpDir, idx) {
   const info = await probe(srcPath);
   const w = info.width || 0;
   const h = info.height || 0;
   if (!w || !h) return null;
 
-  const crf = preset === 'high' ? '22' : (preset === 'extreme' ? '30' : '26');
+  const crfMap = { ultra: '19', high: '22', balanced: '26', compact: '28', extreme: '30' };
+  const crf = crfMap[preset] || '26';
   const outPath = path.join(tmpDir, `vout_${idx}.mp4`);
   const vfParts = [];
-  if (maxSide > 0 && Math.max(w, h) > maxSide) {
-    vfParts.push(`scale='min(${maxSide},iw)':'min(${maxSide},ih)':force_original_aspect_ratio=decrease:flags=lanczos`);
-  }
+  const scaleExpr = buildResizeFilter(w, h, resizeSpec || { mode: 'maxSide', maxSide }, { minDim: 16, even: true });
+  if (scaleExpr) vfParts.push(scaleExpr);
   vfParts.push('scale=trunc(iw/2)*2:trunc(ih/2)*2');
 
   const args = [
@@ -261,6 +299,63 @@ async function compressEmbeddedVideoFile(taskId, srcPath, { maxSide, preset }, t
   await runFfmpeg(taskId, args, { totalDuration: info.duration || 0 });
   const buf = fs.readFileSync(outPath);
   return { ext: 'mp4', buf };
+}
+
+async function compressEmbeddedGifFile(taskId, srcPath, { maxSide, resizeSpec, fps, fpsSpec, colors, lossy }, tmpDir, idx) {
+  const info = await probe(srcPath);
+  const w = info.width || 0;
+  const h = info.height || 0;
+  if (!w || !h) return null;
+
+  const isSingleFrame = info.nbFrames === 1;
+  const vfParts = [];
+  const resolvedFps = fpsSpec || { mode: 'cap', fps };
+  if (!isSingleFrame && resolvedFps.mode === 'half') {
+    const srcFps = info.fps > 0 && info.fps <= 50 ? info.fps : 12;
+    const targetFps = Math.max(1, Math.min(50, Math.round((srcFps * 0.5) * 10) / 10));
+    vfParts.push(`fps=${targetFps}`);
+  } else if (!isSingleFrame && resolvedFps.fps > 0 && (!info.fps || info.fps > resolvedFps.fps + 0.2)) {
+    vfParts.push(`fps=${resolvedFps.fps}`);
+  }
+  const scaleExpr = buildResizeFilter(w, h, resizeSpec || { mode: 'maxSide', maxSide });
+  if (scaleExpr) vfParts.push(scaleExpr);
+  if (!isSingleFrame && (lossy === 'small' || lossy === 'balanced_dedup')) {
+    vfParts.push('mpdecimate');
+  }
+
+  const ditherMap = {
+    sierra: 'dither=sierra2_4a',
+    floyd: 'dither=floyd_steinberg',
+    quality: 'dither=bayer:bayer_scale=2',
+    balanced: 'dither=bayer:bayer_scale=5',
+    balanced_dedup: 'dither=bayer:bayer_scale=5',
+    none: 'dither=none',
+    small: 'dither=none',
+  };
+  const ditherOpt = ditherMap[lossy] || 'dither=bayer:bayer_scale=5';
+
+  const palPath = path.join(tmpDir, `gpal_${idx}.png`);
+  const outPath = path.join(tmpDir, `gout_${idx}.gif`);
+  const vfPrefix = vfParts.length ? `${vfParts.join(',')},` : '';
+
+  await runFfmpeg(taskId, [
+    '-i', srcPath,
+    '-vf', `${vfPrefix}palettegen=max_colors=${colors}:stats_mode=diff:reserve_transparent=1`,
+    '-update', '1', '-frames:v', '1', palPath,
+  ], { totalDuration: 0 });
+
+  const useFilter = vfParts.length
+    ? `[0:v]${vfParts.join(',')}[g];[g][1:v]paletteuse=${ditherOpt}:diff_mode=rectangle:alpha_threshold=128`
+    : `[0:v][1:v]paletteuse=${ditherOpt}:diff_mode=rectangle:alpha_threshold=128`;
+  await runFfmpeg(taskId, [
+    '-i', srcPath, '-i', palPath,
+    '-filter_complex', useFilter,
+    '-loop', '0', outPath,
+  ], { totalDuration: 0 });
+
+  const buf = fs.readFileSync(outPath);
+  if (!buf.length) return null;
+  return { ext: 'gif', buf };
 }
 
 function filterDocumentItemsBySection(parsed, sectionIds = [], sectionKeyword = '') {
@@ -514,15 +609,66 @@ function docCompressImages(p) {
   const mediaRe = isPpt ? /^ppt\/media\//i : /^word\/media\//i;
   const output = p.output || defaultOutput(p.input, '已压缩', isPpt ? 'pptx' : 'docx', p);
   const preset = p.preset || 'balanced';
-  const maxSide = Math.max(0, Math.round(num(p.maxSide, 1920)));
+  const hasLegacyMaxSide = p.maxSide !== undefined && p.maxSide !== null && p.maxSide !== '';
+  const legacyMaxSide = hasLegacyMaxSide ? Math.max(0, Math.round(num(p.maxSide, 1920))) : null;
+
+  const compressImage = p.imageMode !== 'keep';
+  const imagePreset = p.imageQuality || preset;
+  const imageResizeSpec = (p.imageMaxSide !== undefined && p.imageMaxSide !== null && p.imageMaxSide !== '')
+    ? resolveMaxSideSpec(p.imageMaxSide, p.imageCustomMaxSide, 1920, { min: 64, max: 8192 })
+    : {
+        mode: 'maxSide',
+        maxSide: legacyMaxSide !== null
+          ? legacyMaxSide
+          : ((imagePreset === 'ultra' || imagePreset === 'high') ? 2560 : (imagePreset === 'extreme' ? 1280 : 1920)),
+      };
   const formatMode = p.formatMode || 'auto';
+
+  const compressGif = p.gifMode !== 'keep';
+  const gifDefaultsByPreset = {
+    high: { maxSide: 960, fps: 20, colors: 256, lossy: 'quality' },
+    balanced: { maxSide: 720, fps: 12, colors: 128, lossy: 'balanced' },
+    extreme: { maxSide: 480, fps: 8, colors: 64, lossy: 'small' },
+  };
+  const gifDef = gifDefaultsByPreset[preset] || gifDefaultsByPreset.balanced;
+  const gifResizeSpec = (p.gifMaxSide !== undefined && p.gifMaxSide !== null && p.gifMaxSide !== '')
+    ? resolveMaxSideSpec(p.gifMaxSide, p.gifCustomMaxSide, gifDef.maxSide, { min: 64, max: 3840 })
+    : {
+        mode: 'maxSide',
+        maxSide: legacyMaxSide === 0
+          ? 0
+          : (legacyMaxSide !== null ? Math.min(legacyMaxSide, gifDef.maxSide) : gifDef.maxSide),
+      };
+  const gifFpsSpec = (p.gifFps !== undefined && p.gifFps !== null && p.gifFps !== '')
+    ? resolveGifFpsSpec(p.gifFps, p.gifCustomFps, gifDef.fps)
+    : { mode: 'cap', fps: gifDef.fps };
+  const gifColors = (p.gifColors !== undefined && p.gifColors !== null && p.gifColors !== '')
+    ? Math.max(8, Math.min(256, Math.round(num(p.gifColors, gifDef.colors))))
+    : gifDef.colors;
+  const gifLossy = ['sierra', 'floyd', 'quality', 'balanced', 'balanced_dedup', 'none', 'small'].includes(p.gifLossy)
+    ? p.gifLossy
+    : gifDef.lossy;
+
   const compressVideo = isPpt && p.videoMode !== 'keep';
+  const videoPreset = p.videoQuality || preset;
+  const videoResizeSpec = (p.videoMaxSide !== undefined && p.videoMaxSide !== null && p.videoMaxSide !== '')
+    ? resolveMaxSideSpec(p.videoMaxSide, p.videoCustomMaxSide, 1280, { min: 160, max: 3840 })
+    : {
+        mode: 'maxSide',
+        maxSide: legacyMaxSide !== null
+          ? legacyMaxSide
+          : ((videoPreset === 'ultra' || videoPreset === 'high') ? 1920 : (videoPreset === 'extreme' ? 960 : 1280)),
+      };
+
   const sectionIds = Array.isArray(p.sectionIds) ? p.sectionIds.filter(Boolean) : [];
   const sectionKeyword = String(p.sectionKeyword || '').trim().toLowerCase();
 
   return {
     output,
     async run(taskId, onProgress) {
+      if (!compressImage && !compressGif && !compressVideo) {
+        throw new Error('请至少开启一种媒体类型（静态图片、GIF 动图或内嵌视频）的压缩');
+      }
       onProgress?.(0.05);
       let selectedEntrySet = null;
       let sectionFiltered = false;
@@ -562,24 +708,38 @@ function docCompressImages(p) {
         usedMediaSet.add(entryName.toLowerCase());
         if (selectedEntrySet && !selectedEntrySet.has(entryName.toLowerCase())) continue;
         const mExt = path.posix.extname(entryName).slice(1).toLowerCase();
-        if (e.header.size > 0 && RASTER_MEDIA_EXTS.has(mExt)) {
+        if (compressImage && e.header.size > 0 && RASTER_MEDIA_EXTS.has(mExt)) {
           targets.push({ kind: 'image', entry: e, entryName, origExt: mExt });
+        } else if (compressGif && e.header.size > 0 && GIF_MEDIA_EXTS.has(mExt)) {
+          targets.push({ kind: 'gif', entry: e, entryName, origExt: mExt });
         } else if (compressVideo && e.header.size > 0 && VIDEO_MEDIA_EXTS.has(mExt)) {
           targets.push({ kind: 'video', entry: e, entryName, origExt: mExt });
         }
       }
 
       if (!targets.length) {
+        const enabledLabels = [];
+        if (compressImage) enabledLabels.push('静态图片');
+        if (compressGif) enabledLabels.push('GIF 动图');
+        if (compressVideo) enabledLabels.push('内嵌视频');
+        const skippedHints = [];
+        if (!compressImage) skippedHints.push('已设跳过静态图片');
+        if (!compressGif) skippedHints.push('已设跳过 GIF');
+        if (isPpt && !compressVideo) skippedHints.push('已设跳过视频');
+        const scopeLabel = enabledLabels.join('、') || '媒体';
+        const hintText = skippedHints.length ? `，或${skippedHints.join('、')}` : '';
         if (sectionFiltered) {
-          throw new Error(`所选章节或页面中未找到可压缩的位图图片${isPpt ? '或视频' : ''}（可能仅含矢量图${isPpt && !compressVideo ? '或已设跳过视频' : ''}）`);
+          throw new Error(`所选章节或页面中未找到可压缩的${scopeLabel}（可能仅含矢量图${hintText}）`);
         }
-        throw new Error(`该 ${docLabel} 文档内未找到可压缩的位图图片${isPpt ? '或视频' : ''}（可能仅含文字或 EMF/WMF 矢量图）`);
+        throw new Error(`该 ${docLabel} 文档内未找到可压缩的${scopeLabel}（可能仅含文字或 EMF/WMF 矢量图${hintText}）`);
       }
 
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vgt_doc_cmp_'));
       const renameMap = new Map();
       const usedExts = new Set();
       let compressedCount = 0;
+      let imageCompressedCount = 0;
+      let gifCompressedCount = 0;
       let videoCompressedCount = 0;
       let skippedCount = 0;
 
@@ -597,9 +757,15 @@ function docCompressImages(p) {
           let res = null;
           try {
             if (t.kind === 'video') {
-              res = await compressEmbeddedVideoFile(taskId, tmpIn, { maxSide, preset }, tmpDir, idx);
+              res = await compressEmbeddedVideoFile(taskId, tmpIn, { resizeSpec: videoResizeSpec, preset: videoPreset }, tmpDir, idx);
+            } else if (t.kind === 'gif') {
+              res = await compressEmbeddedGifFile(taskId, tmpIn, {
+                resizeSpec: gifResizeSpec, fpsSpec: gifFpsSpec, colors: gifColors, lossy: gifLossy,
+              }, tmpDir, idx);
             } else {
-              res = await compressRasterFile(taskId, tmpIn, t.origExt, { maxSide, preset, formatMode }, tmpDir, idx);
+              res = await compressRasterFile(taskId, tmpIn, t.origExt, {
+                resizeSpec: imageResizeSpec, preset: imagePreset, formatMode,
+              }, tmpDir, idx);
             }
           } catch (err) {
             if (err.message === '任务已取消') throw err;
@@ -611,13 +777,16 @@ function docCompressImages(p) {
         };
 
         const imageIndices = [];
+        const gifIndices = [];
         const videoIndices = [];
         for (let i = 0; i < targets.length; i++) {
           if (targets[i].kind === 'video') videoIndices.push(i);
+          else if (targets[i].kind === 'gif') gifIndices.push(i);
           else imageIndices.push(i);
         }
 
         await runWithConcurrency(imageIndices, 3, processOne);
+        await runWithConcurrency(gifIndices, 2, processOne);
         for (const vIdx of videoIndices) {
           await processOne(vIdx);
         }
@@ -632,6 +801,8 @@ function docCompressImages(p) {
           } else {
             compressedCount++;
             if (t.kind === 'video') videoCompressedCount++;
+            else if (t.kind === 'gif') gifCompressedCount++;
+            else imageCompressedCount++;
             usedExts.add(res.ext);
             const normOldExt = t.origExt === 'jpeg' ? 'jpg' : t.origExt;
             if (res.ext === normOldExt || (res.ext === 'jpg' && t.origExt === 'jpeg')) {
@@ -663,6 +834,8 @@ function docCompressImages(p) {
             docType: isPpt ? 'pptx' : 'docx',
             totalMedia: targets.length,
             compressedCount,
+            imageCompressedCount,
+            gifCompressedCount,
             videoCompressedCount,
             skippedCount,
             origSize,
