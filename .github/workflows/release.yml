@@ -8,6 +8,11 @@ on:
         required: false
         default: 'false'
         type: boolean
+      allow_stable:
+        description: '允许发布 1.0.0+ 正式版（默认仅允许 0.x.y 公开测试版）'
+        required: false
+        default: 'false'
+        type: boolean
 
 permissions:
   contents: write
@@ -32,11 +37,17 @@ jobs:
         id: decide
         env:
           GH_TOKEN: ${{ github.token }}
+          ALLOW_STABLE: ${{ inputs.allow_stable }}
         run: |
           PKG_VER=$(node -p "require('./package.json').version")
+          SHELL_VER=$(node -p "const p=require('./package.json'); p.shellVersion || p.version")
           if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
             TAG="${GITHUB_REF_NAME}"
             REL_VER="${TAG#v}"
+            if [[ "$REL_VER" != "$PKG_VER" ]]; then
+              echo "::error::Tag version ($REL_VER) does not match package.json version ($PKG_VER)."
+              exit 1
+            fi
             SHOULD_RELEASE="true"
           else
             TAG="v${PKG_VER}"
@@ -51,6 +62,33 @@ jobs:
               SHOULD_RELEASE="true"
             fi
           fi
+          REL_VER="$REL_VER" SHELL_VER="$SHELL_VER" node -e '
+            const rel = String(process.env.REL_VER || "").trim();
+            const shell = String(process.env.SHELL_VER || "").trim();
+            const allowStable = process.env.ALLOW_STABLE === "true";
+            const previewRe = /^0\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+            const strictRe = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+            const re = allowStable ? strictRe : previewRe;
+            if (!re.test(rel)) {
+              console.error(`::error::Invalid release version "${rel}". ${allowStable ? "Expected x.y.z." : "Public beta releases must use 0.x.y (set allow_stable=true only for 1.0.0+)."}`);
+              process.exit(1);
+            }
+            if (!re.test(shell)) {
+              console.error(`::error::Invalid shellVersion "${shell}". ${allowStable ? "Expected x.y.z." : "Public beta releases must use 0.x.y for shellVersion."}`);
+              process.exit(1);
+            }
+            const pa = shell.split(".").map(Number);
+            const pb = rel.split(".").map(Number);
+            for (let i = 0; i < 3; i++) {
+              if (pa[i] !== pb[i]) {
+                if (pa[i] > pb[i]) {
+                  console.error(`::error::shellVersion (${shell}) cannot exceed release version (${rel}).`);
+                  process.exit(1);
+                }
+                break;
+              }
+            }
+          '
           echo "should_release=${SHOULD_RELEASE}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${REL_VER}" >> "$GITHUB_OUTPUT"
@@ -104,6 +142,7 @@ jobs:
           VGT_HOTFIX_PRIVATE_KEY: ${{ secrets.VGT_HOTFIX_PRIVATE_KEY }}
           TAG: ${{ needs.check.outputs.tag }}
           REL_VER: ${{ needs.check.outputs.version }}
+          ALLOW_STABLE: ${{ inputs.allow_stable }}
         run: |
           $ErrorActionPreference = "Stop"
           $portableSrc = Get-ChildItem -Path "release" -Filter "*便携版.exe" | Select-Object -First 1
@@ -124,12 +163,14 @@ jobs:
 
           $previewArgs = @()
           $releaseTitle = $TAG
-          if ($REL_VER.StartsWith('0.')) {
-            if ($REL_VER -notmatch '^0\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
-              throw 'Use 0.x.y for a test version.'
-            }
+          if ($REL_VER -match '^0\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
             $previewArgs = @('--prerelease')
             $releaseTitle = "$TAG (Beta)"
+          } elseif ($env:ALLOW_STABLE -eq 'true' -and $REL_VER -match '^[1-9]\d*\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
+            $previewArgs = @()
+            $releaseTitle = $TAG
+          } else {
+            throw "Release version '$REL_VER' violates 0.x.y public beta policy (allow_stable=$($env:ALLOW_STABLE))."
           }
           $draft = gh release view $TAG --repo $env:GITHUB_REPOSITORY --json isDraft --jq .isDraft 2>$null
           if ($LASTEXITCODE -ne 0) {

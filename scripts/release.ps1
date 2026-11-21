@@ -3,6 +3,7 @@ param(
   [ValidateSet('', 'patch', 'minor', 'major')]
   [string]$Bump = '',
   [string]$Version = '',
+  [switch]$AllowStable,
   [switch]$Force,
   [switch]$SkipTests,
   [switch]$AllowDirty,
@@ -24,12 +25,75 @@ function Complete-Phase([string]$Name) {
   Write-Host ("{0} took {1:N1}s" -f $Name, $phase.Elapsed.TotalSeconds)
   $phase.Restart()
 }
+
+$previewVersionRe = '^0\.(0|[1-9]\d*)\.(0|[1-9]\d*)$'
+$strictSemverRe = '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$'
+
+function Compare-SemVer([string]$A, [string]$B) {
+  $pa = $A.Split('.') | ForEach-Object { [int]$_ }
+  $pb = $B.Split('.') | ForEach-Object { [int]$_ }
+  for ($i = 0; $i -lt 3; $i++) {
+    if ($pa[$i] -lt $pb[$i]) { return -1 }
+    if ($pa[$i] -gt $pb[$i]) { return 1 }
+  }
+  return 0
+}
+
+function Assert-ReleaseVersion([string]$Ver, [string]$ShellVer, [bool]$AllowStableRelease) {
+  if ($AllowStableRelease) {
+    if ($Ver -notmatch $strictSemverRe) {
+      throw "Invalid version '$Ver'. Expected strict semver x.y.z."
+    }
+    if ($ShellVer -notmatch $strictSemverRe) {
+      throw "Invalid shellVersion '$ShellVer'. Expected strict semver x.y.z."
+    }
+  } else {
+    if ($Ver -notmatch $previewVersionRe) {
+      throw "Public beta releases must use 0.x.y (got version '$Ver'). Pass -AllowStable only when intentionally promoting to 1.0.0+."
+    }
+    if ($ShellVer -notmatch $previewVersionRe) {
+      throw "Public beta releases must use 0.x.y for shellVersion (got '$ShellVer'). Pass -AllowStable only when intentionally promoting to 1.0.0+."
+    }
+  }
+  if ((Compare-SemVer $ShellVer $Ver) -gt 0) {
+    throw "Invalid package.json versions: shellVersion ($ShellVer) cannot exceed version ($Ver)."
+  }
+}
+
+function Resolve-TargetVersion([string]$CurrentVer, [string]$BumpKind, [string]$ExplicitVersion) {
+  if ($BumpKind -and $ExplicitVersion) {
+    throw 'Cannot specify both -Bump and -Version.'
+  }
+  if ($ExplicitVersion) {
+    return $ExplicitVersion.Trim().TrimStart('v', 'V')
+  }
+  if ($BumpKind) {
+    if ($CurrentVer -notmatch $strictSemverRe) {
+      throw "Current package.json version '$CurrentVer' is not valid x.y.z semver."
+    }
+    $parts = $CurrentVer.Split('.') | ForEach-Object { [int]$_ }
+    switch ($BumpKind) {
+      'patch' { return "$($parts[0]).$($parts[1]).$($parts[2] + 1)" }
+      'minor' { return "$($parts[0]).$($parts[1] + 1).0" }
+      'major' { return "$($parts[0] + 1).0.0" }
+    }
+  }
+  return $CurrentVer
+}
+
 try {
   foreach ($cmd in @('git', 'node', 'npm', 'gh')) {
     if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) {
       throw "Required command not found in PATH: $cmd"
     }
   }
+
+  $curPkgJson = node -e "const p=require('./package.json'); console.log(JSON.stringify({version:String(p.version||'').trim(), shellVersion:String(p.shellVersion||p.version||'').trim()}))"
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  $curPkg = $curPkgJson | ConvertFrom-Json
+  $plannedVer = Resolve-TargetVersion -CurrentVer $curPkg.version -BumpKind $Bump -ExplicitVersion $Version
+  $plannedShellVer = if ($curPkg.shellVersion) { $curPkg.shellVersion } else { $plannedVer }
+  Assert-ReleaseVersion -Ver $plannedVer -ShellVer $plannedShellVer -AllowStableRelease ([bool]$AllowStable)
 
   # 0. Inherit Windows system proxy for Go/gh CLI if HTTPS_PROXY is not already set
   if (-not $env:HTTPS_PROXY -and -not $env:HTTP_PROXY) {
@@ -80,10 +144,10 @@ try {
   }
 
   # 4. Optional version bump
-  $verTarget = if ($Version) { $Version } elseif ($Bump) { $Bump } else { '' }
+  $verTarget = if ($Version) { $plannedVer } elseif ($Bump) { $Bump } else { '' }
   if ($verTarget) {
     if ($DryRun) {
-      Write-Host "[DryRun] Would bump version via: npm version $verTarget --no-git-tag-version"
+      Write-Host "[DryRun] Would bump version via: npm version $verTarget --no-git-tag-version (target: v$plannedVer)"
     } else {
       npm version $verTarget --no-git-tag-version
       if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -98,15 +162,14 @@ try {
   }
 
   # 5. Read package metadata
-  $metaJson = node -e "const p=require('./package.json'); console.log(JSON.stringify({version:p.version, portable:(p.build&&p.build.portable&&p.build.portable.artifactName)||'', nsis:(p.build&&p.build.nsis&&p.build.nsis.artifactName)||''}))"
+  $metaJson = node -e "const p=require('./package.json'); console.log(JSON.stringify({version:String(p.version||'').trim(), shellVersion:String(p.shellVersion||p.version||'').trim(), portable:(p.build&&p.build.portable&&p.build.portable.artifactName)||'', nsis:(p.build&&p.build.nsis&&p.build.nsis.artifactName)||''}))"
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   $meta = $metaJson | ConvertFrom-Json
-  $ver = $meta.version
+  $ver = if ($DryRun -and $verTarget) { $plannedVer } else { $meta.version }
+  $shellVer = if ($meta.shellVersion) { $meta.shellVersion } else { $ver }
+  Assert-ReleaseVersion -Ver $ver -ShellVer $shellVer -AllowStableRelease ([bool]$AllowStable)
   $tag = "v$ver"
   $isPreview = $ver.StartsWith('0.')
-  if ($isPreview -and $ver -notmatch '^0\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
-    throw 'Use 0.x.y for a test version. GitHub marks the release as a pre-release.'
-  }
   $releaseTitle = if ($isPreview) { "$tag (Beta)" } else { $tag }
   $previewArgs = @()
   if ($isPreview) { $previewArgs = @('--prerelease') }
