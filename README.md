@@ -1,11 +1,11 @@
 # MediaKiln
 
-MediaKiln 是一款 Windows 本地离线多媒体与文档处理桌面应用，基于 Electron + FFmpeg 9.0.2。全部处理均在本机完成，无需联网、不上传任何文件；成品安装包与源码仓库均已内置 FFmpeg，开箱即用。
+MediaKiln 是一款 Windows 本地离线多媒体与文档处理桌面应用（同时支持图形界面与 `mediakiln` 命令行 CLI），基于 Electron + FFmpeg 9.0.2。全部处理均在本机完成，无需联网、不上传任何文件；成品安装包与源码仓库均已内置 FFmpeg，开箱即用。
 
 ## 下载与使用
 
 ### 方式一：直接下载安装包（推荐）
-当前提供 **0.x 公开测试版**。在 GitHub Releases 选择最新的 0.x 版本，可下载「安装版」或免安装的「便携版」。旧的 2.x 构建仍可从历史记录查看。 [下载公开测试版](https://github.com/xxqwq/MediaKiln/releases)
+当前提供 **0.x 公开测试版**。在 GitHub Releases 选择最新的 0.x 版本，可下载「安装版」或免安装的「便携版」。 [下载公开测试版](https://github.com/xxqwq/MediaKiln/releases)
 
 ### 方式二：源码运行（需 Node.js 18+）
 1. 克隆仓库或下载源码 ZIP 后解压。
@@ -25,8 +25,42 @@ MediaKiln 是一款 Windows 本地离线多媒体与文档处理桌面应用，�
   - 支持连接类型校验、**多分支 DAG 并行调度与并发 List-Map**、**文件夹递归扫描**、**按格式/条件多路分流**（含 PDF 专属路由、空分支自动跳过、多分支汇总导出）、**画布分组注释便签**、节点 Bypass 旁路跳过、**增量智能缓存**（自动容量与过期清理、支持自定义缓存目录）以及工作流 JSON 导入导出。
 - **📦 批量队列处理**：**63 个功能**支持一次选择或拖入多个文件批量处理（图片/SVG 队列自动 3 路并发加速，支持图片缩略图网格/列表切换与点击大图预览、随时 `+ 添加文件`、移除队列项、独立定位输出文件与中途取消）。
 - **🔍 放大预览与对比**：处理完成后点击预览图或「⛶ 放大对比」，支持**并排同步缩放/平移**与**卷帘对比**（支持视频、GIF、位图与 SVG 矢量 vs 位图）。
+- **⌨️ 命令行（CLI）模式**：提供 `mediakiln` 命令行入口，支持全部 **73 个工具**、媒体/PDF/文档/字幕探测（`probe`）、GPU 编码器检测（`hw`）、通配符与目录并发批量处理、**运行桌面端导出的工作流 JSON 与 7 套内置模板**，以及 `--json` 结构化输出（便于脚本与自动化集成）。安装版自动附带 `mediakiln.cmd` 并写入用户 `PATH`（无需另装 Node.js）；源码环境支持 `node cli.js` 或 `npm link`。
 - **⚡ 轻量级业务热更新**要求 Ed25519 发布签名，并用 SHA-256 校验下载与本地缓存。启动异常时回滚。客户端壳升级需要下载完整程序。
 - **⚙️ 全局输出与硬件加速**：支持设置输出位置（源文件同目录 / `output` 子目录 / 自定义文件夹）、防覆盖自动编号，以及视频硬件编码加速（支持 **H.264 / H.265(HEVC) / AV1**，自动检测 NVIDIA NVENC / Intel QSV / AMD AMF 与 CPU 回退）。
+
+---
+
+## 命令行使用（CLI）
+
+- **安装版用户**：安装完成后重新打开终端（PowerShell / CMD），直接运行 `mediakiln` 即可（内置复用 `MediaKiln.exe` 运行时与 FFmpeg，无需额外安装 Node.js）。
+- **源码用户**：在仓库目录运行 `node cli.js ...`（或 `npm run cli -- ...`），也可以执行 `npm link` 全局注册 `mediakiln` 命令。
+
+```bash
+# 查看工具清单与单个工具的完整参数说明
+mediakiln list [--group 图片] [--search pdf] [--json]
+mediakiln info videoToGif
+
+# 探测媒体、图片、SVG、PDF、Office 文档或字幕信息
+mediakiln probe demo.mp4 report.pdf --json
+
+# 探测可用 GPU 硬件编码器（NVENC / QSV / AMF）
+mediakiln hw
+
+# 运行单个工具（支持 run <工具ID> 或直接 <工具ID> 快捷写法）
+mediakiln run videoToGif demo.mp4 --start 00:01.5 --duration 4 --fps 15 --width 640 -o clip.gif
+mediakiln run imageConvert *.png --format webp --quality high -o ./out --concurrency 3 --no-overwrite
+mediakiln run pdfMerge a.pdf b.pdf -o merged.pdf
+mediakiln run docToPdf README.md --theme clean --page-numbers yes -o guide.pdf
+
+# 在命令行执行内置工作流模板或桌面端导出的工作流 JSON
+mediakiln workflow list
+mediakiln workflow info tpl_video_to_gif_pro
+mediakiln workflow run tpl_video_to_gif_pro -i demo.mp4 -o ./out --param compressGif.colors=64
+mediakiln workflow run my-pipeline.json -i ./clips -o ./out --json
+```
+
+> 通用参数：`-o/--output`（文件或目录）、`--out-dir`、`--out-mode same|subdir|custom`、`--no-overwrite`、`--hw cpu|auto|nvenc|qsv|amf`、`-c/--concurrency`、`--params-json`、`--continue-on-error`、`--json`、`-q/--quiet`；运行中按 `Ctrl+C` 可立即终止 FFmpeg/渲染子进程并清理临时文件。
 
 ---
 
@@ -155,10 +189,11 @@ node scripts/media-practical-test.js     # GIF/WebP/APNG 高帧率与去台标�
 node scripts/pdf-target-size-test.js     # PDF 目标大小压缩测试
 node scripts/pdf-searchable-test.js      # PDF 扫描件离线 OCR 可搜索文字层测试
 node scripts/image-ocr-test.js           # 图片中英文识别、批量导出、空白图和取消测试
+node scripts/cli-test.js                 # 命令行 CLI 端到端测试（单工具/批量/无头 PDF/工作流/退出码，10 项）
 npm run build --prefix website           # 提取最新功能/节点/模板数据并构建官网静态站点
 npm run hotfix:build                     # 仅生成几百 KB 的热更新包与清单到 release/
 npm run dist                             # 打包便携版 + 安装版到 release/
-npm run release                          # 一键发布（支持 -Bump patch/minor/major 与 -HotfixOnly）
+npm run release                          # 一键发布（公开测试期强制 0.x.y，支持 -Bump patch/minor 与 -HotfixOnly；升正式版需显式加 -AllowStable）
 ```
 
 签名构建从 `VGT_HOTFIX_PRIVATE_KEY` 读取私钥文件路径或私钥内容。发布包使用与客户端内置公钥匹配的 Ed25519 私钥。
@@ -168,10 +203,13 @@ npm run release                          # 一键发布（支持 -Bump patch/min
 ## 代码结构
 
 ```
-main.js                 Electron 主进程：窗口越界防护、热更新加载调度、剪贴板读取、工作流缓存磁盘检测与自动清理
-ffmpeg.js               统一门面：组合 core 与 modules，保持 IPC 调用接口兼容
+main.js                 Electron 主进程：窗口越界防护、热更新加载调度、剪贴板读取、工作流缓存磁盘检测与无头 PDF 排版打印模式
+cli.js                  命令行（CLI）入口：支持 node cli.js、npm link 及打包版 mediakiln.cmd 调用
+ffmpeg.js               统一门面：组合 core 与 modules，保持 IPC 与 CLI 调用接口兼容
 启动工具箱.bat          Windows 源码一键启动脚本（自动清理 ELECTRON_RUN_AS_NODE 并在缺依赖时安装）
+build/                  应用图标、打包版 CLI 启动脚本（cli/mediakiln.cmd）与 NSIS PATH 安装钩子（installer.nsh）
 core/
+  ├── cli/              命令行实现：registry.js（73 工具参数映射）、args.js（参数/通配符解析）、workflow.js（工作流运行桥接）、index.js
   ├── hotfix.js         业务热更新管理器：镜像拉取、Ed25519 签名 + SHA-256 与路径穿越校验、崩溃自回滚
   ├── file-filters.js   文件选择过滤器与单/多选规则（支持随热更新同步新增功能）
   ├── ffmpeg-bin.js     内置 FFmpeg 路径解析、Brotli 自动解压与 SHA-256 校验
@@ -197,7 +235,7 @@ renderer/
   ├── ui/               参数面板（含命名预设与带参数入画布）、裁剪画布、放大对比弹窗、PDF 工具面板、热更新弹窗
   └── workflow/         节点画布、并行 DAG 执行引擎、82 个节点与 7 套模板
 bin/                    内置 FFmpeg 9.0.2（gyan.dev）：仓库内置 .br 压缩包（每件 ~28MB）与 binaries.json；安装/启动自动解压，打包时经 extraResources 释放
-scripts/                ensure-ffmpeg.js、build-hotfix.js、hotfix-test.js、architecture-safety-test.js、pdf-crop-test.js、pdf-nup-test.js、subtitle-test.js、media-practical-test.js、pdf-target-size-test.js、pdf-searchable-test.js、image-ocr-test.js、smoke-test.js、workflow-test.js、workflow-ui-check.js、webp-check.js、release.ps1
+scripts/                ensure-ffmpeg.js、build-hotfix.js、hotfix-test.js、architecture-safety-test.js、pdf-crop-test.js、pdf-nup-test.js、subtitle-test.js、media-practical-test.js、pdf-target-size-test.js、pdf-searchable-test.js、image-ocr-test.js、cli-test.js、smoke-test.js、workflow-test.js、workflow-ui-check.js、webp-check.js、release.ps1
 website/                产品官网（Astro 静态站点，构建时自动读取功能/节点/模板注册表；见 website/README.md）
 ```
 

@@ -4,10 +4,14 @@
   "shellVersion": "0.1.0",
   "description": "MediaKiln — Windows 本地离线视频 · 动图 · 图片 · 音频 · 文档工具箱，提供 73 个本地工具",
   "main": "main.js",
+  "bin": {
+    "mediakiln": "./cli.js"
+  },
   "author": "user",
   "license": "MIT",
   "scripts": {
     "start": "electron .",
+    "cli": "node cli.js",
     "ensure-ffmpeg": "node scripts/ensure-ffmpeg.js",
     "postinstall": "node scripts/ensure-ffmpeg.js",
     "prepack": "node scripts/ensure-ffmpeg.js",
@@ -38,6 +42,7 @@
     },
     "files": [
       "main.js",
+      "cli.js",
       "ffmpeg.js",
       "preload.js",
       "core/**/*",
@@ -46,6 +51,12 @@
     ],
     "asarUnpack": [
       "node_modules/@resvg/**/*"
+    ],
+    "extraFiles": [
+      {
+        "from": "build/cli/mediakiln.cmd",
+        "to": "mediakiln.cmd"
+      }
     ],
     "extraResources": [
       {
@@ -69,6 +80,7 @@
     },
     "nsis": {
       "oneClick": true,
+      "include": "build/installer.nsh",
       "artifactName": "MediaKiln-${version}-安装版.exe"
     }
   }

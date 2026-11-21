@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { spawn } = require('child_process');
 const { pathToFileURL } = require('url');
 const hljs = require('highlight.js');
 const { registerCancelableTask, throwIfTaskCancelled, writeTaskOutput } = require('./runner');
@@ -603,10 +604,203 @@ function buildStyledHtmlDocument(mdText, opts = {}) {
   return { html: fullHtml, title: docTitle };
 }
 
-async function renderHtmlFileToPdf(htmlPath, outputPath, opts) {
+function resolveElectronRuntime() {
+  const appRoot = path.resolve(__dirname, '..');
+  const isPackagedAsar = __dirname.includes('app.asar');
+  const buildResult = (exe) => {
+    if (!exe || !fs.existsSync(exe)) return null;
+    const base = path.basename(exe).toLowerCase();
+    const isDevElectron = base === 'electron.exe' || base === 'electron';
+    return {
+      exe,
+      argsPrefix: isDevElectron && !isPackagedAsar ? [appRoot] : [],
+    };
+  };
+
+  if (process.env.VGT_ELECTRON_EXE) {
+    const r = buildResult(process.env.VGT_ELECTRON_EXE);
+    if (r) return r;
+  }
+  if (process.versions?.electron && process.env.ELECTRON_RUN_AS_NODE) {
+    const r = buildResult(process.execPath);
+    if (r) return r;
+  }
+  try {
+    const electronPath = require('electron');
+    if (typeof electronPath === 'string') {
+      const r = buildResult(electronPath);
+      if (r) return r;
+    }
+  } catch {}
+  return null;
+}
+
+function resolveSystemBrowser() {
+  const candidates = [
+    process.env.PROGRAMFILES && path.join(process.env.PROGRAMFILES, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+    process.env['PROGRAMFILES(X86)'] && path.join(process.env['PROGRAMFILES(X86)'], 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+    process.env.PROGRAMFILES && path.join(process.env.PROGRAMFILES, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    process.env['PROGRAMFILES(X86)'] && path.join(process.env['PROGRAMFILES(X86)'], 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+  ].filter(Boolean);
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  return '';
+}
+
+function killChildTree(child) {
+  if (!child || !child.pid) return;
+  if (process.platform === 'win32') {
+    const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
+    killer.on('error', () => { try { child.kill(); } catch {} });
+  } else {
+    try { child.kill('SIGKILL'); } catch {}
+  }
+}
+
+async function renderHtmlViaElectronHelper(htmlPath, outputPath, opts, runtime) {
   throwIfTaskCancelled(opts.taskId);
-  const { BrowserWindow, session } = require('electron');
-  if (!BrowserWindow) throw new Error('请在桌面客户端中执行文档转 PDF');
+  const jobDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vgt_cli_pdf_'));
+  const tempPdf = path.join(jobDir, 'out.pdf');
+  const profileDir = path.join(jobDir, 'profile');
+  const jobJsonPath = path.join(jobDir, 'job.json');
+  fs.mkdirSync(profileDir, { recursive: true });
+  fs.writeFileSync(jobJsonPath, JSON.stringify({
+    htmlPath: path.resolve(htmlPath),
+    outputPath: tempPdf,
+    profileDir,
+    opts: {
+      pageSize: opts.pageSize,
+      margin: opts.margin,
+      pageNumbers: opts.pageNumbers,
+      customMarginsIn: opts.customMarginsIn,
+      customPageSize: opts.customPageSize,
+    },
+  }), 'utf8');
+
+  const env = { ...process.env };
+  delete env.ELECTRON_RUN_AS_NODE;
+
+  let interruption = '';
+  let child = null;
+  let timeout = null;
+  const release = registerCancelableTask(opts.taskId, () => {
+    interruption = '任务已取消';
+    killChildTree(child);
+  });
+
+  try {
+    await new Promise((resolve, reject) => {
+      child = spawn(runtime.exe, [...runtime.argsPrefix, '--cli-render-pdf', jobJsonPath], {
+        env,
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let stderr = '';
+      child.stderr.on('data', (d) => { stderr = (stderr + d.toString()).slice(-4000); });
+      timeout = setTimeout(() => {
+        interruption = '文档转换 PDF 超时';
+        killChildTree(child);
+      }, 65000);
+      child.on('error', reject);
+      child.on('close', (code) => {
+        if (interruption) return reject(new Error(interruption));
+        if (code === 0 && fs.existsSync(tempPdf)) return resolve();
+        const detail = stderr.split(/\r?\n/).filter((l) => l.trim()).slice(-4).join('\n');
+        reject(new Error(`PDF 排版渲染失败（退出码 ${code}）${detail ? '：' + detail : ''}`));
+      });
+    });
+
+    throwIfTaskCancelled(opts.taskId);
+    const pdfBuf = fs.readFileSync(tempPdf);
+    if (!pdfBuf.length) throw new Error('PDF 排版渲染结果为空');
+    writeTaskOutput(outputPath, pdfBuf);
+  } finally {
+    clearTimeout(timeout);
+    release();
+    try { fs.rmSync(jobDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 150 }); } catch {}
+  }
+}
+
+async function renderHtmlViaChromiumHeadless(htmlPath, outputPath, opts, browserExe) {
+  throwIfTaskCancelled(opts.taskId);
+  const jobDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vgt_cli_edgepdf_'));
+  const tempPdf = path.join(jobDir, 'out.pdf');
+  const profileDir = path.join(jobDir, 'profile');
+  fs.mkdirSync(profileDir, { recursive: true });
+
+  const args = [
+    '--headless=new',
+    '--disable-gpu',
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--disable-extensions',
+    `--user-data-dir=${profileDir}`,
+    `--print-to-pdf=${tempPdf}`,
+  ];
+  if (opts.pageNumbers !== 'yes') {
+    args.push('--no-pdf-header-footer');
+  }
+  args.push(pathToFileURL(path.resolve(htmlPath)).href);
+
+  let interruption = '';
+  let child = null;
+  let timeout = null;
+  const release = registerCancelableTask(opts.taskId, () => {
+    interruption = '任务已取消';
+    killChildTree(child);
+  });
+
+  try {
+    await new Promise((resolve, reject) => {
+      child = spawn(browserExe, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      let stderr = '';
+      child.stderr.on('data', (d) => { stderr = (stderr + d.toString()).slice(-4000); });
+      timeout = setTimeout(() => {
+        interruption = '文档转换 PDF 超时';
+        killChildTree(child);
+      }, 65000);
+      child.on('error', reject);
+      child.on('close', (code) => {
+        if (interruption) return reject(new Error(interruption));
+        if (code === 0 && fs.existsSync(tempPdf)) return resolve();
+        const detail = stderr.split(/\r?\n/).filter((l) => l.trim()).slice(-3).join('\n');
+        reject(new Error(`浏览器无头打印 PDF 失败（退出码 ${code}）${detail ? '：' + detail : ''}`));
+      });
+    });
+
+    throwIfTaskCancelled(opts.taskId);
+    const pdfBuf = fs.readFileSync(tempPdf);
+    if (!pdfBuf.length) throw new Error('PDF 排版渲染结果为空');
+    writeTaskOutput(outputPath, pdfBuf);
+  } finally {
+    clearTimeout(timeout);
+    release();
+    try { fs.rmSync(jobDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 150 }); } catch {}
+  }
+}
+
+async function renderHtmlFileToPdf(htmlPath, outputPath, opts = {}) {
+  throwIfTaskCancelled(opts.taskId);
+  let electronMod = null;
+  try {
+    electronMod = require('electron');
+  } catch {}
+  const BrowserWindow = electronMod && typeof electronMod === 'object' ? electronMod.BrowserWindow : null;
+  const session = electronMod && typeof electronMod === 'object' ? electronMod.session : null;
+  if (!BrowserWindow || !session) {
+    const runtime = resolveElectronRuntime();
+    if (runtime) {
+      return renderHtmlViaElectronHelper(htmlPath, outputPath, opts, runtime);
+    }
+    const browserExe = resolveSystemBrowser();
+    if (browserExe) {
+      return renderHtmlViaChromiumHeadless(htmlPath, outputPath, opts, browserExe);
+    }
+    throw new Error('未找到可用的 PDF 排版渲染器（请安装 MediaKiln 桌面端或 Microsoft Edge）');
+  }
   const printSession = session.fromPartition('vgt-pdf-print');
   // 打印本地文档，不允许文档发起网络请求、下载或打开其他页面。
   printSession.webRequest.onBeforeRequest(({ url }, callback) => {
@@ -678,7 +872,11 @@ async function renderHtmlFileToPdf(htmlPath, outputPath, opts) {
       } : {}),
     });
     if (interruption) throw new Error(interruption);
-    writeTaskOutput(outputPath, pdf);
+    if (opts.directWrite) {
+      fs.writeFileSync(outputPath, pdf);
+    } else {
+      writeTaskOutput(outputPath, pdf);
+    }
   } catch (error) {
     if (interruption) throw new Error(interruption, { cause: error });
     throw error;

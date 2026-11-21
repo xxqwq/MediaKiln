@@ -190,11 +190,33 @@ function createWindow() {
   });
 }
 
+// 命令行无头 PDF 排版渲染模式（跳过单实例锁，不创建可见窗口）
+function resolveCliPdfJobPath(argv) {
+  const idx = argv.indexOf('--cli-render-pdf');
+  if (idx === -1 || !argv[idx + 1]) return '';
+  return argv[idx + 1];
+}
+
+const cliPdfJobPath = resolveCliPdfJobPath(process.argv);
+let cliPdfJob = null;
+if (cliPdfJobPath) {
+  try {
+    cliPdfJob = JSON.parse(fs.readFileSync(cliPdfJobPath, 'utf8'));
+    if (cliPdfJob?.profileDir) {
+      app.setPath('userData', path.resolve(cliPdfJob.profileDir));
+    }
+    app.disableHardwareAcceleration();
+  } catch (err) {
+    console.error('[cli-render-pdf] 读取任务失败:', err?.message || err);
+    app.exit(1);
+  }
+}
+
 // 单实例：重复启动时退出自己，并让已有窗口还原、聚焦
-const gotSingleLock = app.requestSingleInstanceLock();
+const gotSingleLock = cliPdfJobPath ? true : app.requestSingleInstanceLock();
 if (!gotSingleLock) {
   app.quit();
-} else {
+} else if (!cliPdfJobPath) {
   app.on('second-instance', () => {
     if (!win || win.isDestroyed()) return;
     if (win.isMinimized()) win.restore();
@@ -203,7 +225,24 @@ if (!gotSingleLock) {
   });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  if (cliPdfJobPath) {
+    try {
+      if (!cliPdfJob?.htmlPath || !cliPdfJob?.outputPath) {
+        throw new Error('缺少 htmlPath 或 outputPath');
+      }
+      const { renderHtmlFileToPdf } = require('./core/md-renderer');
+      await renderHtmlFileToPdf(cliPdfJob.htmlPath, cliPdfJob.outputPath, {
+        ...(cliPdfJob.opts || {}),
+        directWrite: true,
+      });
+      app.exit(0);
+    } catch (err) {
+      console.error('[cli-render-pdf]', err?.message || err);
+      app.exit(1);
+    }
+    return;
+  }
   if (!gotSingleLock) return;
   try {
     const status = hotfix.initHotfix({
@@ -242,7 +281,7 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
-  app.quit();
+  if (!cliPdfJobPath) app.quit();
 });
 
 // ---------------------------------------------------------------------------

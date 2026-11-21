@@ -607,19 +607,33 @@ function copyTaskOutput(source, output) {
   markOutputCommitted(output);
 }
 
+function resolveExplicitOutput(explicitCtx) {
+  const ctx = getCurrentOutCtx(explicitCtx);
+  if (!ctx?.explicitOutput) return '';
+  const target = ctx.explicitOutput;
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  return uniquePath(target, explicitCtx);
+}
+
 function defaultOutput(inputPath, suffix, ext) {
+  const explicit = resolveExplicitOutput();
+  if (explicit) return explicit;
   const dir = resolveOutDir(inputPath);
   const base = path.basename(inputPath, path.extname(inputPath));
   return uniquePath(path.join(dir, `${base}_${suffix}.${ext}`));
 }
 
 function defaultDirOutput(inputPath, suffix) {
+  const explicit = resolveExplicitOutput();
+  if (explicit) return explicit;
   const dir = resolveOutDir(inputPath);
   const base = path.basename(inputPath, path.extname(inputPath));
   return uniquePath(path.join(dir, `${base}_${suffix}`));
 }
 
 function stampOutput(inputPath, prefix, ext) {
+  const explicit = resolveExplicitOutput();
+  if (explicit) return explicit;
   const dir = resolveOutDir(inputPath);
   const ts = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
   return uniquePath(path.join(dir, `${prefix}_${ts}.${ext}`));
@@ -779,6 +793,9 @@ function createExecutor(builders) {
         mode: params?.__outputMode || 'same',
         dir: params?.__outputDir || '',
         noOverwrite: !!params?.__noOverwrite,
+        explicitOutput: typeof params?.__explicitOutput === 'string' && params.__explicitOutput.trim()
+          ? path.resolve(params.__explicitOutput.trim())
+          : '',
       };
       return await taskContext.run(context, async () => {
         const inputParams = context.noOverwrite && params?.output

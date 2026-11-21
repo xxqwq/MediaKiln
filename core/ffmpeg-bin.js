@@ -9,20 +9,29 @@ const BINARIES = ['ffmpeg.exe', 'ffprobe.exe'];
 const EXTRACTED_META_FILE = '.extracted.json';
 
 function resolveBinDir() {
-  if (__dirname.includes('app.asar') && process.resourcesPath) {
-    return path.join(process.resourcesPath, 'bin');
+  const hasBin = (dir) => BINARIES.some(
+    (name) => fs.existsSync(path.join(dir, name)) || fs.existsSync(path.join(dir, `${name}.br`)),
+  );
+  if (process.env.VGT_RESOURCES_PATH) {
+    const resBin = path.join(process.env.VGT_RESOURCES_PATH, 'bin');
+    if (hasBin(resBin)) return resBin;
+  }
+  if (__dirname.includes('app.asar')) {
+    if (process.resourcesPath) {
+      return path.join(process.resourcesPath, 'bin');
+    }
+    const m = __dirname.match(/^(.*?)[\\/]app\.asar(?:[\\/]|$)/i);
+    if (m && m[1]) {
+      return path.join(m[1], 'bin');
+    }
   }
   if (process.resourcesPath && !process.defaultApp) {
     const resBin = path.join(process.resourcesPath, 'bin');
-    if (BINARIES.some((name) => fs.existsSync(path.join(resBin, name)) || fs.existsSync(path.join(resBin, `${name}.br`)))) {
-      return resBin;
-    }
+    if (hasBin(resBin)) return resBin;
   }
   if (process.env.VGT_APP_ROOT) {
     const appBin = path.join(process.env.VGT_APP_ROOT, 'bin');
-    if (BINARIES.some((name) => fs.existsSync(path.join(appBin, name)) || fs.existsSync(path.join(appBin, `${name}.br`)))) {
-      return appBin;
-    }
+    if (hasBin(appBin)) return appBin;
   }
   return path.join(__dirname, '..', 'bin');
 }

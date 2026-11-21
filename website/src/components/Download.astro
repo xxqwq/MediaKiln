@@ -9,6 +9,7 @@ const mirrors = [
 ];
 
 const cloneCmd = `git clone https://github.com/${app.repo}.git`;
+const cliSampleCmd = `mediakiln run videoToGif demo.mp4 --fps 15 --width 640 -o out.gif`;
 ---
 
 <section class="section dl-section" id="download">
@@ -46,7 +47,7 @@ const cloneCmd = `git clone https://github.com/${app.repo}.git`;
           <span class="dl-badge">推荐</span>
           <span class="dl-ico is-primary" aria-hidden="true" set:html={iconSvg('disc', 21)} />
           <span class="dl-title">安装版</span>
-          <span class="dl-desc">一键安装，自动创建开始菜单和桌面快捷方式。如果便携版被杀毒软件误报，请使用这个版本。</span>
+          <span class="dl-desc">一键安装，自动创建快捷方式并将 <code>mediakiln</code> 命令行加入 PATH。如果便携版被杀毒软件误报，请使用这个版本。</span>
           <span class="dl-file"><span data-dl-name="setup">{assetName('setup')}</span><span data-dl-size="setup">{assetSize('setup') ? fmtBytes(assetSize('setup')) : ''}</span></span>
           <span class="btn btn-primary">下载安装版</span>
         </a>
@@ -70,7 +71,15 @@ const cloneCmd = `git clone https://github.com/${app.repo}.git`;
         <span class="dl-dev-label">源码运行（Node.js 18+）</span>
         <div class="dl-cmd-box">
           <code>{cloneCmd}</code>
-          <button type="button" class="dl-copy-btn" id="dl-copy-btn" data-copy={cloneCmd}>复制命令</button>
+          <button type="button" class="dl-copy-btn" data-copy={cloneCmd}>复制命令</button>
+        </div>
+      </div>
+
+      <div class="dl-dev dl-cli">
+        <span class="dl-dev-label">命令行 CLI（安装版开箱即用，支持全部工具与工作流 JSON）</span>
+        <div class="dl-cmd-box">
+          <code>{cliSampleCmd}</code>
+          <button type="button" class="dl-copy-btn" data-copy={cliSampleCmd}>复制命令</button>
         </div>
       </div>
 
@@ -194,6 +203,9 @@ const cloneCmd = `git clone https://github.com/${app.repo}.git`;
   }
   .dl-copy-btn:hover { background: var(--accent-soft); border-color: var(--accent-ring); }
 
+  .dl-cli { margin-top: 12px; }
+  .dl-desc code { font-family: var(--mono); font-size: 13px; color: #d6d3ff; }
+
   .dl-more { position: relative; margin-top: 26px; display: flex; justify-content: center; gap: 28px; flex-wrap: wrap; font-size: 14px; }
   .dl-more a { color: var(--accent-hi); }
   .dl-more a:hover { text-decoration: underline; }
@@ -226,15 +238,16 @@ const cloneCmd = `git clone https://github.com/${app.repo}.git`;
     });
   });
 
-  const copyBtn = document.getElementById('dl-copy-btn');
-  copyBtn?.addEventListener('click', async () => {
-    const cmd = copyBtn.getAttribute('data-copy') || '';
-    if (!cmd) return;
-    try {
-      await navigator.clipboard.writeText(cmd);
-      const prev = copyBtn.textContent;
-      copyBtn.textContent = '已复制 ✓';
-      window.setTimeout(() => { copyBtn.textContent = prev; }, 2000);
-    } catch {}
+  document.querySelectorAll<HTMLButtonElement>('.dl-copy-btn').forEach((copyBtn) => {
+    copyBtn.addEventListener('click', async () => {
+      const cmd = copyBtn.getAttribute('data-copy') || '';
+      if (!cmd) return;
+      try {
+        await navigator.clipboard.writeText(cmd);
+        const prev = copyBtn.textContent;
+        copyBtn.textContent = '已复制 ✓';
+        window.setTimeout(() => { copyBtn.textContent = prev; }, 2000);
+      } catch {}
+    });
   });
 </script>
